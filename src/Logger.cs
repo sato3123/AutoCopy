@@ -85,6 +85,30 @@ namespace AutoCopy
             list.Add(total);
             return list;
         }
+
+        /// <summary>日ごと・PC（フォルダ名）ごとのコピー容量（新規＋上書き）。日付は古い順。</summary>
+        public static SortedDictionary<DateTime, Dictionary<string, long>> Daily(IEnumerable<LogLine> lines)
+        {
+            SortedDictionary<DateTime, Dictionary<string, long>> map = new SortedDictionary<DateTime, Dictionary<string, long>>();
+            foreach (LogLine l in lines)
+            {
+                if (l.Type != "COPY" && l.Type != "OVERWRITE") continue;
+                DateTime d = l.Time.Date;
+                Dictionary<string, long> day;
+                if (!map.TryGetValue(d, out day)) { day = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase); map[d] = day; }
+                string pc = PcLabel(l.Folder, l.Pc);
+                long v;
+                day.TryGetValue(pc, out v);
+                day[pc] = v + (l.Size > 0 ? l.Size : 0);
+            }
+            return map;
+        }
+
+        public static string PcLabel(string folder, string pc)
+        {
+            if (string.IsNullOrEmpty(folder)) return pc ?? "";
+            return folder;
+        }
     }
 
     /// <summary>

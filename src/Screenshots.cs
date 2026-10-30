@@ -55,6 +55,16 @@ namespace AutoCopy
                 List<LogLine> lines = Logger.Read(DateTime.Today.AddDays(-7), DateTime.Today, true, out note);
                 return new StatsForm(lines, DateTime.Today.AddDays(-7).ToString("yyyy/MM/dd") + "〜" + DateTime.Today.ToString("yyyy/MM/dd") + "・すべてのPC");
             }, null);
+            for (int tab = 1; tab <= 2; tab++)
+            {
+                int ti = tab;
+                Capture(ti == 1 ? "20_PCごとのグラフ" : "21_日ごとのグラフ", delegate()
+                {
+                    string note;
+                    List<LogLine> lines = Logger.Read(DateTime.Today.AddDays(-13), DateTime.Today, true, out note);
+                    return new StatsForm(lines, DateTime.Today.AddDays(-13).ToString("yyyy/MM/dd") + "〜" + DateTime.Today.ToString("yyyy/MM/dd") + "・すべてのPC");
+                }, delegate(Form f) { ((StatsForm)f).ShowTab(ti); });
+            }
             CaptureTrayMenu();
 
             File.WriteAllText(Path.Combine(outDir, "errors.txt"), errors.Count == 0 ? "なし" : string.Join("\r\n\r\n", errors.ToArray()));
@@ -129,6 +139,24 @@ namespace AutoCopy
             for (int i = 0; i < 12; i++) other += t + "\tPC-SOUMU03\tsuzuki\t鈴木_総務\t経理バックアップ\t" + (i % 3 == 0 ? "OVERWRITE" : "COPY") + "\t総務\\資料" + i + ".docx\t" + (350000 + i * 120000) + "\t0.4\r\n";
             other += t + "\tPC-SOUMU03\tsuzuki\t鈴木_総務\t経理バックアップ\tSUMMARY\t走査 3,120件\t\t2.1\r\n";
             W(Path.Combine(Path.Combine(s.LogRoot, "鈴木_総務"), DateTime.Now.ToString("yyyy-MM-dd") + ".log"), other, 60);
+            string[] names = { "鈴木_総務", "田中_営業", "佐藤_設計", "高橋_経理" };
+            Random rnd = new Random(7);
+            for (int dd = 13; dd >= 1; dd--)
+            {
+                DateTime day = DateTime.Today.AddDays(-dd);
+                if (day.DayOfWeek == DayOfWeek.Saturday || day.DayOfWeek == DayOfWeek.Sunday) continue;
+                for (int pi = 0; pi < names.Length; pi++)
+                {
+                    string text = "";
+                    int n = 3 + rnd.Next(8);
+                    for (int k = 0; k < n; k++)
+                        text += day.AddHours(9 + k).ToString("yyyy-MM-dd HH:mm:ss") + "\tPC-" + (pi + 1).ToString("00") + "\tuser\t" + names[pi] + "\t経理バックアップ\t"
+                            + (k % 4 == 0 ? "OVERWRITE" : "COPY") + "\t資料" + k + ".xlsx\t" + ((pi + 1) * 900000 + rnd.Next(4000000)) + "\t0.5\r\n";
+                    string file = Path.Combine(Path.Combine(s.LogRoot, names[pi]), day.ToString("yyyy-MM-dd") + ".log");
+                    Directory.CreateDirectory(Path.GetDirectoryName(file));
+                    File.AppendAllText(file, text);
+                }
+            }
 
             DistPayload pl = Distribution.BuildPayload(s, "経理部", 3, new List<DistCredential>());
             DistCredential cr = new DistCredential(); cr.Server = "nas01"; cr.User = "nas01\\yamada"; cr.Password = "x";

@@ -219,12 +219,15 @@ namespace AutoCopy
         private readonly List<LogLine> lines;
         private readonly ListView lv;
         private readonly CheckBox byJob;
+        private readonly TabControl tabs;
+        private readonly PcVolumeChart pcChart = new PcVolumeChart();
+        private readonly DailyVolumeChart dailyChart = new DailyVolumeChart();
         private List<CopyStat> stats = new List<CopyStat>();
 
         public StatsForm(List<LogLine> lines, string range)
         {
             this.lines = lines;
-            Ui.SetupForm(this, "PCごとのコピー容量", 1000, 520);
+            Ui.SetupForm(this, "PCごとのコピー容量", 1000, 600);
             byJob = Ui.C("ジョブごとに分ける", false);
             byJob.CheckedChanged += delegate { Fill(); };
             FlowLayoutPanel top = Ui.Column(
@@ -238,9 +241,35 @@ namespace AutoCopy
             lv.Dock = DockStyle.Fill;
             foreach (int i in new int[] { 3, 4, 5, 6, 7, 8, 9, 10 }) lv.Columns[i].TextAlign = HorizontalAlignment.Right;
 
-            Controls.Add(lv);
+            // 表・PCごとのグラフ・日ごとのグラフ
+            tabs = new TabControl();
+            tabs.Dock = DockStyle.Fill;
+            tabs.Padding = new Point(14, 5);
+            TabPage pTable = new TabPage("表");
+            pTable.Controls.Add(lv);
+            TabPage pPc = new TabPage("PCごとのグラフ");
+            Panel scroll = new Panel();
+            scroll.Dock = DockStyle.Fill;
+            scroll.AutoScroll = true;
+            pcChart.Dock = DockStyle.Top;
+            scroll.Controls.Add(pcChart);
+            pPc.Controls.Add(scroll);
+            TabPage pDay = new TabPage("日ごとのグラフ");
+            dailyChart.Dock = DockStyle.Fill;
+            pDay.Controls.Add(dailyChart);
+            tabs.TabPages.Add(pTable);
+            tabs.TabPages.Add(pPc);
+            tabs.TabPages.Add(pDay);
+            Button saveImg = Ui.B("グラフを画像で保存", delegate { SaveImage(); });
+            saveImg.Enabled = false;
+            tabs.SelectedIndexChanged += delegate { saveImg.Enabled = tabs.SelectedIndex > 0; byJob.Enabled = tabs.SelectedIndex == 0; };
+
+            Controls.Add(tabs);
             Controls.Add(top);
-            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Ui.B("CSVに書き出す", delegate { Export(); })));
+            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Ui.B("CSVに書き出す", delegate { Export(); }), saveImg));
+            pcChart.SetData(LogStats.Aggregate(lines, false));
+            pcChart.Height = pcChart.PreferredHeight;
+            dailyChart.SetData(LogStats.Daily(lines));
             Fill();
         }
 
@@ -270,6 +299,26 @@ namespace AutoCopy
                 lv.Items.Add(it);
             }
             lv.EndUpdate();
+        }
+
+        /// <summary>表示中のタブを開く（確認用）</summary>
+        public void ShowTab(int index) { tabs.SelectedIndex = index; }
+
+        private void SaveImage()
+        {
+            Control c = tabs.SelectedIndex == 1 ? (Control)pcChart : dailyChart;
+            using (SaveFileDialog d = new SaveFileDialog())
+            {
+                d.Filter = "PNG 画像|*.png";
+                d.FileName = "自動コピー_" + (tabs.SelectedIndex == 1 ? "PCごとの容量" : "日ごとの容量") + "_" + DateTime.Now.ToString("yyyyMMdd") + ".png";
+                if (d.ShowDialog(this) != DialogResult.OK) return;
+                using (Bitmap bmp = new Bitmap(c.Width, c.Height))
+                {
+                    c.DrawToBitmap(bmp, new Rectangle(0, 0, c.Width, c.Height));
+                    bmp.Save(d.FileName, System.Drawing.Imaging.ImageFormat.Png);
+                }
+                Ui.Info(this, "保存しました：" + d.FileName);
+            }
         }
 
         private void Export()

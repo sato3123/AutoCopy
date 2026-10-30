@@ -1072,6 +1072,16 @@ namespace AutoCopy.Tests
             Eq(3000L, aKeiri.TotalBytes, "PC-A・経理");
             Eq(5000L, aZumen.TotalBytes, "PC-A・図面");
             Eq(8700L, j[j.Count - 1].TotalBytes, "ジョブ別でも合計は同じ");
+
+            // 日ごとの集計（グラフ用）
+            List<LogLine> two = new List<LogLine>(lines);
+            LogLine y = LogLine.Parse(DateTime.Now.AddDays(-1).ToString("yyyy-MM-dd") + " 09:00:00\tPC-A\tyamada\t山田_経理\t経理\tCOPY\tz.xlsx\t400\t0.1");
+            two.Add(y);
+            SortedDictionary<DateTime, Dictionary<string, long>> daily = LogStats.Daily(two);
+            Eq(2, daily.Count, "日数");
+            Eq(400L, daily[DateTime.Today.AddDays(-1)]["山田_経理"], "前日の山田_経理");
+            Eq(8000L, daily[DateTime.Today]["山田_経理"], "当日の山田_経理（新規＋上書き）");
+            Eq(700L, daily[DateTime.Today]["鈴木_総務"], "当日の鈴木_総務");
         }
 
         private static void T42_Performance()
