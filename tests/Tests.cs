@@ -69,6 +69,7 @@ namespace AutoCopy.Tests
             Add("T40", "ネットワーク共有：ID・パスワード・接続テスト・コピー", T40_NetworkShare);
             Add("T41", "アプリの実行管理（RunJob・状態・通知）", T41_AppCoreRun);
             Add("T42", "性能：2000ファイルの初回と2回目", T42_Performance);
+            Add("T43", "ログから各PCのコピー容量を集計（PC別・ジョブ別・合計）", T43_CopyStats);
 
             int ng = 0;
             foreach (TestCase t in cases)
@@ -1020,6 +1021,57 @@ namespace AutoCopy.Tests
             for (int i = 0; i < 300 && rt.Running; i++) Thread.Sleep(100);
             Eq(1, AppCore.TotalConflicts(), "確認待ちの合計");
             True(AppCore.RecentNotices().Exists(delegate(Notice n) { return n.Action == "conflicts"; }), "上書き確認の通知");
+        }
+
+        private static void T43_CopyStats()
+        {
+            // 2台分のログをログ保管先に用意し、全PCを読み込んで集計する
+            Box b = new Box("T43");
+            b.App.LogRoot = Path.Combine(b.Root, "netlogs");
+            b.App.FolderName = "山田_経理";
+            b.Apply();
+            string day = DateTime.Now.ToString("yyyy-MM-dd");
+            string t = DateTime.Now.ToString("yyyy-MM-dd") + " 10:00:00";
+            string[] pcA = {
+                t + "\tPC-A\tyamada\t山田_経理\t経理\tCOPY\ta.xlsx\t1000\t0.1",
+                t + "\tPC-A\tyamada\t山田_経理\t経理\tOVERWRITE\tb.xlsx\t2000\t0.1",
+                t + "\tPC-A\tyamada\t山田_経理\t図面\tCOPY\tc.dwg\t5000\t0.1",
+                t + "\tPC-A\tyamada\t山田_経理\t経理\tRENAME\tx → y\t3000\t",
+                t + "\tPC-A\tyamada\t山田_経理\t経理\tSUMMARY\t走査\t8000\t1.0",
+                t + "\tPC-A\tyamada\t山田_経理\t経理\tERROR\t使用中\t10\t" };
+            string[] pcB = {
+                t + "\tPC-B\tsuzuki\t鈴木_総務\t経理\tCOPY\td.docx\t700\t0.1",
+                t + "\tPC-B\tsuzuki\t鈴木_総務\t経理\tDELETE\te.docx\t300\t" };
+            WriteFile(Path.Combine(b.App.LogRoot, "山田_経理\\" + day + ".log"), string.Join("\r\n", pcA) + "\r\n", 10);
+            WriteFile(Path.Combine(b.App.LogRoot, "鈴木_総務\\" + day + ".log"), string.Join("\r\n", pcB) + "\r\n", 10);
+            string note;
+            List<LogLine> lines = Logger.Read(DateTime.Today, DateTime.Today, true, out note);
+            lines = lines.FindAll(delegate(LogLine l) { return l.Pc == "PC-A" || l.Pc == "PC-B"; });
+
+            List<CopyStat> s = LogStats.Aggregate(lines, false);
+            Eq(3, s.Count, "PC 2台＋合計");
+            CopyStat a = s.Find(delegate(CopyStat x) { return x.Pc == "PC-A"; });
+            CopyStat bb = s.Find(delegate(CopyStat x) { return x.Pc == "PC-B"; });
+            CopyStat total = s[s.Count - 1];
+            Eq(8000L, a.TotalBytes, "PC-A のコピー容量（新規＋上書き。名前変更・集計行・エラーは含まない）");
+            Eq(6000L, a.CopiedBytes, "PC-A の新規");
+            Eq(2000L, a.OverwrittenBytes, "PC-A の上書き");
+            Eq(3, a.TotalFiles, "PC-A のファイル数");
+            Eq(1, a.Renamed, "PC-A の名前変更");
+            Eq(1, a.Errors, "PC-A のエラー");
+            Eq(1, a.Runs, "PC-A の実行回数");
+            Eq("山田_経理", a.Folder, "フォルダ名");
+            Eq(700L, bb.TotalBytes, "PC-B のコピー容量");
+            Eq(1, bb.Deleted, "PC-B の削除");
+            Eq(8700L, total.TotalBytes, "合計");
+            True(s[0].Pc == "PC-A", "容量の多い順");
+
+            List<CopyStat> j = LogStats.Aggregate(lines, true);
+            CopyStat aKeiri = j.Find(delegate(CopyStat x) { return x.Pc == "PC-A" && x.Job == "経理"; });
+            CopyStat aZumen = j.Find(delegate(CopyStat x) { return x.Pc == "PC-A" && x.Job == "図面"; });
+            Eq(3000L, aKeiri.TotalBytes, "PC-A・経理");
+            Eq(5000L, aZumen.TotalBytes, "PC-A・図面");
+            Eq(8700L, j[j.Count - 1].TotalBytes, "ジョブ別でも合計は同じ");
         }
 
         private static void T42_Performance()

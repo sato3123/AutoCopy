@@ -49,6 +49,12 @@ namespace AutoCopy
             Capture("16_初回セットアップ_パスワード入力後", delegate() { return new SetupForm(setup, Distribution.ReadEnvelope(setup), true); },
                 delegate(Form f) { UnlockSetup(f, "secret"); });
             Capture("17_初回セットアップ_単独", delegate() { return new SetupForm(null, null, true); }, null);
+            Capture("19_PCごとのコピー容量", delegate()
+            {
+                string note;
+                List<LogLine> lines = Logger.Read(DateTime.Today.AddDays(-7), DateTime.Today, true, out note);
+                return new StatsForm(lines, DateTime.Today.AddDays(-7).ToString("yyyy/MM/dd") + "〜" + DateTime.Today.ToString("yyyy/MM/dd") + "・すべてのPC");
+            }, null);
             CaptureTrayMenu();
 
             File.WriteAllText(Path.Combine(outDir, "errors.txt"), errors.Count == 0 ? "なし" : string.Join("\r\n\r\n", errors.ToArray()));
@@ -117,6 +123,12 @@ namespace AutoCopy
             AppCore.Notify(NoticeLevel.Info, "重複チェック：削除候補 " + dr.DeleteCandidateCount() + "件", "経理バックアップ：結果を確認してください。", "dup", a.Id);
             Logger.Flush();
             AppCore.PublishStatus();
+            // 他のPCのログ（集計画面の見本）
+            string t = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            string other = "";
+            for (int i = 0; i < 12; i++) other += t + "\tPC-SOUMU03\tsuzuki\t鈴木_総務\t経理バックアップ\t" + (i % 3 == 0 ? "OVERWRITE" : "COPY") + "\t総務\\資料" + i + ".docx\t" + (350000 + i * 120000) + "\t0.4\r\n";
+            other += t + "\tPC-SOUMU03\tsuzuki\t鈴木_総務\t経理バックアップ\tSUMMARY\t走査 3,120件\t\t2.1\r\n";
+            W(Path.Combine(Path.Combine(s.LogRoot, "鈴木_総務"), DateTime.Now.ToString("yyyy-MM-dd") + ".log"), other, 60);
 
             DistPayload pl = Distribution.BuildPayload(s, "経理部", 3, new List<DistCredential>());
             DistCredential cr = new DistCredential(); cr.Server = "nas01"; cr.User = "nas01\\yamada"; cr.Password = "x";

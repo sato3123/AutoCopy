@@ -27,6 +27,66 @@ namespace AutoCopy
         }
     }
 
+    /// <summary>PC（またはPC×ジョブ）ごとの集計1行</summary>
+    public class CopyStat
+    {
+        public string Folder, Pc, Job;
+        public int Copied, Overwritten, Renamed, Deleted, Errors, Runs;
+        public long CopiedBytes, OverwrittenBytes, DeletedBytes;
+        public DateTime First = DateTime.MaxValue, Last = DateTime.MinValue;
+        public long TotalBytes { get { return CopiedBytes + OverwrittenBytes; } }
+        public int TotalFiles { get { return Copied + Overwritten; } }
+    }
+
+    /// <summary>ログから、各PCがコピーした容量などを集計する</summary>
+    public static class LogStats
+    {
+        /// <summary>
+        /// COPY（新規）と OVERWRITE（上書き）の行のサイズを足す。SUMMARY は二重に数えないよう使わない。
+        /// byJob = true なら PC×ジョブごと。最後の行（Job = null）は全体の合計。
+        /// </summary>
+        public static List<CopyStat> Aggregate(IEnumerable<LogLine> lines, bool byJob)
+        {
+            Dictionary<string, CopyStat> map = new Dictionary<string, CopyStat>(StringComparer.OrdinalIgnoreCase);
+            CopyStat total = new CopyStat();
+            total.Folder = "合計";
+            foreach (LogLine l in lines)
+            {
+                string key = (l.Folder ?? "") + "|" + (l.Pc ?? "") + (byJob ? "|" + (l.Job ?? "") : "");
+                CopyStat s;
+                if (!map.TryGetValue(key, out s))
+                {
+                    s = new CopyStat();
+                    s.Folder = l.Folder; s.Pc = l.Pc; s.Job = byJob ? l.Job : null;
+                    map[key] = s;
+                }
+                long size = l.Size > 0 ? l.Size : 0;
+                foreach (CopyStat t in new CopyStat[] { s, total })
+                {
+                    switch (l.Type)
+                    {
+                        case "COPY": t.Copied++; t.CopiedBytes += size; break;
+                        case "OVERWRITE": t.Overwritten++; t.OverwrittenBytes += size; break;
+                        case "RENAME": t.Renamed++; break;
+                        case "DELETE": t.Deleted++; t.DeletedBytes += size; break;
+                        case "ERROR": t.Errors++; break;
+                        case "SUMMARY": t.Runs++; break;
+                    }
+                    if (l.Time < t.First) t.First = l.Time;
+                    if (l.Time > t.Last) t.Last = l.Time;
+                }
+            }
+            List<CopyStat> list = new List<CopyStat>(map.Values);
+            list.Sort(delegate(CopyStat a, CopyStat b)
+            {
+                int c = b.TotalBytes.CompareTo(a.TotalBytes);
+                return c != 0 ? c : string.Compare(a.Folder, b.Folder, StringComparison.OrdinalIgnoreCase);
+            });
+            list.Add(total);
+            return list;
+        }
+    }
+
     /// <summary>
     /// ログ。このPC内（%LOCALAPPDATA%\AutoCopy\logs）に必ず残し、
     /// ネットワークのログ保管先（保管先\フォルダ名\日付.log）にも送る。送れない間は outbox に溜める。

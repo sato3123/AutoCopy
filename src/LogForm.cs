@@ -41,6 +41,7 @@ namespace AutoCopy
                 Ui.Row(Ui.L("PC"), cbPc), Ui.Row(Ui.L("期間"), dFrom, Ui.L("〜"), dTo), Ui.B("表示", delegate { LoadLogs(); }),
                 Ui.Row(Ui.L("ジョブ"), cbJob), Ui.Row(Ui.L("種類"), cbType), Ui.Row(Ui.L("検索"), tSearch),
                 Ui.B("CSVに書き出す", delegate { ExportCsv(); }),
+                Ui.B("PCごとの容量を集計", delegate { ShowStats(); }),
                 Ui.B("ログフォルダを開く", delegate { OpenLogFolder(); })
             });
 
@@ -164,6 +165,19 @@ namespace AutoCopy
             e.Item = it;
         }
 
+        /// <summary>今の絞り込み（期間・ジョブ・PC）で、PCごとのコピー容量を集計して表示する</summary>
+        private void ShowStats()
+        {
+            List<LogLine> target = all.FindAll(delegate(LogLine l)
+            {
+                return cbJob.SelectedIndex <= 0 || string.Equals(l.Job, (string)cbJob.SelectedItem, StringComparison.OrdinalIgnoreCase);
+            });
+            string range = dFrom.Value.ToString("yyyy/MM/dd") + "〜" + dTo.Value.ToString("yyyy/MM/dd")
+                + (cbJob.SelectedIndex > 0 ? "・ジョブ：" + cbJob.SelectedItem : "")
+                + (cbPc.SelectedIndex == 1 ? "・すべてのPC" : "・このPC");
+            using (StatsForm f = new StatsForm(target, range)) f.ShowDialog(this);
+        }
+
         private void ExportCsv()
         {
             using (SaveFileDialog d = new SaveFileDialog())
@@ -196,6 +210,96 @@ namespace AutoCopy
         {
             if (cbPc.SelectedIndex == 1 && !string.IsNullOrEmpty(AppCore.Settings.LogRoot)) Ui.OpenFolder(AppCore.Settings.LogRoot);
             else Ui.OpenFolder(AppPaths.LogDir);
+        }
+    }
+
+    /// <summary>PCごとのコピー容量の集計</summary>
+    public class StatsForm : Form
+    {
+        private readonly List<LogLine> lines;
+        private readonly ListView lv;
+        private readonly CheckBox byJob;
+        private List<CopyStat> stats = new List<CopyStat>();
+
+        public StatsForm(List<LogLine> lines, string range)
+        {
+            this.lines = lines;
+            Ui.SetupForm(this, "PCごとのコピー容量", 1000, 520);
+            byJob = Ui.C("ジョブごとに分ける", false);
+            byJob.CheckedChanged += delegate { Fill(); };
+            FlowLayoutPanel top = Ui.Column(
+                Ui.Heading("PCごとのコピー容量"),
+                Ui.Hint("期間・条件：" + range + "　（新規コピーと上書きのファイルサイズの合計。名前変更はコピーしないため含みません）"),
+                byJob);
+            top.Dock = DockStyle.Top;
+            top.Padding = new Padding(12, 8, 12, 4);
+
+            lv = Ui.List("フォルダ名|130", "PC名|120", "ジョブ|130", "コピー容量|100", "うち新規|90", "うち上書き|90", "ファイル数|80", "名前変更|70", "削除|60", "エラー|60", "実行回数|70", "最後の記録|130");
+            lv.Dock = DockStyle.Fill;
+            foreach (int i in new int[] { 3, 4, 5, 6, 7, 8, 9, 10 }) lv.Columns[i].TextAlign = HorizontalAlignment.Right;
+
+            Controls.Add(lv);
+            Controls.Add(top);
+            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Ui.B("CSVに書き出す", delegate { Export(); })));
+            Fill();
+        }
+
+        private void Fill()
+        {
+            stats = LogStats.Aggregate(lines, byJob.Checked);
+            lv.Columns[2].Width = byJob.Checked ? 130 : 0;
+            lv.BeginUpdate();
+            lv.Items.Clear();
+            foreach (CopyStat s in stats)
+            {
+                bool isTotal = s.Folder == "合計" && s.Pc == null;
+                ListViewItem it = new ListViewItem(s.Folder ?? "");
+                it.SubItems.Add(s.Pc ?? "");
+                it.SubItems.Add(s.Job ?? "");
+                it.SubItems.Add(Fmt.Size(s.TotalBytes));
+                it.SubItems.Add(Fmt.Size(s.CopiedBytes));
+                it.SubItems.Add(Fmt.Size(s.OverwrittenBytes));
+                it.SubItems.Add(Fmt.Count(s.TotalFiles));
+                it.SubItems.Add(Fmt.Count(s.Renamed));
+                it.SubItems.Add(Fmt.Count(s.Deleted));
+                it.SubItems.Add(Fmt.Count(s.Errors));
+                it.SubItems.Add(Fmt.Count(s.Runs));
+                it.SubItems.Add(s.Last == DateTime.MinValue ? "" : s.Last.ToString("yyyy/MM/dd HH:mm"));
+                if (isTotal) { it.Font = Ui.Bold; it.BackColor = Ui.InfoBack; }
+                if (s.Errors > 0 && !isTotal) it.ForeColor = Ui.Err;
+                lv.Items.Add(it);
+            }
+            lv.EndUpdate();
+        }
+
+        private void Export()
+        {
+            using (SaveFileDialog d = new SaveFileDialog())
+            {
+                d.Filter = "CSV（Excel で開けます）|*.csv";
+                d.FileName = "自動コピー_PCごとの容量_" + DateTime.Now.ToString("yyyyMMdd") + ".csv";
+                if (d.ShowDialog(this) != DialogResult.OK) return;
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine("フォルダ名,PC名,ジョブ,コピー容量(バイト),新規(バイト),上書き(バイト),ファイル数,新規件数,上書き件数,名前変更,削除,エラー,実行回数,最初の記録,最後の記録");
+                foreach (CopyStat s in stats)
+                {
+                    sb.AppendLine(string.Join(",", new string[] {
+                        Q(s.Folder), Q(s.Pc), Q(s.Job), s.TotalBytes.ToString(), s.CopiedBytes.ToString(), s.OverwrittenBytes.ToString(),
+                        s.TotalFiles.ToString(), s.Copied.ToString(), s.Overwritten.ToString(), s.Renamed.ToString(), s.Deleted.ToString(),
+                        s.Errors.ToString(), s.Runs.ToString(),
+                        s.First == DateTime.MaxValue ? "" : s.First.ToString("yyyy/MM/dd HH:mm:ss"),
+                        s.Last == DateTime.MinValue ? "" : s.Last.ToString("yyyy/MM/dd HH:mm:ss") }));
+                }
+                File.WriteAllText(d.FileName, sb.ToString(), new UTF8Encoding(true));
+                Ui.Info(this, "書き出しました：" + d.FileName);
+            }
+        }
+
+        private static string Q(string s)
+        {
+            s = s ?? "";
+            if (s.IndexOfAny(new char[] { ',', '"', '\n' }) >= 0) return "\"" + s.Replace("\"", "\"\"") + "\"";
+            return s;
         }
     }
 }
