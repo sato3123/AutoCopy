@@ -388,7 +388,8 @@ namespace AutoCopy
 
         private void OnItemCheck(object sender, ItemCheckEventArgs e)
         {
-            if (filling) return;
+            if (filling || e.NewValue == e.CurrentValue) return;
+            if (e.Index < 0 || e.Index >= lv.Items.Count) return;
             DupEntry d = lv.Items[e.Index].Tag as DupEntry;
             if (d == null) return;
             if (!d.CanDelete && e.NewValue == CheckState.Checked) { e.NewValue = CheckState.Unchecked; return; }
@@ -399,6 +400,7 @@ namespace AutoCopy
             int keep = 0, total = 0;
             foreach (ListViewItem it in g.Items)
             {
+                if (it.ListView == null || it.Index < 0) continue; // 一覧から外れた古い項目
                 total++;
                 DupEntry x = (DupEntry)it.Tag;
                 bool willCheck = it.Index == e.Index ? true : it.Checked;

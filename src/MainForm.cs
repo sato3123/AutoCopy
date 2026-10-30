@@ -77,7 +77,7 @@ namespace AutoCopy
             band.Controls.AddRange(new Control[] { statusLabel, confirmLabel, confirmButton, pendingButton });
 
             // ---- ジョブ一覧 ----
-            jobs = Ui.List("ジョブ名|170", "方式|70", "コピー元 → コピー先|340", "間隔|60", "前回|90", "結果|260", "次回|70");
+            jobs = Ui.List("ジョブ名|160", "方式|70", "コピー元 → コピー先|300", "間隔|56", "前回|70", "結果|240", "次回|70");
             jobs.CheckBoxes = true;
             jobs.Dock = DockStyle.Fill;
             jobs.ItemChecked += OnItemChecked;

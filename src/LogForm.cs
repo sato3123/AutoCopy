@@ -38,8 +38,8 @@ namespace AutoCopy
             top.Padding = new Padding(8);
             top.BackColor = Color.White;
             top.Controls.AddRange(new Control[] {
-                Ui.L("PC"), cbPc, Ui.L("期間"), dFrom, Ui.L("〜"), dTo, Ui.B("表示", delegate { LoadLogs(); }),
-                Ui.L("ジョブ"), cbJob, Ui.L("種類"), cbType, Ui.L("検索"), tSearch,
+                Ui.Row(Ui.L("PC"), cbPc), Ui.Row(Ui.L("期間"), dFrom, Ui.L("〜"), dTo), Ui.B("表示", delegate { LoadLogs(); }),
+                Ui.Row(Ui.L("ジョブ"), cbJob), Ui.Row(Ui.L("種類"), cbType), Ui.Row(Ui.L("検索"), tSearch),
                 Ui.B("CSVに書き出す", delegate { ExportCsv(); }),
                 Ui.B("ログフォルダを開く", delegate { OpenLogFolder(); })
             });

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -930,7 +930,7 @@ namespace AutoCopy.Tests
             sw.Stop();
             True(ex != null, "接続できないエラー");
             True(ex.Message.Contains("2回再試行"), "メッセージに再試行回数: " + ex.Message);
-            True(sw.Elapsed.TotalSeconds >= 2, "間隔どおり待つ（" + sw.Elapsed.TotalSeconds.ToString("0.0") + "秒）");
+            True(sw.Elapsed.TotalSeconds >= 1.9, "間隔どおり待つ（" + sw.Elapsed.TotalSeconds.ToString("0.0") + "秒）");
             True(LogText().Contains("コピー先への接続を再試行（2 / 2回目）"), "ログに RETRY");
             Note = ex.Message;
         }

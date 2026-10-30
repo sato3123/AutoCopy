@@ -19,12 +19,12 @@ namespace AutoCopy
         public SettingsForm()
         {
             AppSettings s = AppCore.Settings;
-            Ui.SetupForm(this, "アプリ設定", 680, 760);
+            Ui.SetupForm(this, "アプリ設定", 760, 800);
             FlowLayoutPanel b = Ui.Body();
 
             lFolder = Ui.L(s.FolderName);
             lFolder.Font = Ui.Bold;
-            tLogRoot = Ui.T(s.LogRoot, 340);
+            tLogRoot = Ui.T(s.LogRoot, 300);
             lDist = Ui.Hint("");
             b.Controls.Add(Ui.Section("複数台で使う",
                 Ui.Row(Ui.L("このPCのフォルダ名", 140), lFolder, Ui.B("変更…", delegate { ChangeFolderName(); })),
@@ -285,7 +285,7 @@ namespace AutoCopy
         public DistCreateForm()
         {
             AppSettings s = AppCore.Settings;
-            Ui.SetupDialog(this, "配布フォルダを作成", 720, 640);
+            Ui.SetupDialog(this, "配布フォルダを作成", 740, 700);
             FlowLayoutPanel b = Ui.Body();
             b.Controls.Add(Ui.Wrap("このPCの設定のうち「配布設定に含める」ジョブと、ログ保管先・保存期間・ID とパスワードを配布用のファイルにします。各PCのフォルダ名・このPCだけのジョブは含めません。", 660));
 
