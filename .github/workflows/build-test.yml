@@ -100,6 +100,7 @@ jobs:
           New-Item -ItemType Directory -Force "$dir\${{ matrix.os }}" | Out-Null
           foreach ($f in 'test-results.md','test-console.txt','integration-results.md','integration-console.txt') { if (Test-Path $f) { Copy-Item $f "$dir\${{ matrix.os }}\" } }
           if (Test-Path screenshots) { Copy-Item -Recurse screenshots "$dir\${{ matrix.os }}\screenshots" }
+          if (Test-Path dist) { Copy-Item -Recurse dist "$dir\${{ matrix.os }}\dist" }
           $h = "$env:AUTOCOPY_HOME"
           Get-ChildItem -Recurse "$env:RUNNER_TEMP" -Filter "*.log" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*\logs\*' } | Select-Object -First 5 | ForEach-Object { Copy-Item $_.FullName "$dir\${{ matrix.os }}\app-$($_.Directory.Parent.Parent.Name)-$($_.Name)" }
           git config --global user.name "ci"
