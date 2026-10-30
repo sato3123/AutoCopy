@@ -1,0 +1,89 @@
+name: build-and-test
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    env:
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Windows / .NET Framework version
+        shell: pwsh
+        run: |
+          [System.Environment]::OSVersion
+          (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full').Release
+
+      - name: Build app with build.bat (Shift-JIS console)
+        shell: cmd
+        run: |
+          chcp 932
+          call build.bat
+          if errorlevel 1 exit /b 1
+          dir dist
+
+      - name: Build test runner
+        shell: pwsh
+        run: |
+          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          $core = 'Models','Util','Native','NetAccess','SafeFs','StateStore','Exclude','Scanner','CopyEngine','DupChecker','Logger','Distribution','SystemIntegration','AppCore','AssemblyInfo' | ForEach-Object { "src\$_.cs" }
+          New-Item -ItemType Directory -Force test | Out-Null
+          & $csc /nologo /target:exe /platform:anycpu /codepage:65001 /out:test\AutoCopyTests.exe `
+            /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Runtime.Serialization.dll /r:System.Xml.dll /r:System.Security.dll `
+            @core tests\Tests.cs
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Prepare SMB share with a separate user
+        shell: pwsh
+        run: |
+          $pw = 'Ac!Test-12345'
+          net user actest $pw /add
+          New-Item -ItemType Directory -Force C:\acshare | Out-Null
+          icacls C:\acshare /grant "actest:(OI)(CI)F" | Out-Null
+          New-SmbShare -Name acshare -Path C:\acshare -FullAccess actest | Out-Null
+          "AC_SHARE=\\127.0.0.1\acshare" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "AC_SHARE_LOCAL=C:\acshare"    | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "AC_USER=$env:COMPUTERNAME\actest" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "AC_PASS=$pw"                  | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Run tests
+        shell: pwsh
+        run: |
+          .\test\AutoCopyTests.exe "$pwd\test-results.md"
+          $code = $LASTEXITCODE
+          "## Unit / engine tests (${{ matrix.os }})" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          Get-Content -Encoding utf8 test-results.md | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          exit $code
+
+      - name: Integration test (real exe, tray, single instance, /run)
+        if: always()
+        shell: pwsh
+        run: ./tests/integration.ps1
+
+      - name: Screenshots of all screens
+        if: always()
+        shell: pwsh
+        run: |
+          $env:AUTOCOPY_HOME = "$env:RUNNER_TEMP\shots-home"
+          $p = Start-Process -FilePath "dist\AutoCopy.exe" -ArgumentList '/screenshots', "`"$pwd\screenshots`"" -PassThru
+          if (-not $p.WaitForExit(240000)) { $p.Kill(); "timeout" | Out-File screenshots\timeout.txt }
+          Get-ChildItem screenshots | Select-Object Name, Length
+          Get-Content -Encoding utf8 screenshots\errors.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: results-${{ matrix.os }}
+          path: |
+            test-results.md
+            integration-results.md
+            screenshots/
+            dist/

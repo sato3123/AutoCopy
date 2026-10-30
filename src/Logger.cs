@@ -1,0 +1,279 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Text;
+using System.Threading;
+
+namespace AutoCopy
+{
+    public class LogLine
+    {
+        public DateTime Time;
+        public string Pc, User, Folder, Job, Type, Detail;
+        public long Size = -1;
+        public double Seconds = -1;
+
+        public static LogLine Parse(string line)
+        {
+            string[] f = line.Split('\t');
+            if (f.Length < 7) return null;
+            LogLine l = new LogLine();
+            if (!DateTime.TryParseExact(f[0], "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.None, out l.Time)) return null;
+            l.Pc = f[1]; l.User = f[2]; l.Folder = f[3]; l.Job = f[4]; l.Type = f[5]; l.Detail = f[6];
+            if (f.Length > 7 && f[7].Length > 0) long.TryParse(f[7], out l.Size);
+            if (f.Length > 8 && f[8].Length > 0) double.TryParse(f[8], NumberStyles.Float, CultureInfo.InvariantCulture, out l.Seconds);
+            return l;
+        }
+    }
+
+    /// <summary>
+    /// ログ。このPC内（%LOCALAPPDATA%\AutoCopy\logs）に必ず残し、
+    /// ネットワークのログ保管先（保管先\フォルダ名\日付.log）にも送る。送れない間は outbox に溜める。
+    /// </summary>
+    public static class Logger
+    {
+        private static readonly object sync = new object();
+        private static readonly object sendSync = new object();
+        private static string logRoot;
+        private static string folderName;
+        public static event Action<LogLine> LineWritten;
+        public static DateTime LastSendOk = DateTime.MinValue;
+        public static string LastSendError;
+
+        public static void Configure(AppSettings s)
+        {
+            lock (sync)
+            {
+                logRoot = string.IsNullOrEmpty(s.LogRoot) ? null : s.LogRoot.Trim();
+                folderName = string.IsNullOrEmpty(s.FolderName) ? Environment.MachineName : s.FolderName;
+            }
+        }
+
+        public static string PcFolderName
+        {
+            get { lock (sync) { return folderName ?? Environment.MachineName; } }
+        }
+
+        private static string Clean(string s)
+        {
+            if (s == null) return "";
+            return s.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
+        }
+
+        public static void Write(string job, string type, string detail, long size, double seconds)
+        {
+            DateTime now = DateTime.Now;
+            string line = string.Join("\t", new string[] {
+                now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture),
+                Environment.MachineName, Environment.UserName, Clean(PcFolderName), Clean(job ?? "（アプリ）"), type, Clean(detail),
+                size >= 0 ? size.ToString(CultureInfo.InvariantCulture) : "",
+                seconds >= 0 ? seconds.ToString("0.0", CultureInfo.InvariantCulture) : "" }) + "\r\n";
+            string day = now.ToString("yyyy-MM-dd");
+            lock (sync)
+            {
+                try
+                {
+                    Directory.CreateDirectory(AppPaths.LogDir);
+                    File.AppendAllText(Path.Combine(AppPaths.LogDir, day + ".log"), line, new UTF8Encoding(false));
+                    if (logRoot != null)
+                    {
+                        Directory.CreateDirectory(AppPaths.OutboxDir);
+                        File.AppendAllText(Path.Combine(AppPaths.OutboxDir, day + ".log"), line, new UTF8Encoding(false));
+                    }
+                }
+                catch (Exception) { }
+            }
+            Action<LogLine> h = LineWritten;
+            if (h != null)
+            {
+                LogLine l = LogLine.Parse(line.TrimEnd('\r', '\n'));
+                if (l != null) { try { h(l); } catch (Exception) { } }
+            }
+        }
+
+        public static void Info(string job, string msg) { Write(job, "INFO", msg, -1, -1); }
+        public static void Error(string job, string msg) { Write(job, "ERROR", msg, -1, -1); }
+
+        public static string NetworkFolderForThisPc()
+        {
+            string root;
+            lock (sync) { root = logRoot; }
+            if (root == null) return null;
+            return PathUtil.Combine(root, PcFolderName);
+        }
+
+        /// <summary>outbox の分をネットワークへ送る。成功なら true（送るものがない場合も true）。</summary>
+        public static bool Flush()
+        {
+            string target = NetworkFolderForThisPc();
+            if (target == null) return true;
+            lock (sendSync)
+            {
+                try
+                {
+                    if (!Directory.Exists(AppPaths.OutboxDir)) return true;
+                    // 送信中の名前に変えてから送る（その間の書き込みは新しい outbox ファイルへ）
+                    lock (sync)
+                    {
+                        foreach (string f in Directory.GetFiles(AppPaths.OutboxDir, "*.log"))
+                        {
+                            string sending = f + "." + DateTime.Now.Ticks + ".sending";
+                            File.Move(f, sending);
+                        }
+                    }
+                    string[] list = Directory.GetFiles(AppPaths.OutboxDir, "*.sending");
+                    if (list.Length == 0) return true;
+                    Array.Sort(list, StringComparer.Ordinal);
+                    NetAccess.Ensure(target, 0, 1, CancellationToken.None, null);
+                    foreach (string f in list)
+                    {
+                        string day = Path.GetFileName(f).Substring(0, 10);
+                        string text = File.ReadAllText(f, Encoding.UTF8);
+                        SafeFs.AppendText(PathUtil.Combine(target, day + ".log"), text);
+                        File.Delete(f);
+                    }
+                    LastSendOk = DateTime.Now;
+                    LastSendError = null;
+                    return true;
+                }
+                catch (Exception ex)
+                {
+                    LastSendError = ex.Message;
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>まだ送れていないログのうち一番古い日（なければ null）</summary>
+        public static DateTime? OldestUnsent()
+        {
+            try
+            {
+                if (!Directory.Exists(AppPaths.OutboxDir)) return null;
+                DateTime? oldest = null;
+                foreach (string f in Directory.GetFiles(AppPaths.OutboxDir))
+                {
+                    DateTime t = File.GetCreationTime(f);
+                    if (!oldest.HasValue || t < oldest.Value) oldest = t;
+                }
+                return oldest;
+            }
+            catch (Exception) { return null; }
+        }
+
+        public static void WriteStatus(PcStatus st)
+        {
+            string target = NetworkFolderForThisPc();
+            if (target == null) return;
+            try
+            {
+                NetAccess.Ensure(target, 0, 1, CancellationToken.None, null);
+                SafeFs.WriteText(PathUtil.Combine(target, "status.json"), Json.Serialize(st));
+            }
+            catch (Exception) { }
+        }
+
+        public static void Purge(AppSettings s)
+        {
+            PurgeDir(AppPaths.LogDir, s.LocalLogDays);
+            string net = NetworkFolderForThisPc();
+            if (net != null)
+            {
+                try
+                {
+                    if (Directory.Exists(PathUtil.Long(net))) PurgeDir(net, s.NetLogDays);
+                }
+                catch (Exception) { }
+            }
+        }
+
+        private static void PurgeDir(string dir, int days)
+        {
+            try
+            {
+                string l = PathUtil.Long(dir);
+                if (!Directory.Exists(l)) return;
+                DateTime limit = DateTime.Today.AddDays(-Math.Max(1, days));
+                foreach (string f in Directory.GetFiles(l, "????-??-??.log"))
+                {
+                    DateTime d;
+                    if (DateTime.TryParseExact(Path.GetFileNameWithoutExtension(f), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out d)
+                        && d < limit)
+                        SafeFs.DeleteFile(f);
+                }
+            }
+            catch (Exception) { }
+        }
+
+        /// <summary>ログを読む。allPcs なら保管先の全PC分。</summary>
+        public static List<LogLine> Read(DateTime from, DateTime to, bool allPcs, out string note)
+        {
+            note = null;
+            List<LogLine> list = new List<LogLine>();
+            List<string> dirs = new List<string>();
+            string root;
+            lock (sync) { root = logRoot; }
+            if (allPcs && root != null)
+            {
+                try
+                {
+                    NetAccess.Ensure(root, 0, 1, CancellationToken.None, null);
+                    foreach (string d in Directory.GetDirectories(PathUtil.Long(root))) dirs.Add(d);
+                    Flush();
+                }
+                catch (Exception ex)
+                {
+                    note = "ログ保管先を読めません（" + ex.Message + "）。このPCのログを表示しています。";
+                    dirs.Clear();
+                }
+            }
+            if (dirs.Count == 0) { dirs.Add(AppPaths.LogDir); if (allPcs && root == null) note = "ログ保管先が未設定のため、このPCのログを表示しています。"; }
+            for (DateTime day = from.Date; day <= to.Date; day = day.AddDays(1))
+            {
+                foreach (string d in dirs)
+                {
+                    string f = Path.Combine(d, day.ToString("yyyy-MM-dd") + ".log");
+                    if (!File.Exists(f)) continue;
+                    try
+                    {
+                        using (FileStream fs = new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                        using (StreamReader r = new StreamReader(fs, Encoding.UTF8))
+                        {
+                            string line;
+                            while ((line = r.ReadLine()) != null)
+                            {
+                                LogLine l = LogLine.Parse(line);
+                                if (l != null) list.Add(l);
+                            }
+                        }
+                    }
+                    catch (Exception) { }
+                }
+            }
+            list.Sort(delegate(LogLine a, LogLine b) { return b.Time.CompareTo(a.Time); });
+            return list;
+        }
+
+        /// <summary>保管先の全PCの状態</summary>
+        public static List<PcStatus> ReadAllStatus()
+        {
+            List<PcStatus> list = new List<PcStatus>();
+            string root;
+            lock (sync) { root = logRoot; }
+            if (root == null) return list;
+            try
+            {
+                foreach (string d in Directory.GetDirectories(PathUtil.Long(root)))
+                {
+                    string f = Path.Combine(d, "status.json");
+                    if (!File.Exists(f)) continue;
+                    try { PcStatus st = Json.Deserialize<PcStatus>(File.ReadAllText(f, Encoding.UTF8)); if (st != null) list.Add(st); }
+                    catch (Exception) { }
+                }
+            }
+            catch (Exception) { }
+            return list;
+        }
+    }
+}
