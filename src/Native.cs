@@ -113,6 +113,15 @@ namespace AutoCopy
         public const int ERROR_LOGON_FAILURE = 1326;
         public const int ERROR_BAD_USERNAME = 2202;
         public const int ERROR_ALREADY_ASSIGNED = 85;
+        public const int ERROR_INVALID_PASSWORD = 86;
+
+        /// <summary>ID・パスワードの誤りやアカウントの問題（再試行しても直らないもの）</summary>
+        public static bool IsCredentialError(int code)
+        {
+            return code == ERROR_INVALID_PASSWORD || code == ERROR_LOGON_FAILURE || code == ERROR_BAD_USERNAME
+                || code == 1327 /* アカウントの制限 */ || code == 1328 /* ログオン時間の制限 */ || code == 1330 /* パスワード期限切れ */
+                || code == 1331 /* アカウント無効 */ || code == 1907 /* パスワード変更が必要 */ || code == 1909 /* ロックアウト */;
+        }
 
         /// <summary>割り当てドライブ（Z: など）を \\server\share に変換。ネットワークでなければ null。</summary>
         public static string GetUncForDrive(string driveLetterColon)

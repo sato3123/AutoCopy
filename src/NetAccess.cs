@@ -130,8 +130,8 @@ namespace AutoCopy
                         nr.dwType = Native.RESOURCETYPE_DISK;
                         nr.lpRemoteName = share;
                         int r = Native.WNetAddConnection2(nr, pass, user, 0);
-                        if (r == Native.ERROR_LOGON_FAILURE || r == Native.ERROR_BAD_USERNAME)
-                            throw new AccessException(share + " に接続できません。ID またはパスワードが違います。", true);
+                        if (Native.IsCredentialError(r))
+                            throw new AccessException(share + " に接続できません。ID またはパスワードが違うか、アカウントが使えません（" + Native.Win32Message(r) + "）。", true);
                         if (r == 0 || r == Native.ERROR_SESSION_CREDENTIAL_CONFLICT || r == Native.ERROR_ALREADY_ASSIGNED)
                         {
                             if (ExistsOrParentExists(plain)) return;
@@ -181,7 +181,7 @@ namespace AutoCopy
                     nr.dwType = Native.RESOURCETYPE_DISK;
                     nr.lpRemoteName = PathUtil.UncShareRoot(plain);
                     int r = Native.WNetAddConnection2(nr, password, user, 0);
-                    if (r == Native.ERROR_LOGON_FAILURE || r == Native.ERROR_BAD_USERNAME) return "ID またはパスワードが違います";
+                    if (Native.IsCredentialError(r)) return "ID またはパスワードが違います（" + Native.Win32Message(r) + "）";
                     if (r != 0 && r != Native.ERROR_SESSION_CREDENTIAL_CONFLICT && r != Native.ERROR_ALREADY_ASSIGNED)
                         return Native.Win32Message(r);
                 }

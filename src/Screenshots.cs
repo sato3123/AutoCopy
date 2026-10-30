@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -22,6 +22,8 @@ namespace AutoCopy
         {
             outDir = dir;
             Directory.CreateDirectory(outDir);
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += delegate(object s, ThreadExceptionEventArgs e) { errors.Add("画面イベント中の例外: " + e.Exception); };
             try { Prepare(); }
             catch (Exception ex) { errors.Add("準備: " + ex); }
 

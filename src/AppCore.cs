@@ -375,7 +375,9 @@ namespace AutoCopy
         public static RunResult DryRun(JobConfig job, bool forceMirror)
         {
             JobState st = job.Id != null ? GetState(job.Id) : new JobState();
-            CopyEngine eng = new CopyEngine(job, Settings, st, true, forceMirror, CancellationToken.None);
+            JobConfig quick = job.Clone();
+            quick.RetryCount = 0; // 画面で待たせないよう、数えるだけのときは再試行しない
+            CopyEngine eng = new CopyEngine(quick, Settings, st, true, forceMirror, CancellationToken.None);
             return eng.Run();
         }
 

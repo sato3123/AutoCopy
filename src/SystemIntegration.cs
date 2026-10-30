@@ -50,25 +50,52 @@ namespace AutoCopy
             string safe = title;
             foreach (char c in PathUtil.InvalidNameChars) safe = safe.Replace(c, '_');
             string path = Path.Combine(desktop, safe + ".lnk");
-            Type t = Type.GetTypeFromProgID("WScript.Shell");
-            object shell = Activator.CreateInstance(t);
+            // Windows 標準の IShellLinkW を使う（日本語などの Unicode のファイル名でも作れる。Windows 7〜11 共通）
+            object obj = new ShellLinkObject();
             try
             {
-                object lnk = t.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { path });
-                Type lt = lnk.GetType();
-                lt.InvokeMember("TargetPath", BindingFlags.SetProperty, null, lnk, new object[] { exePath });
-                lt.InvokeMember("Arguments", BindingFlags.SetProperty, null, lnk, new object[] { arguments });
-                lt.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, lnk, new object[] { Path.GetDirectoryName(exePath) });
-                lt.InvokeMember("Description", BindingFlags.SetProperty, null, lnk, new object[] { "自動コピー" });
-                lt.InvokeMember("IconLocation", BindingFlags.SetProperty, null, lnk, new object[] { exePath + ",0" });
-                lt.InvokeMember("Save", BindingFlags.InvokeMethod, null, lnk, null);
-                System.Runtime.InteropServices.Marshal.FinalReleaseComObject(lnk);
+                IShellLinkW link = (IShellLinkW)obj;
+                link.SetPath(exePath);
+                link.SetArguments(arguments ?? "");
+                link.SetWorkingDirectory(Path.GetDirectoryName(exePath));
+                link.SetDescription("自動コピー");
+                link.SetIconLocation(exePath, 0);
+                ((System.Runtime.InteropServices.ComTypes.IPersistFile)obj).Save(path, true);
             }
             finally
             {
-                System.Runtime.InteropServices.Marshal.FinalReleaseComObject(shell);
+                System.Runtime.InteropServices.Marshal.FinalReleaseComObject(obj);
             }
             return path;
+        }
+
+        [System.Runtime.InteropServices.ComImport]
+        [System.Runtime.InteropServices.Guid("00021401-0000-0000-C000-000000000046")]
+        private class ShellLinkObject { }
+
+        [System.Runtime.InteropServices.ComImport]
+        [System.Runtime.InteropServices.InterfaceType(System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
+        [System.Runtime.InteropServices.Guid("000214F9-0000-0000-C000-000000000046")]
+        private interface IShellLinkW
+        {
+            void GetPath([System.Runtime.InteropServices.Out, System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] StringBuilder pszFile, int cchMaxPath, IntPtr pfd, int fFlags);
+            void GetIDList(out IntPtr ppidl);
+            void SetIDList(IntPtr pidl);
+            void GetDescription([System.Runtime.InteropServices.Out, System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] StringBuilder pszName, int cchMaxName);
+            void SetDescription([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string pszName);
+            void GetWorkingDirectory([System.Runtime.InteropServices.Out, System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] StringBuilder pszDir, int cchMaxPath);
+            void SetWorkingDirectory([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string pszDir);
+            void GetArguments([System.Runtime.InteropServices.Out, System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] StringBuilder pszArgs, int cchMaxPath);
+            void SetArguments([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string pszArgs);
+            void GetHotkey(out short pwHotkey);
+            void SetHotkey(short wHotkey);
+            void GetShowCmd(out int piShowCmd);
+            void SetShowCmd(int iShowCmd);
+            void GetIconLocation([System.Runtime.InteropServices.Out, System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] StringBuilder pszIconPath, int cchIconPath, out int piIcon);
+            void SetIconLocation([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string pszIconPath, int iIcon);
+            void SetRelativePath([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string pszPathRel, int dwReserved);
+            void Resolve(IntPtr hwnd, int fFlags);
+            void SetPath([System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.LPWStr)] string pszFile);
         }
     }
 
