@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-test:
     strategy:
@@ -57,8 +60,9 @@ jobs:
       - name: Run tests
         shell: pwsh
         run: |
-          .\test\AutoCopyTests.exe "$pwd\test-results.md"
+          .\test\AutoCopyTests.exe "$pwd\test-results.md" *> test-console.txt
           $code = $LASTEXITCODE
+          Get-Content -Encoding utf8 test-console.txt
           "## Unit / engine tests (${{ matrix.os }})" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           Get-Content -Encoding utf8 test-results.md | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           exit $code
@@ -66,7 +70,7 @@ jobs:
       - name: Integration test (real exe, tray, single instance, /run)
         if: always()
         shell: pwsh
-        run: ./tests/integration.ps1
+        run: ./tests/integration.ps1 *>&1 | Tee-Object -FilePath integration-console.txt
 
       - name: Screenshots of all screens
         if: always()
@@ -87,3 +91,27 @@ jobs:
             integration-results.md
             screenshots/
             dist/
+
+      - name: Publish results to ci-results branch
+        if: always()
+        shell: pwsh
+        run: |
+          $dir = "$env:RUNNER_TEMP\results"
+          New-Item -ItemType Directory -Force "$dir\${{ matrix.os }}" | Out-Null
+          foreach ($f in 'test-results.md','test-console.txt','integration-results.md','integration-console.txt') { if (Test-Path $f) { Copy-Item $f "$dir\${{ matrix.os }}\" } }
+          if (Test-Path screenshots) { Copy-Item -Recurse screenshots "$dir\${{ matrix.os }}\screenshots" }
+          $h = "$env:AUTOCOPY_HOME"
+          Get-ChildItem -Recurse "$env:RUNNER_TEMP" -Filter "*.log" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*\logs\*' } | Select-Object -First 5 | ForEach-Object { Copy-Item $_.FullName "$dir\${{ matrix.os }}\app-$($_.Directory.Parent.Parent.Name)-$($_.Name)" }
+          git config --global user.name "ci"
+          git config --global user.email "ci@example.invalid"
+          $branch = "ci-results-${{ matrix.os }}"
+          git fetch origin $branch 2>$null
+          git worktree add -B $branch "$env:RUNNER_TEMP\wt" 2>$null
+          if (-not $?) { git worktree add --orphan -b $branch "$env:RUNNER_TEMP\wt" }
+          Set-Location "$env:RUNNER_TEMP\wt"
+          git rm -rq . 2>$null
+          Copy-Item -Recurse -Force "$dir\*" .
+          "${{ github.sha }}" | Out-File -Encoding utf8 commit.txt
+          git add -A
+          git commit -qm "results for ${{ github.sha }}"
+          git push -f origin "HEAD:$branch"
