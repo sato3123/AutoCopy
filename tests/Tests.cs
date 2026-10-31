@@ -70,6 +70,8 @@ namespace AutoCopy.Tests
             Add("T41", "アプリの実行管理（RunJob・状態・通知）", T41_AppCoreRun);
             Add("T42", "性能：2000ファイルの初回と2回目", T42_Performance);
             Add("T43", "ログから各PCのコピー容量を集計（PC別・ジョブ別・合計）", T43_CopyStats);
+            Add("T44", "ログのコピー実績の内訳（場所別・種類別・大きいファイル・同じフォルダ名のPCを分ける）", T44_CopyUsage);
+            Add("T45", "フォルダの容量の内訳（フォルダ別・種類別・大きいファイル・読むだけ）", T45_DiskUsage);
 
             int ng = 0;
             foreach (TestCase t in cases)
@@ -1082,6 +1084,99 @@ namespace AutoCopy.Tests
             Eq(400L, daily[DateTime.Today.AddDays(-1)]["山田_経理"], "前日の山田_経理");
             Eq(8000L, daily[DateTime.Today]["山田_経理"], "当日の山田_経理（新規＋上書き）");
             Eq(700L, daily[DateTime.Today]["鈴木_総務"], "当日の鈴木_総務");
+        }
+
+        private static void T44_CopyUsage()
+        {
+            string t = DateTime.Now.ToString("yyyy-MM-dd") + " 10:00:00";
+            string y = DateTime.Now.AddDays(-1).ToString("yyyy-MM-dd") + " 10:00:00";
+            string[] raw = {
+                y + "\tPC-A\tu\t総務\t経理\tCOPY\t会議\\録画.mp4\t5000\t0.1",
+                t + "\tPC-A\tu\t総務\t経理\tOVERWRITE\t会議\\録画.mp4　（確認して上書き）\t6000\t0.1",
+                t + "\tPC-A\tu\t総務\t経理\tCOPY\t請求\\a.xlsx\t100\t0.1",
+                t + "\tPC-A\tu\t総務\t経理\tRENAME\tx → y\t9999\t",
+                t + "\tPC-B\tu\t総務\t経理\tCOPY\tb.pdf\t300\t0.1",
+                t + "\tPC-C\tu\t設計\t図面\tCOPY\tA棟\\1F\\平面.dwg\t2000\t0.1" };
+            List<LogLine> lines = new List<LogLine>();
+            foreach (string r in raw) lines.Add(LogLine.Parse(r));
+
+            // 同じフォルダ名「総務」を2台が使っている → 日ごとのグラフで別々にする
+            SortedDictionary<DateTime, Dictionary<string, long>> daily = LogStats.Daily(lines);
+            Dictionary<string, long> today = daily[DateTime.Today];
+            Eq(6100L, today["総務（PC-A）"], "総務（PC-A）の当日");
+            Eq(300L, today["総務（PC-B）"], "総務（PC-B）の当日");
+            Eq(2000L, today["設計"], "フォルダ名が重ならないPCはそのまま");
+            True(!today.ContainsKey("総務"), "まとめて数えない");
+
+            UsageTree u = LogStats.CopyUsage(lines);
+            Eq(13400L, u.Total, "合計（名前変更は含まない）");
+            Eq(4, u.FileCount, "ファイル数（同じファイルは1件）");
+            UsageNode a = u.Find("総務（PC-A）");
+            True(a != null, "PC-A の場所がある");
+            Eq(11100L, a.Size, "PC-A の容量");
+            UsageNode kaigi = u.Find("総務（PC-A）\\経理\\会議");
+            True(kaigi != null, "PC＼ジョブ＼フォルダ");
+            Eq(1, kaigi.Top.Count, "注記を外して同じファイルとして数える");
+            UsageFile mp4 = kaigi.Top[0];
+            Eq("録画.mp4", mp4.Name, "ファイル名");
+            Eq(11000L, mp4.Size, "コピー容量は2回分");
+            Eq(2, mp4.Count, "回数");
+            Eq(6000L, mp4.LastSize, "1回のサイズ（最後）");
+            Eq("総務（PC-A）\\経理\\会議", mp4.Dir, "場所");
+            True(u.Find("設計\\図面\\A棟\\1F") != null, "深いフォルダ");
+            Eq("録画.mp4", u.Biggest[0].Name, "大きい順の1位");
+            Eq("平面.dwg", u.Biggest[1].Name, "大きい順の2位");
+            List<ExtStat> ext = u.ExtList();
+            Eq(".mp4", ext[0].Ext, "種類別の1位");
+            Eq(11000L, ext[0].Size, "種類別の容量");
+            Eq(".mp4（動画）", UsageTree.ExtLabel(".mp4"), "種類の表示名");
+
+            // 割合の項目：子の合計が親の容量と一致する（帯が100%になる）
+            List<ShareItem> items = UsageItems.Items(u, u.Root, true);
+            long sum = 0; foreach (ShareItem it in items) sum += it.Bytes;
+            Eq(u.Total, sum, "割合の項目の合計＝全体");
+            Note = "場所 " + u.Root.Children.Count + "件／ファイル " + u.FileCount + "件";
+        }
+
+        private static void T45_DiskUsage()
+        {
+            Box b = new Box("T45");
+            WriteFile(b.D("動画\\大.mp4"), new string('x', 50000), 100);
+            WriteFile(b.D("動画\\小.mp4"), new string('x', 1000), 100);
+            WriteFile(b.D("請求\\2026\\a.xlsx"), new string('x', 3000), 100);
+            WriteFile(b.D("直下.txt"), new string('x', 10), 100);
+            Directory.CreateDirectory(b.D("空のフォルダ"));
+            for (int i = 0; i < 200; i++) WriteFile(b.D("細かい\\f" + i + ".csv"), new string('y', 10 + i), 100);
+            WriteFile(b.D("_AutoCopy\\削除済み\\x\\old.zip"), new string('z', 7000), 100);
+            long expectSmall = 0; for (int i = 0; i < 200; i++) expectSmall += 10 + i;
+
+            Dictionary<string, string> before = Snapshot(b.Dst);
+            UsageTree t = DiskUsage.Scan(b.Dst, CancellationToken.None);
+            CompareSnapshots(before, Snapshot(b.Dst));   // 読むだけで何も変えない
+
+            Eq(50000L + 1000 + 3000 + 10 + 7000 + expectSmall, t.Total, "合計");
+            Eq(205, t.FileCount, "ファイル数");
+            Eq(51000L, t.Find("動画").Size, "フォルダ別");
+            Eq(3000L, t.Find("請求").Size, "サブフォルダも含む");
+            True(t.Find("空のフォルダ") != null, "空のフォルダも出す");
+            Eq(7000L, t.Find("_AutoCopy").Size, "削除済み・退避も容量に数える");
+            Eq("大.mp4", t.Biggest[0].Name, "大きいファイルの1位");
+            Eq(Path.Combine(b.Dst, "動画\\大.mp4"), t.Biggest[0].FullPath, "実際のパス");
+            Eq(Path.Combine(b.Dst, "動画"), t.Biggest[0].Dir, "場所");
+            Eq(".mp4", t.ExtList()[0].Ext, "種類別の1位");
+            Eq(10L, t.Root.DirectSize, "直下のファイル");
+
+            // 1フォルダに多いときは上位だけ残し、残りは「ほかのファイル」にまとめる
+            UsageNode many = t.Find("細かい");
+            Eq(UsageNode.TopPerFolder, many.Top.Count, "上位だけ残す");
+            List<ShareItem> items = UsageItems.Items(t, many, false);
+            True(items.Count <= UsageItems.MaxRows, "行数の上限");
+            long sum = 0; foreach (ShareItem it in items) sum += it.Bytes;
+            Eq(many.Size, sum, "割合の項目の合計＝フォルダの容量");
+            List<ShareItem> rootItems = UsageItems.Items(t, t.Root, false);
+            True(rootItems[0].Label == "動画\\" && rootItems[0].Data != null, "容量の多い順・フォルダはクリックで開ける");
+
+            Throws<DirectoryNotFoundException>(delegate { DiskUsage.Scan(Path.Combine(b.Root, "ない"), CancellationToken.None); }, "ないフォルダ");
         }
 
         private static void T42_Performance()

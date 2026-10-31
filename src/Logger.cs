@@ -86,9 +86,13 @@ namespace AutoCopy
             return list;
         }
 
-        /// <summary>日ごと・PC（フォルダ名）ごとのコピー容量（新規＋上書き）。日付は古い順。</summary>
+        /// <summary>
+        /// 日ごと・PCごとのコピー容量（新規＋上書き）。日付は古い順。
+        /// 表示名はフォルダ名。同じフォルダ名を複数のPCが使っている場合は「フォルダ名（PC名）」で分ける。
+        /// </summary>
         public static SortedDictionary<DateTime, Dictionary<string, long>> Daily(IEnumerable<LogLine> lines)
         {
+            Dictionary<string, string> labels = Labels(lines);
             SortedDictionary<DateTime, Dictionary<string, long>> map = new SortedDictionary<DateTime, Dictionary<string, long>>();
             foreach (LogLine l in lines)
             {
@@ -96,7 +100,7 @@ namespace AutoCopy
                 DateTime d = l.Time.Date;
                 Dictionary<string, long> day;
                 if (!map.TryGetValue(d, out day)) { day = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase); map[d] = day; }
-                string pc = PcLabel(l.Folder, l.Pc);
+                string pc = labels[Key(l)];
                 long v;
                 day.TryGetValue(pc, out v);
                 day[pc] = v + (l.Size > 0 ? l.Size : 0);
@@ -104,10 +108,89 @@ namespace AutoCopy
             return map;
         }
 
+        private static string Key(LogLine l) { return (l.Folder ?? "") + "|" + (l.Pc ?? ""); }
+
+        /// <summary>フォルダ名|PC名 → 表示名。フォルダ名が他のPCと重なる場合だけ PC名を付ける。</summary>
+        public static Dictionary<string, string> Labels(IEnumerable<LogLine> lines)
+        {
+            Dictionary<string, HashSet<string>> pcsOf = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (LogLine l in lines)
+            {
+                string f = PcLabel(l.Folder, l.Pc);
+                HashSet<string> set;
+                if (!pcsOf.TryGetValue(f, out set)) { set = new HashSet<string>(StringComparer.OrdinalIgnoreCase); pcsOf[f] = set; }
+                set.Add(l.Pc ?? "");
+            }
+            Dictionary<string, string> res = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (LogLine l in lines)
+            {
+                string k = Key(l);
+                if (res.ContainsKey(k)) continue;
+                string f = PcLabel(l.Folder, l.Pc);
+                res[k] = pcsOf[f].Count > 1 && !string.IsNullOrEmpty(l.Pc) && !string.IsNullOrEmpty(l.Folder) ? f + "（" + l.Pc + "）" : f;
+            }
+            return res;
+        }
+
         public static string PcLabel(string folder, string pc)
         {
             if (string.IsNullOrEmpty(folder)) return pc ?? "";
             return folder;
+        }
+
+        /// <summary>COPY / OVERWRITE 行の内容からファイルの相対パスを取り出す（「（確認して上書き）」などの注記を外す）</summary>
+        public static string RelOf(LogLine l)
+        {
+            string d = (l.Detail ?? "").Trim();
+            int i = d.IndexOf("　（", StringComparison.Ordinal);
+            if (i > 0 && d.EndsWith("）")) d = d.Substring(0, i);
+            return d.Trim().TrimStart('\\');
+        }
+
+        /// <summary>
+        /// ログのコピー実績から容量の内訳を作る。場所は「PC（フォルダ名）＼ジョブ＼フォルダ…」。
+        /// 同じファイルを何度もコピーした場合は、コピーした容量を足し、回数を数える。
+        /// </summary>
+        public static UsageTree CopyUsage(IEnumerable<LogLine> lines)
+        {
+            Dictionary<string, string> labels = Labels(lines);
+            Dictionary<string, UsageFile> files = new Dictionary<string, UsageFile>(StringComparer.OrdinalIgnoreCase);
+            List<string[]> dirsOf = new List<string[]>();
+            List<UsageFile> order = new List<UsageFile>();
+            foreach (LogLine l in lines)
+            {
+                if (l.Type != "COPY" && l.Type != "OVERWRITE") continue;
+                string rel = RelOf(l);
+                if (rel.Length == 0) continue;
+                string pc = labels[Key(l)];
+                string job = string.IsNullOrEmpty(l.Job) ? "（ジョブなし）" : l.Job;
+                string k = pc + "\\" + job + "\\" + rel;
+                long size = l.Size > 0 ? l.Size : 0;
+                UsageFile f;
+                if (!files.TryGetValue(k, out f))
+                {
+                    f = new UsageFile();
+                    int cut = rel.LastIndexOf('\\');
+                    f.Name = cut >= 0 ? rel.Substring(cut + 1) : rel;
+                    string relDir = cut >= 0 ? rel.Substring(0, cut) : "";
+                    f.Dir = pc + "\\" + job + (relDir.Length > 0 ? "\\" + relDir : "");
+                    f.Pc = pc; f.Job = job;
+                    files[k] = f;
+                    order.Add(f);
+                    List<string> segs = new List<string>();
+                    segs.Add(pc); segs.Add(job);
+                    if (relDir.Length > 0) segs.AddRange(relDir.Split('\\'));
+                    dirsOf.Add(segs.ToArray());
+                }
+                f.Size += size;
+                f.LastSize = size;
+                f.Count++;
+                if (l.Time > f.Time) f.Time = l.Time;
+            }
+            UsageTree t = new UsageTree("ログのコピー実績");
+            for (int i = 0; i < order.Count; i++) t.Add(dirsOf[i], order[i]);
+            t.Finish();
+            return t;
         }
     }
 

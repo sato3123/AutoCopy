@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -24,7 +24,9 @@ namespace AutoCopy
         public static readonly Color Grid = ColorTranslator.FromHtml("#e4e3df");
         public static readonly Color Axis = ColorTranslator.FromHtml("#b9b8b2");
 
-        protected class Hit { public RectangleF Rect; public string Text; }
+        protected class Hit { public RectangleF Rect; public string Text; public object Data; }
+        /// <summary>クリックできる部分（Data 付き）を押したとき</summary>
+        public event Action<object> ItemClicked;
         protected readonly List<Hit> hits = new List<Hit>();
         private readonly ToolTip tip = new ToolTip();
         private Hit current;
@@ -64,9 +66,25 @@ namespace AutoCopy
             }
             if (found == current) return;
             current = found;
+            Cursor = found != null && found.Data != null ? Cursors.Hand : Cursors.Default;
             if (found == null) tip.Hide(this);
             else tip.Show(found.Text, this, e.X + 14, e.Y + 14);
         }
+
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            base.OnMouseClick(e);
+            if (e.Button != MouseButtons.Left || ItemClicked == null) return;
+            foreach (Hit h in hits)
+            {
+                RectangleF r = h.Rect;
+                r.Inflate(2, 4);
+                if (h.Data != null && r.Contains(e.Location)) { ItemClicked(h.Data); return; }
+            }
+        }
+
+        /// <summary>縦に並ぶグラフの必要な高さ（0 = 画面いっぱい）</summary>
+        public virtual int PreferredHeight { get { return 0; } }
 
         protected override void OnMouseLeave(EventArgs e)
         {
@@ -178,7 +196,7 @@ namespace AutoCopy
             Invalidate();
         }
 
-        public int PreferredHeight { get { return 90 + Math.Max(1, rows.Count) * 34; } }
+        public override int PreferredHeight { get { return 90 + Math.Max(1, rows.Count) * 34; } }
 
         protected override void Draw(Graphics g, Rectangle area)
         {
@@ -257,7 +275,7 @@ namespace AutoCopy
             hits.Add(h);
         }
 
-        private static string Clip(Graphics g, string s, Font f, float width)
+        internal static string Clip(Graphics g, string s, Font f, float width)
         {
             if (g.MeasureString(s, f).Width <= width) return s;
             while (s.Length > 1 && g.MeasureString(s + "…", f).Width > width) s = s.Substring(0, s.Length - 1);
@@ -397,6 +415,147 @@ namespace AutoCopy
         private string Label(DateTime d)
         {
             return monthly ? d.ToString("yyyy/MM") : d.ToString("M/d");
+        }
+    }
+
+    /// <summary>
+    /// 縦に長いグラフを入れる枠。グラフが短いときは枠いっぱいに広げ（下に灰色の余白を作らない）、
+    /// 長いときはスクロールできるようにする。
+    /// </summary>
+    public class ChartHost : Panel
+    {
+        public readonly ChartBase Chart;
+
+        public ChartHost(ChartBase chart)
+        {
+            Chart = chart;
+            Dock = DockStyle.Fill;
+            AutoScroll = true;
+            BackColor = ChartBase.Surface;
+            chart.Dock = DockStyle.Top;
+            Controls.Add(chart);
+        }
+
+        /// <summary>グラフのデータを変えたら呼ぶ</summary>
+        public void Fit()
+        {
+            int want = Chart.PreferredHeight;
+            int avail = ClientSize.Height;
+            int h = want <= 0 ? avail : Math.Max(want, avail);
+            if (h > 0 && Chart.Height != h) Chart.Height = h;
+            Chart.Invalidate();
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            Fit();
+        }
+    }
+
+    /// <summary>
+    /// 容量の割合。上に全体を100%とした帯、下に容量の多い順の横棒（割合と容量を表示）。
+    /// 色は上位7項目に決まった順で付け、残りは灰色。帯と棒は同じ色。
+    /// </summary>
+    public class ShareChart : ChartBase
+    {
+        public const int Colored = 7;
+        private List<ShareItem> items = new List<ShareItem>();
+        private long total;
+        private string emptyText = "データがありません";
+
+        public void SetData(List<ShareItem> list, long totalBytes, string empty)
+        {
+            items = list ?? new List<ShareItem>();
+            total = totalBytes;
+            if (empty != null) emptyText = empty;
+            Invalidate();
+        }
+
+        public override int PreferredHeight { get { return 70 + Math.Max(1, items.Count) * 34 + 16; } }
+
+        private Color ColorOf(int i)
+        {
+            if (i < items.Count && items[i].Rest) return OtherColor;
+            return i < Colored ? Series[i] : OtherColor;
+        }
+
+        private static string Pct(long v, long t)
+        {
+            if (t <= 0) return "";
+            double p = v * 100.0 / t;
+            if (p > 0 && p < 0.1) return "0.1%未満";
+            return p.ToString(p >= 10 ? "0" : "0.0") + "%";
+        }
+
+        protected override void Draw(Graphics g, Rectangle area)
+        {
+            if (items.Count == 0 || total <= 0) { Empty(g, area, emptyText); return; }
+            float x0 = 16, w = Math.Max(100, area.Width - 32);
+
+            using (Brush ink = new SolidBrush(Ink))
+            using (Brush ink2 = new SolidBrush(Ink2))
+            using (Font small = new Font(Font.FontFamily, 8.25f))
+            {
+                // --- 全体を100%とした帯（上位7項目＋残り） ---
+                float sy = 14, sh = 24;
+                float cx = x0;
+                long restBytes = 0;
+                for (int i = 0; i < items.Count; i++) if (i >= Colored || items[i].Rest) restBytes += items[i].Bytes;
+                // 帯に描く順：上位（色付き）→ 残り（灰色をまとめて1つ）
+                List<int> segIdx = new List<int>();
+                for (int i = 0; i < items.Count && i < Colored; i++) if (!items[i].Rest && items[i].Bytes > 0) segIdx.Add(i);
+                if (restBytes > 0) segIdx.Add(-1);
+                for (int n = 0; n < segIdx.Count; n++)
+                {
+                    int i = segIdx[n];
+                    long v = i < 0 ? restBytes : items[i].Bytes;
+                    float sw = (float)(v * (double)w / total);
+                    float gap = n < segIdx.Count - 1 ? 2 : 0;
+                    RectangleF r = new RectangleF(cx, sy, Math.Max(1, sw - gap), sh);
+                    using (Brush b = new SolidBrush(i < 0 ? OtherColor : Series[i]))
+                        FillRound(g, b, r, n == 0 || n == segIdx.Count - 1 ? 4 : 0.4f);
+                    Hit h = new Hit();
+                    h.Rect = r;
+                    h.Text = (i < 0 ? "その他（灰色の項目の合計）" : items[i].Label) + "\n" + Fmt.Size(v) + "（" + Pct(v, total) + "）";
+                    if (i >= 0) h.Data = items[i].Data;
+                    hits.Add(h);
+                    cx += sw;
+                }
+
+                // --- 容量の多い順の横棒 ---
+                long max = 0;
+                foreach (ShareItem it in items) max = Math.Max(max, it.Bytes);
+                float labelW = Math.Min(330, Math.Max(180, w * 0.36f));
+                float left = x0 + 20 + labelW, valueW = 150;
+                float plotW = Math.Max(40, x0 + w - valueW - left);
+                float rowH = 34, barH = 16;
+                float y0 = sy + sh + 18;
+                for (int i = 0; i < items.Count; i++)
+                {
+                    ShareItem it = items[i];
+                    float ry = y0 + i * rowH;
+                    float cy = ry + (rowH - barH) / 2;
+                    Color c = ColorOf(i);
+                    using (Brush b = new SolidBrush(c)) FillRound(g, b, new RectangleF(x0, cy + 2, 12, 12), 3);
+                    string label = it.Label + (it.Data != null ? "  ›" : "");
+                    g.DrawString(PcVolumeChart.Clip(g, label, Font, labelW), Font, ink, x0 + 20, cy - 4);
+                    if (!string.IsNullOrEmpty(it.Sub))
+                        g.DrawString(PcVolumeChart.Clip(g, it.Sub, small, labelW), small, ink2, x0 + 20, cy + 13);
+                    float bw = max > 0 ? (float)(it.Bytes * (double)plotW / max) : 0;
+                    if (bw > 0)
+                        using (Brush b = new SolidBrush(c)) FillRound(g, b, new RectangleF(left, cy, Math.Max(1, bw), barH), 4);
+                    g.DrawString(Pct(it.Bytes, total) + "　" + Fmt.Size(it.Bytes), Font, ink, left + bw + 6, cy - 1);
+
+                    Hit h = new Hit();
+                    h.Rect = new RectangleF(x0, ry + 1, w, rowH - 2);   // 行全体を当たり判定に
+                    h.Text = it.Label + "\n" + Fmt.Size(it.Bytes) + "（" + Pct(it.Bytes, total) + "）"
+                        + (string.IsNullOrEmpty(it.Tip) ? "" : "\n" + it.Tip)
+                        + (it.Data != null ? "\nクリックで中を表示" : "");
+                    h.Data = it.Data;
+                    hits.Add(h);
+                }
+            }
         }
     }
 }

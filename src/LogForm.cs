@@ -41,7 +41,7 @@ namespace AutoCopy
                 Ui.Row(Ui.L("PC"), cbPc), Ui.Row(Ui.L("期間"), dFrom, Ui.L("〜"), dTo), Ui.B("表示", delegate { LoadLogs(); }),
                 Ui.Row(Ui.L("ジョブ"), cbJob), Ui.Row(Ui.L("種類"), cbType), Ui.Row(Ui.L("検索"), tSearch),
                 Ui.B("CSVに書き出す", delegate { ExportCsv(); }),
-                Ui.B("PCごとの容量を集計", delegate { ShowStats(); }),
+                Ui.B("コピー容量の集計", delegate { ShowStats(); }),
                 Ui.B("ログフォルダを開く", delegate { OpenLogFolder(); })
             });
 
@@ -222,16 +222,22 @@ namespace AutoCopy
         private readonly TabControl tabs;
         private readonly PcVolumeChart pcChart = new PcVolumeChart();
         private readonly DailyVolumeChart dailyChart = new DailyVolumeChart();
+        private readonly ChartHost pcHost;
+        private readonly UsageView places = new UsageView(true);
+        private readonly ShareChart extChart = new ShareChart();
+        private readonly ChartHost extHost;
+        private readonly ListView big;
+        private readonly UsageTree usage;
         private List<CopyStat> stats = new List<CopyStat>();
 
         public StatsForm(List<LogLine> lines, string range)
         {
             this.lines = lines;
-            Ui.SetupForm(this, "PCごとのコピー容量", 1000, 600);
+            Ui.SetupForm(this, "コピー容量の集計", 1060, 640);
             byJob = Ui.C("ジョブごとに分ける", false);
             byJob.CheckedChanged += delegate { Fill(); };
             FlowLayoutPanel top = Ui.Column(
-                Ui.Heading("PCごとのコピー容量"),
+                Ui.Heading("コピー容量の集計"),
                 Ui.Hint("期間・条件：" + range + "　（新規コピーと上書きのファイルサイズの合計。名前変更はコピーしないため含みません）"),
                 byJob);
             top.Dock = DockStyle.Top;
@@ -241,37 +247,50 @@ namespace AutoCopy
             lv.Dock = DockStyle.Fill;
             foreach (int i in new int[] { 3, 4, 5, 6, 7, 8, 9, 10 }) lv.Columns[i].TextAlign = HorizontalAlignment.Right;
 
-            // 表・PCごとのグラフ・日ごとのグラフ
+            // 表・PCごと・日ごと・場所別の割合・種類別の割合・大きいファイル
             tabs = new TabControl();
             tabs.Dock = DockStyle.Fill;
-            tabs.Padding = new Point(14, 5);
+            tabs.Padding = new Point(12, 5);
             TabPage pTable = new TabPage("表");
             pTable.Controls.Add(lv);
             TabPage pPc = new TabPage("PCごとのグラフ");
-            Panel scroll = new Panel();
-            scroll.Dock = DockStyle.Fill;
-            scroll.AutoScroll = true;
-            pcChart.Dock = DockStyle.Top;
-            scroll.Controls.Add(pcChart);
-            pPc.Controls.Add(scroll);
+            pcHost = new ChartHost(pcChart);
+            pPc.Controls.Add(pcHost);
             TabPage pDay = new TabPage("日ごとのグラフ");
             dailyChart.Dock = DockStyle.Fill;
             pDay.Controls.Add(dailyChart);
-            tabs.TabPages.Add(pTable);
-            tabs.TabPages.Add(pPc);
-            tabs.TabPages.Add(pDay);
+            TabPage pPlace = new TabPage("場所別の割合");
+            pPlace.Controls.Add(places);
+            TabPage pExt = new TabPage("種類別の割合");
+            extHost = new ChartHost(extChart);
+            pExt.Controls.Add(extHost);
+            TabPage pBig = new TabPage("大きいファイル");
+            big = UsageView.BigList(true);
+            pBig.Controls.Add(big);
+            tabs.TabPages.AddRange(new TabPage[] { pTable, pPc, pDay, pPlace, pExt, pBig });
             Button saveImg = Ui.B("グラフを画像で保存", delegate { SaveImage(); });
             saveImg.Enabled = false;
-            tabs.SelectedIndexChanged += delegate { saveImg.Enabled = tabs.SelectedIndex > 0; byJob.Enabled = tabs.SelectedIndex == 0; };
+            tabs.SelectedIndexChanged += delegate
+            {
+                saveImg.Enabled = tabs.SelectedIndex >= 1 && tabs.SelectedIndex <= 4;
+                byJob.Enabled = tabs.SelectedIndex == 0;
+            };
 
             Controls.Add(tabs);
             Controls.Add(top);
             Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Ui.B("CSVに書き出す", delegate { Export(); }), saveImg));
             pcChart.SetData(LogStats.Aggregate(lines, false));
-            pcChart.Height = pcChart.PreferredHeight;
+            pcHost.Fit();
             dailyChart.SetData(LogStats.Daily(lines));
+            usage = LogStats.CopyUsage(lines);
+            places.SetTree(usage);
+            extChart.SetData(UsageView.ExtItems(usage), usage.Total, "この期間のコピーはありません");
+            extHost.Fit();
+            UsageView.FillBig(big, usage, true);
             Fill();
         }
+
+        public UsageView Places { get { return places; } }
 
         private void Fill()
         {
@@ -306,23 +325,29 @@ namespace AutoCopy
 
         private void SaveImage()
         {
-            Control c = tabs.SelectedIndex == 1 ? (Control)pcChart : dailyChart;
-            using (SaveFileDialog d = new SaveFileDialog())
+            switch (tabs.SelectedIndex)
             {
-                d.Filter = "PNG 画像|*.png";
-                d.FileName = "自動コピー_" + (tabs.SelectedIndex == 1 ? "PCごとの容量" : "日ごとの容量") + "_" + DateTime.Now.ToString("yyyyMMdd") + ".png";
-                if (d.ShowDialog(this) != DialogResult.OK) return;
-                using (Bitmap bmp = new Bitmap(c.Width, c.Height))
-                {
-                    c.DrawToBitmap(bmp, new Rectangle(0, 0, c.Width, c.Height));
-                    bmp.Save(d.FileName, System.Drawing.Imaging.ImageFormat.Png);
-                }
-                Ui.Info(this, "保存しました：" + d.FileName);
+                case 1: UsageView.SaveImage(this, pcChart, "PCごとの容量"); break;
+                case 2: UsageView.SaveImage(this, dailyChart, "日ごとの容量"); break;
+                case 3: UsageView.SaveImage(this, places.Chart, "場所別の割合"); break;
+                case 4: UsageView.SaveImage(this, extChart, "種類別の割合"); break;
             }
         }
 
         private void Export()
         {
+            if (tabs.SelectedIndex == 5)
+            {
+                using (SaveFileDialog d = new SaveFileDialog())
+                {
+                    d.Filter = "CSV（Excel で開けます）|*.csv";
+                    d.FileName = "自動コピー_コピーした大きいファイル_" + DateTime.Now.ToString("yyyyMMdd") + ".csv";
+                    if (d.ShowDialog(this) != DialogResult.OK) return;
+                    File.WriteAllText(d.FileName, UsageView.BigCsv(usage, true), new UTF8Encoding(true));
+                    Ui.Info(this, "書き出しました：" + d.FileName);
+                }
+                return;
+            }
             using (SaveFileDialog d = new SaveFileDialog())
             {
                 d.Filter = "CSV（Excel で開けます）|*.csv";

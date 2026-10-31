@@ -57,6 +57,7 @@ namespace AutoCopy
                 Ui.B("重複チェック", delegate { TrayApp.Instance.ShowDup(FirstSelected()); }),
                 Ui.B("上書きの確認", delegate { TrayApp.Instance.ShowConflicts(); }),
                 Ui.B("ログ", delegate { TrayApp.Instance.ShowLog(); }),
+                Ui.B("容量の内訳", delegate { ShowUsage(); }),
                 Ui.B("設定", delegate { TrayApp.Instance.ShowSettings(); }),
                 Ui.B("ヘルプ", delegate { Ui.OpenManual(); })
             });
@@ -135,6 +136,12 @@ namespace AutoCopy
             return l;
         }
 
+        private void ShowUsage()
+        {
+            if (AppCore.Settings.Jobs.Count == 0) { Ui.Info(this, "ジョブがありません。"); return; }
+            using (UsageForm f = new UsageForm(FirstSelected())) f.ShowDialog(this);
+        }
+
         private ContextMenuStrip BuildJobMenu()
         {
             ContextMenuStrip m = new ContextMenuStrip();
@@ -154,6 +161,7 @@ namespace AutoCopy
                 if (j != null) using (TrashForm f = new TrashForm(j)) f.ShowDialog(this);
             });
             m.Items.Add(new ToolStripSeparator());
+            m.Items.Add("容量の内訳を調べる", null, delegate { ShowUsage(); });
             m.Items.Add("コピー元を開く", null, delegate { JobConfig j = SelectedJob(); if (j != null) Ui.OpenFolder(CopyEngine.ResolvedSource(j, AppCore.Settings)); });
             m.Items.Add("コピー先を開く", null, delegate { JobConfig j = SelectedJob(); if (j != null) Ui.OpenFolder(CopyEngine.ResolvedDest(j, AppCore.Settings)); });
             m.Items.Add("この ジョブのショートカットをデスクトップに作る", null, delegate

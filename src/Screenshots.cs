@@ -55,16 +55,32 @@ namespace AutoCopy
                 List<LogLine> lines = Logger.Read(DateTime.Today.AddDays(-7), DateTime.Today, true, out note);
                 return new StatsForm(lines, DateTime.Today.AddDays(-7).ToString("yyyy/MM/dd") + "〜" + DateTime.Today.ToString("yyyy/MM/dd") + "・すべてのPC");
             }, null);
-            for (int tab = 1; tab <= 2; tab++)
+            string[] tabNames = { null, "20_PCごとのグラフ", "21_日ごとのグラフ", "22_コピー容量_場所別の割合", "23_コピー容量_種類別の割合", "24_コピー容量_大きいファイル" };
+            for (int tab = 1; tab < tabNames.Length; tab++)
             {
                 int ti = tab;
-                Capture(ti == 1 ? "20_PCごとのグラフ" : "21_日ごとのグラフ", delegate()
+                Capture(tabNames[ti], delegate()
                 {
                     string note;
                     List<LogLine> lines = Logger.Read(DateTime.Today.AddDays(-13), DateTime.Today, true, out note);
                     return new StatsForm(lines, DateTime.Today.AddDays(-13).ToString("yyyy/MM/dd") + "〜" + DateTime.Today.ToString("yyyy/MM/dd") + "・すべてのPC");
                 }, delegate(Form f) { ((StatsForm)f).ShowTab(ti); });
             }
+            Capture("25_コピー容量_場所別_PCの中", delegate()
+            {
+                string note;
+                List<LogLine> lines = Logger.Read(DateTime.Today.AddDays(-13), DateTime.Today, true, out note);
+                return new StatsForm(lines, DateTime.Today.AddDays(-13).ToString("yyyy/MM/dd") + "〜" + DateTime.Today.ToString("yyyy/MM/dd") + "・すべてのPC");
+            }, delegate(Form f) { ((StatsForm)f).ShowTab(3); ((StatsForm)f).Places.Open("佐藤_設計\\経理バックアップ"); });
+            string[] usageNames = { "26_容量の内訳_フォルダ別", "27_容量の内訳_種類別", "28_容量の内訳_大きいファイル" };
+            for (int tab = 0; tab < usageNames.Length; tab++)
+            {
+                int ti = tab;
+                Capture(usageNames[ti], delegate() { return new UsageForm(j0.Id); },
+                    delegate(Form f) { ((UsageForm)f).AnalyzeNow(); ((UsageForm)f).ShowTab(ti); });
+            }
+            Capture("29_容量の内訳_フォルダの中", delegate() { return new UsageForm(j0.Id); },
+                delegate(Form f) { ((UsageForm)f).AnalyzeNow(); ((UsageForm)f).Folders.Open("会議録画"); });
             CaptureTrayMenu();
 
             File.WriteAllText(Path.Combine(outDir, "errors.txt"), errors.Count == 0 ? "なし" : string.Join("\r\n\r\n", errors.ToArray()));
@@ -140,6 +156,10 @@ namespace AutoCopy
             other += t + "\tPC-SOUMU03\tsuzuki\t鈴木_総務\t経理バックアップ\tSUMMARY\t走査 3,120件\t\t2.1\r\n";
             W(Path.Combine(Path.Combine(s.LogRoot, "鈴木_総務"), DateTime.Now.ToString("yyyy-MM-dd") + ".log"), other, 60);
             string[] names = { "鈴木_総務", "田中_営業", "佐藤_設計", "高橋_経理" };
+            // 場所・種類ごとに大きさの違うファイル（同じファイルを何度も上書きする例も入れる）
+            string[] pool = { "見積\\見積書_{0}.xlsx", "資料\\提案書_{0}.pptx", "資料\\報告書_{0}.pdf", "写真\\現場_{0}.jpg",
+                              "図面\\A棟\\平面図_{0}.dwg", "会議録画\\定例会_{0}.mp4", "メール\\outlook.pst" };
+            long[] baseSize = { 300000, 2500000, 900000, 3500000, 6000000, 60000000, 150000000 };
             Random rnd = new Random(7);
             for (int dd = 13; dd >= 1; dd--)
             {
@@ -150,18 +170,49 @@ namespace AutoCopy
                     string text = "";
                     int n = 3 + rnd.Next(8);
                     for (int k = 0; k < n; k++)
+                    {
+                        int kind = rnd.Next(5);
+                        if (pi == 2 && k == 0) kind = 4;                 // 佐藤_設計は図面が多い
+                        if (pi == 1 && k == 1 && dd % 3 == 0) kind = 5;  // 田中_営業はときどき動画
+                        if (pi == 3 && k == 0 && dd % 2 == 0) kind = 6;  // 高橋_経理は PST を何度も上書き
+                        string rel = string.Format(pool[kind], dd * 10 + k);
+                        long size = baseSize[kind] / 2 + (long)(rnd.NextDouble() * baseSize[kind]);
+                        if (kind == 6) size = 180000000 + dd * 1000000;
+                        bool over = kind == 6 || k % 4 == 0;
                         text += day.AddHours(9 + k).ToString("yyyy-MM-dd HH:mm:ss") + "\tPC-" + (pi + 1).ToString("00") + "\tuser\t" + names[pi] + "\t経理バックアップ\t"
-                            + (k % 4 == 0 ? "OVERWRITE" : "COPY") + "\t資料" + k + ".xlsx\t" + ((pi + 1) * 900000 + rnd.Next(4000000)) + "\t0.5\r\n";
+                            + (over ? "OVERWRITE" : "COPY") + "\t" + rel + "\t" + size + "\t0.5\r\n";
+                    }
                     string file = Path.Combine(Path.Combine(s.LogRoot, names[pi]), day.ToString("yyyy-MM-dd") + ".log");
                     Directory.CreateDirectory(Path.GetDirectoryName(file));
                     File.AppendAllText(file, text);
                 }
             }
 
+            // 容量の内訳の見本：コピー先に大きさの違うファイルを置く（中身は空でサイズだけ）
+            string[] big = { "会議録画\\2026-09_全体会議.mp4|188000000|40", "会議録画\\2026-10_部会.mp4|96000000|12", "会議録画\\2026-10_研修.mp4|71000000|5",
+                             "メール\\outlook_2025.pst|142000000|2", "決算\\2025年度\\決算資料一式.zip|38000000|150", "決算\\2025年度\\試算表.xlsx|2400000|150",
+                             "写真\\工事記録\\IMG_0101.jpg|4200000|60", "写真\\工事記録\\IMG_0102.jpg|3900000|60", "写真\\工事記録\\IMG_0103.jpg|4500000|60" };
+            foreach (string b0 in big)
+            {
+                string[] f = b0.Split('|');
+                Sized(Path.Combine(d1, f[0]), long.Parse(f[1]), int.Parse(f[2]));
+            }
+            for (int i = 0; i < 120; i++)
+                Sized(Path.Combine(d1, "請求書\\2026\\請求_" + i.ToString("000") + ".pdf"), 180000 + (i * 7919 % 400000), 3 + i % 200);
+            for (int i = 0; i < 30; i++)
+                Sized(Path.Combine(d1, "写真\\工事記録\\IMG_" + (200 + i) + ".jpg"), 2500000 + i * 61000, 30 + i);
+
             DistPayload pl = Distribution.BuildPayload(s, "経理部", 3, new List<DistCredential>());
             DistCredential cr = new DistCredential(); cr.Server = "nas01"; cr.User = "nas01\\yamada"; cr.Password = "x";
             pl.Credentials.Add(cr);
             Distribution.Write(Path.Combine(root, AppPaths.SetupFileName), pl, "secret");
+        }
+
+        private static void Sized(string path, long size, int ageDays)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            using (FileStream fs = new FileStream(path, FileMode.Create, FileAccess.Write)) fs.SetLength(size);
+            File.SetLastWriteTime(path, DateTime.Now.AddDays(-ageDays).AddMinutes(-ageDays * 37 % 600));
         }
 
         private static void W(string path, string content, int ageSec)
