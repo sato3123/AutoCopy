@@ -83,7 +83,7 @@ namespace AutoCopy
                 delegate(Form f) { ((UsageForm)f).AnalyzeNow(); ((UsageForm)f).Folders.Open("会議録画"); });
             Capture("30_容量の内訳_調査中（中止ボタン）", delegate()
             {
-                BusyForm bf = new BusyForm("フォルダを調べています…（ファイルが多いと時間がかかります。「中止」でいつでも止められます）");
+                BusyForm bf = new BusyForm("フォルダを調べています…（「中止」でいつでも止められます）");
                 bf.Progress.Text = "128,450ファイル・412.6 GB　写真\\工事記録\\2026";
                 return bf;
             }, delegate(Form f) { ((BusyForm)f).ShowProgress(); });

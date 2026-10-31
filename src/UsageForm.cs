@@ -257,7 +257,7 @@ namespace AutoCopy
             bool stopped;
             try
             {
-                t = Ui.BusyCancel<UsageTree>(this, "フォルダを調べています…（ファイルが多いと時間がかかります。「中止」でいつでも止められます）",
+                t = Ui.BusyCancel<UsageTree>(this, "フォルダを調べています…（「中止」でいつでも止められます）",
                     delegate(CancellationToken ct, BusyProgress p)
                     {
                         p.Text = "接続しています…";
