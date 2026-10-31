@@ -29,8 +29,10 @@ jobs:
         shell: cmd
         run: |
           chcp 932
-          call build.bat
-          if errorlevel 1 exit /b 1
+          call build.bat > build-console.txt 2>&1
+          set RC=%ERRORLEVEL%
+          type build-console.txt
+          if not "%RC%"=="0" exit /b 1
           dir dist
 
       - name: Build test runner
@@ -98,7 +100,7 @@ jobs:
         run: |
           $dir = "$env:RUNNER_TEMP\results"
           New-Item -ItemType Directory -Force "$dir\${{ matrix.os }}" | Out-Null
-          foreach ($f in 'test-results.md','test-console.txt','integration-results.md','integration-console.txt') { if (Test-Path $f) { Copy-Item $f "$dir\${{ matrix.os }}\" } }
+          foreach ($f in 'build-console.txt','test-results.md','test-console.txt','integration-results.md','integration-console.txt') { if (Test-Path $f) { Copy-Item $f "$dir\${{ matrix.os }}\" } }
           if (Test-Path screenshots) { Copy-Item -Recurse screenshots "$dir\${{ matrix.os }}\screenshots" }
           if (Test-Path dist) { Copy-Item -Recurse dist "$dir\${{ matrix.os }}\dist" }
           $h = "$env:AUTOCOPY_HOME"
