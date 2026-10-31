@@ -1203,13 +1203,14 @@ namespace AutoCopy.Tests
                     DiskUsage.Scan(b.Dst, cts.Token, delegate(int files, long bytes, string dir)
                     {
                         reports++;
-                        if (files > 0 && !cts.IsCancellationRequested) { filesAtStop = files; cts.Cancel(); }
+                        // 最初の途中経過（調べ始め）で中止する。途中経過は0.2秒ごとなので、ここで止めないと小さいフォルダは終わってしまう
+                        if (!cts.IsCancellationRequested) { filesAtStop = files; cts.Cancel(); }
                     });
                 }, "途中で中止");
                 True(sw.ElapsedMilliseconds < 10000, "すぐ止まる: " + sw.ElapsedMilliseconds + "ms");
             }
             True(reports >= 1, "途中経過が届く");
-            True(filesAtStop > 0 && filesAtStop < 3000, "途中で止まった（" + filesAtStop + "件の時点）");
+            True(filesAtStop < 3000, "途中で止まった（" + filesAtStop + "件の時点）");
 
             // 中止しなければ最後まで数える
             int last = 0;
