@@ -19,7 +19,7 @@ namespace AutoCopy
 
         public MainForm()
         {
-            Ui.SetupForm(this, "自動コピー", 1000, 640);
+            Ui.SetupForm(this, "自動コピー", 1120, 640);
             MinimumSize = new Size(760, 480);
 
             // ---- ツールバー ----
