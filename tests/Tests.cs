@@ -72,6 +72,7 @@ namespace AutoCopy.Tests
             Add("T43", "ログから各PCのコピー容量を集計（PC別・ジョブ別・合計）", T43_CopyStats);
             Add("T44", "ログのコピー実績の内訳（場所別・種類別・大きいファイル・同じフォルダ名のPCを分ける）", T44_CopyUsage);
             Add("T45", "フォルダの容量の内訳（フォルダ別・種類別・大きいファイル・読むだけ）", T45_DiskUsage);
+            Add("T46", "容量の内訳を途中で中止できる（途中経過の通知・中止後もフォルダは変わらない）", T46_DiskUsageCancel);
 
             int ng = 0;
             foreach (TestCase t in cases)
@@ -1177,6 +1178,45 @@ namespace AutoCopy.Tests
             True(rootItems[0].Label == "動画\\" && rootItems[0].Data != null, "容量の多い順・フォルダはクリックで開ける");
 
             Throws<DirectoryNotFoundException>(delegate { DiskUsage.Scan(Path.Combine(b.Root, "ない"), CancellationToken.None); }, "ないフォルダ");
+        }
+
+        private static void T46_DiskUsageCancel()
+        {
+            Box b = new Box("T46");
+            for (int i = 0; i < 3000; i++) WriteFile(b.D("d" + (i % 30) + "\\f" + i + ".txt"), "x" + i, 100);
+            Dictionary<string, string> before = Snapshot(b.Dst);
+
+            // 始める前に中止済み → すぐ止まる
+            using (CancellationTokenSource pre = new CancellationTokenSource())
+            {
+                pre.Cancel();
+                Throws<OperationCanceledException>(delegate { DiskUsage.Scan(b.Dst, pre.Token, null); }, "中止済みなら始めない");
+            }
+
+            // 途中経過が届き、途中で中止すると止まる
+            int reports = 0, filesAtStop = 0;
+            using (CancellationTokenSource cts = new CancellationTokenSource())
+            {
+                Stopwatch sw = Stopwatch.StartNew();
+                Throws<OperationCanceledException>(delegate
+                {
+                    DiskUsage.Scan(b.Dst, cts.Token, delegate(int files, long bytes, string dir)
+                    {
+                        reports++;
+                        if (files > 0 && !cts.IsCancellationRequested) { filesAtStop = files; cts.Cancel(); }
+                    });
+                }, "途中で中止");
+                True(sw.ElapsedMilliseconds < 10000, "すぐ止まる: " + sw.ElapsedMilliseconds + "ms");
+            }
+            True(reports >= 1, "途中経過が届く");
+            True(filesAtStop > 0 && filesAtStop < 3000, "途中で止まった（" + filesAtStop + "件の時点）");
+
+            // 中止しなければ最後まで数える
+            int last = 0;
+            UsageTree t = DiskUsage.Scan(b.Dst, CancellationToken.None, delegate(int files, long bytes, string dir) { last = files; });
+            Eq(3000, t.FileCount, "最後まで数える");
+            CompareSnapshots(before, Snapshot(b.Dst));
+            Note = "中止時点 " + filesAtStop + "件／途中経過 " + reports + "回";
         }
 
         private static void T42_Performance()

@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Diagnostics;
 using System.Threading;
 
 namespace AutoCopy
@@ -184,6 +185,14 @@ namespace AutoCopy
     {
         public static UsageTree Scan(string root, CancellationToken ct)
         {
+            return Scan(root, ct, null);
+        }
+
+        /// <summary>progress は 0.2秒ごとに「ファイル数・容量・今のフォルダ」で呼ばれる。ct が取り消されると OperationCanceledException。</summary>
+        public static UsageTree Scan(string root, CancellationToken ct, Action<int, long, string> progress)
+        {
+            long nextReport = 0;
+            Stopwatch sw = Stopwatch.StartNew();
             string plain = PathUtil.Plain(root).TrimEnd('\\');
             string lroot = PathUtil.Long(plain);
             if (!Directory.Exists(lroot)) throw new DirectoryNotFoundException("フォルダが見つかりません：" + plain);
@@ -194,6 +203,11 @@ namespace AutoCopy
             {
                 ct.ThrowIfCancellationRequested();
                 string rel = stack.Pop();
+                if (progress != null && sw.ElapsedMilliseconds >= nextReport)
+                {
+                    progress(t.FileCount, t.Total, rel);
+                    nextReport = sw.ElapsedMilliseconds + 200;
+                }
                 string dirPath = rel.Length == 0 ? lroot : lroot.TrimEnd('\\') + "\\" + rel;
                 string[] segs = rel.Length == 0 ? new string[0] : rel.Split('\\');
                 try
@@ -221,6 +235,15 @@ namespace AutoCopy
                             f.Time = fi.LastWriteTime;
                             f.Count = 1;
                             t.Add(segs, f);
+                            if ((t.FileCount & 255) == 0)
+                            {
+                                ct.ThrowIfCancellationRequested();   // 1フォルダにファイルが多くても止まれるように
+                                if (progress != null && sw.ElapsedMilliseconds >= nextReport)
+                                {
+                                    progress(t.FileCount, t.Total, rel);
+                                    nextReport = sw.ElapsedMilliseconds + 200;
+                                }
+                            }
                         }
                     }
                 }

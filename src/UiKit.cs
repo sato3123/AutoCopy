@@ -2,6 +2,7 @@
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace AutoCopy
@@ -284,6 +285,38 @@ namespace AutoCopy
             Error(null, "操作説明書（" + AppPaths.ManualFileName + "）が見つかりません。AutoCopy.exe と同じフォルダに置いてください。");
         }
 
+        /// <summary>
+        /// 重い処理を「中止」ボタン付きの待ち表示で実行する。中止されたら stopped = true で既定値を返す。
+        /// 作業側は token を見て止まり、progress に途中経過を書く。
+        /// </summary>
+        public static T BusyCancel<T>(IWin32Window owner, string message, Func<CancellationToken, BusyProgress, T> work, out bool stopped)
+        {
+            T result = default(T);
+            Exception error = null;
+            bool canceled = false;
+            using (BusyForm f = new BusyForm(message))
+            {
+                CancellationToken token = f.Token;
+                BusyProgress progress = f.Progress;
+                f.Shown += delegate
+                {
+                    System.Threading.Tasks.Task.Factory.StartNew(delegate()
+                    {
+                        try { result = work(token, progress); }
+                        catch (OperationCanceledException) { canceled = true; }
+                        catch (Exception ex) { if (token.IsCancellationRequested) canceled = true; else error = ex; }
+                        try { f.BeginInvoke(new Action(delegate() { f.Close(); })); } catch (Exception) { }
+                    });
+                };
+                f.ShowDialog(owner);
+                if (f.StopRequested) canceled = true;
+            }
+            stopped = canceled;
+            if (canceled) return default(T);
+            if (error != null) throw error;
+            return result;
+        }
+
         /// <summary>重い処理を待ち表示付きで実行する（画面は固まらない）</summary>
         public static T Busy<T>(IWin32Window owner, string message, Func<T> work)
         {
@@ -312,6 +345,84 @@ namespace AutoCopy
             }
             if (error != null) throw error;
             return result;
+        }
+    }
+
+    /// <summary>途中経過（作業側のスレッドが書き、画面が0.3秒ごとに読む）</summary>
+    public class BusyProgress
+    {
+        private volatile string text = "";
+        public string Text { get { return text; } set { text = value ?? ""; } }
+    }
+
+    /// <summary>
+    /// 中止ボタン付きの待ち表示。中止を押すと CancellationToken が取り消され、作業側は区切りの良いところで止まる。
+    /// </summary>
+    public class BusyForm : Form
+    {
+        private readonly CancellationTokenSource cts = new CancellationTokenSource();
+        private readonly Label progressLabel;
+        private readonly Button stop;
+        private readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
+        private readonly Stopwatch watch = Stopwatch.StartNew();
+        public readonly BusyProgress Progress = new BusyProgress();
+
+        public BusyForm(string message)
+        {
+            Ui.SetupDialog(this, "自動コピー", 440, 150);
+            ControlBox = false;
+            Label l = Ui.L(message);
+            l.Location = new Point(16, 16);
+            l.MaximumSize = new Size(408, 0);
+            ProgressBar pb = new ProgressBar();
+            pb.Style = ProgressBarStyle.Marquee;
+            pb.SetBounds(16, 48, 408, 16);
+            progressLabel = Ui.L("");
+            progressLabel.ForeColor = Ui.Quiet;
+            progressLabel.AutoSize = false;
+            progressLabel.AutoEllipsis = true;
+            progressLabel.SetBounds(16, 72, 408, 22);
+            stop = Ui.B("中止", delegate { RequestStop(); });
+            stop.Location = new Point(440 - 16 - stop.PreferredSize.Width - 8, 108);
+            CancelButton = stop;
+            Controls.Add(l);
+            Controls.Add(pb);
+            Controls.Add(progressLabel);
+            Controls.Add(stop);
+            timer.Interval = 300;
+            timer.Tick += delegate { ShowProgress(); };
+            timer.Start();
+        }
+
+        public CancellationToken Token { get { return cts.Token; } }
+        public bool StopRequested { get { return cts.IsCancellationRequested; } }
+
+        public void RequestStop()
+        {
+            if (cts.IsCancellationRequested) return;
+            cts.Cancel();
+            stop.Enabled = false;
+            stop.Text = "中止しています…";
+            stop.Width = stop.PreferredSize.Width + 8;
+            stop.Left = ClientSize.Width - 16 - stop.Width;
+            // ネットワークの応答待ちなど、すぐ止まれない処理でも画面は1.5秒で閉じる（作業は裏で止まり、結果は捨てる）
+            System.Windows.Forms.Timer giveUp = new System.Windows.Forms.Timer();
+            giveUp.Interval = 1500;
+            giveUp.Tick += delegate { giveUp.Stop(); giveUp.Dispose(); if (!IsDisposed) Close(); };
+            giveUp.Start();
+        }
+
+        public void ShowProgress()
+        {
+            string t = Progress.Text;
+            int sec = (int)watch.Elapsed.TotalSeconds;
+            progressLabel.Text = (t.Length > 0 ? t + "　" : "") + "経過 " + (sec >= 60 ? (sec / 60) + "分" + (sec % 60) + "秒" : sec + "秒");
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { timer.Dispose(); cts.Dispose(); }
+            base.Dispose(disposing);
         }
     }
 

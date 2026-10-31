@@ -254,15 +254,28 @@ namespace AutoCopy
             if (j == null) return;
             string root = Root(j);
             UsageTree t;
+            bool stopped;
             try
             {
-                t = Ui.Busy<UsageTree>(this, "フォルダを調べています…（ファイルが多いと時間がかかります）", delegate()
-                {
-                    NetAccess.Ensure(root, Math.Min(1, j.RetryCount), j.RetryIntervalSeconds, CancellationToken.None, null);
-                    return DiskUsage.Scan(root, CancellationToken.None);
-                });
+                t = Ui.BusyCancel<UsageTree>(this, "フォルダを調べています…（ファイルが多いと時間がかかります。「中止」でいつでも止められます）",
+                    delegate(CancellationToken ct, BusyProgress p)
+                    {
+                        p.Text = "接続しています…";
+                        NetAccess.Ensure(root, Math.Min(1, j.RetryCount), j.RetryIntervalSeconds, ct, null);
+                        return DiskUsage.Scan(root, ct, delegate(int files, long bytes, string dir)
+                        {
+                            p.Text = Fmt.Count(files) + "ファイル・" + Fmt.Size(bytes) + "　" + (dir.Length == 0 ? "" : dir);
+                        });
+                    }, out stopped);
             }
             catch (Exception ex) { Ui.Error(this, "調べられませんでした：" + ex.Message); return; }
+            if (stopped)
+            {
+                // 途中までの結果は不完全なので出さない（前回の結果はそのまま）
+                summary.Text = "中止しました。" + (tree != null ? "下の表示は前回調べた結果です。" : "もう一度調べるには「調べる」を押してください。");
+                summary.ForeColor = Ui.Warn;
+                return;
+            }
             SetTree(t, j, rSrc.Checked);
         }
 

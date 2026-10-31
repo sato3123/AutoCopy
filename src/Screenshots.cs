@@ -81,6 +81,12 @@ namespace AutoCopy
             }
             Capture("29_容量の内訳_フォルダの中", delegate() { return new UsageForm(j0.Id); },
                 delegate(Form f) { ((UsageForm)f).AnalyzeNow(); ((UsageForm)f).Folders.Open("会議録画"); });
+            Capture("30_容量の内訳_調査中（中止ボタン）", delegate()
+            {
+                BusyForm bf = new BusyForm("フォルダを調べています…（ファイルが多いと時間がかかります。「中止」でいつでも止められます）");
+                bf.Progress.Text = "128,450ファイル・412.6 GB　写真\\工事記録\\2026";
+                return bf;
+            }, delegate(Form f) { ((BusyForm)f).ShowProgress(); });
             CaptureTrayMenu();
 
             File.WriteAllText(Path.Combine(outDir, "errors.txt"), errors.Count == 0 ? "なし" : string.Join("\r\n\r\n", errors.ToArray()));
