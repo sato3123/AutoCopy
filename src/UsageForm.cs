@@ -76,7 +76,7 @@ namespace AutoCopy
         {
             ListView lv = logMode
                 ? Ui.List("順位|46", "ファイル名|220", "場所（PC＼ジョブ＼フォルダ）|330", "コピー容量|90", "割合|60", "回数|50", "1回のサイズ|90", "最後のコピー|120")
-                : Ui.List("順位|46", "ファイル名|240", "場所|420", "サイズ|90", "割合|60", "更新日時|130");
+                : Ui.List("順位|46", "ファイル名|260", "場所（調べたフォルダの中）|400", "サイズ|90", "割合|60", "更新日時|130");
             lv.Dock = DockStyle.Fill;
             foreach (int i in logMode ? new int[] { 0, 3, 4, 5, 6 } : new int[] { 0, 3, 4 }) lv.Columns[i].TextAlign = HorizontalAlignment.Right;
             return lv;
@@ -115,7 +115,7 @@ namespace AutoCopy
         {
             StringBuilder sb = new StringBuilder();
             sb.AppendLine(logMode ? "順位,ファイル名,場所,コピー容量(バイト),割合(%),回数,1回のサイズ(バイト),最後のコピー"
-                                  : "順位,ファイル名,場所,サイズ(バイト),割合(%),更新日時");
+                                  : "順位,ファイル名,場所,サイズ(バイト),割合(%),更新日時,フルパス");
             int rank = 0;
             foreach (UsageFile f in t.Biggest)
             {
@@ -124,7 +124,7 @@ namespace AutoCopy
                 if (logMode)
                     sb.AppendLine(string.Join(",", new string[] { rank.ToString(), Q(f.Name), Q(f.Dir), f.Size.ToString(), pct, f.Count.ToString(), f.LastSize.ToString(), f.Time.ToString("yyyy/MM/dd HH:mm:ss") }));
                 else
-                    sb.AppendLine(string.Join(",", new string[] { rank.ToString(), Q(f.Name), Q(f.Dir), f.Size.ToString(), pct, f.Time.ToString("yyyy/MM/dd HH:mm:ss") }));
+                    sb.AppendLine(string.Join(",", new string[] { rank.ToString(), Q(f.Name), Q(f.Dir), f.Size.ToString(), pct, f.Time.ToString("yyyy/MM/dd HH:mm:ss"), Q(f.FullPath) }));
             }
             return sb.ToString();
         }

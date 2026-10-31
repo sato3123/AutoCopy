@@ -1162,7 +1162,7 @@ namespace AutoCopy.Tests
             Eq(7000L, t.Find("_AutoCopy").Size, "削除済み・退避も容量に数える");
             Eq("大.mp4", t.Biggest[0].Name, "大きいファイルの1位");
             Eq(Path.Combine(b.Dst, "動画\\大.mp4"), t.Biggest[0].FullPath, "実際のパス");
-            Eq(Path.Combine(b.Dst, "動画"), t.Biggest[0].Dir, "場所");
+            Eq("動画", t.Biggest[0].Dir, "場所（調べたフォルダからの位置）");
             Eq(".mp4", t.ExtList()[0].Ext, "種類別の1位");
             Eq(10L, t.Root.DirectSize, "直下のファイル");
 

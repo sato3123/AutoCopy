@@ -9,7 +9,7 @@ namespace AutoCopy
     public class UsageFile
     {
         public string Name;         // ファイル名
-        public string Dir;          // 場所（表示用）
+        public string Dir;          // 場所（表示用。フォルダ：調べたフォルダからの位置／ログ：PC＼ジョブ＼フォルダ）
         public string FullPath;     // 実際のパス（フォルダを調べた場合だけ）
         public string Pc, Job;      // ログの場合だけ
         public long Size;           // フォルダ：ファイルサイズ／ログ：コピーした容量の合計
@@ -215,7 +215,7 @@ namespace AutoCopy
                             FileInfo fi = (FileInfo)fsi;
                             UsageFile f = new UsageFile();
                             f.Name = fi.Name;
-                            f.Dir = rel.Length == 0 ? plain : plain + "\\" + rel;
+                            f.Dir = rel.Length == 0 ? "（直下）" : rel;   // 調べたフォルダからの位置
                             f.FullPath = plain + "\\" + childRel;
                             f.Size = fi.Length;
                             f.Time = fi.LastWriteTime;
