@@ -284,7 +284,7 @@ namespace AutoCopy
             dailyChart.SetData(LogStats.Daily(lines));
             usage = LogStats.CopyUsage(lines);
             places.SetTree(usage);
-            extChart.SetData(UsageView.ExtItems(usage), usage.Total, "この期間のコピーはありません");
+            extChart.SetData(UsageItems.ExtItems(usage), usage.Total, "この期間のコピーはありません");
             extHost.Fit();
             UsageView.FillBig(big, usage, true);
             Fill();
