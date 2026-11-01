@@ -316,7 +316,7 @@ namespace AutoCopy
             bottom.Dock = DockStyle.Bottom;
             bottom.Padding = new Padding(12, 6, 12, 6);
 
-            Button del = Ui.B("選んだファイルを削除…", delegate { DeleteChecked(); });
+            Button del = Ui.B("選んだものを削除…", delegate { DeleteChecked(); });
             del.ForeColor = Ui.Err;
             Controls.Add(lv);
             Controls.Add(top);
