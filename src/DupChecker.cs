@@ -35,7 +35,7 @@ namespace AutoCopy
     [DataContract]
     public class DupGroup
     {
-        [DataMember] public string Kind;   // folder / rename / same / orphan
+        [DataMember] public string Kind;   // folder / rename / same / orphan / empty
         [DataMember] public string Title;
         [DataMember] public List<DupEntry> Entries = new List<DupEntry>();
     }
@@ -48,7 +48,7 @@ namespace AutoCopy
         [DataMember] public int FileCount;
         [DataMember] public long Size;
         [DataMember] public long Mtime;
-        [DataMember] public string Status;      // old / current / info / orphan
+        [DataMember] public string Status;      // old / current / info / orphan / empty
         [DataMember] public bool Recommended;   // 削除を推奨（初期状態でチェック）
         [DataMember] public bool CanDelete;
     }
@@ -253,9 +253,94 @@ namespace AutoCopy
                 res.Groups.Add(g);
             }
 
+            // 空のフォルダ（コピー元にないもの）
+            if (job.DupShowEmptyFolders)
+            {
+                List<string> empties = FindEmptyFolders(dst, ds, ss, ct);
+                if (empties.Count > 0)
+                {
+                    DupGroup g = new DupGroup();
+                    g.Kind = "empty";
+                    g.Title = "空のフォルダ（中にファイルがなく、コピー元にもないもの）　" + empties.Count + "件";
+                    foreach (string d in empties)
+                    {
+                        long mt = 0;
+                        try { mt = Directory.GetLastWriteTimeUtc(PathUtil.Long(PathUtil.Combine(dst, d))).Ticks; } catch (Exception) { }
+                        g.Entries.Add(Entry(d, true, 0, 0, mt, "empty", true));
+                    }
+                    res.Groups.Add(g);
+                }
+            }
+
             Save(res);
             lock (state) { state.LastDupCheckTicks = DateTime.UtcNow.Ticks; }
             return res;
+        }
+
+        public const int MaxEmptyFolders = 2000;
+
+        /// <summary>
+        /// コピー先の空のフォルダ（中のどこにもファイルがないもの）のうち、コピー元に同じフォルダがないもの。
+        /// 空のフォルダが入れ子になっている場合は、いちばん上のフォルダだけを挙げる。
+        /// 隠し・システムフォルダ、作業中の一時ファイル（.ckpart）が入っているものは対象外。
+        /// </summary>
+        public static List<string> FindEmptyFolders(string dst, ScanResult ds, ScanResult ss, CancellationToken ct)
+        {
+            HashSet<string> hasFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string f in ds.Files.Keys)
+            {
+                string p = f;
+                int cut;
+                while ((cut = p.LastIndexOf('\\')) > 0)
+                {
+                    p = p.Substring(0, cut);
+                    if (!hasFiles.Add(p)) break;   // 上は登録済み
+                }
+            }
+            HashSet<string> cand = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string d in ds.Dirs)
+            {
+                if (hasFiles.Contains(d)) continue;
+                if (ss.Dirs.Contains(d)) continue;          // コピー元にもある（コピー元でも空）フォルダは残す
+                cand.Add(d);
+            }
+            List<string> top = new List<string>();
+            foreach (string d in cand)
+            {
+                int cut = d.LastIndexOf('\\');
+                if (cut > 0 && cand.Contains(d.Substring(0, cut))) continue;
+                top.Add(d);
+            }
+            top.Sort(StringComparer.OrdinalIgnoreCase);
+            List<string> res = new List<string>();
+            foreach (string d in top)
+            {
+                ct.ThrowIfCancellationRequested();
+                string full = PathUtil.Combine(dst, d);
+                try
+                {
+                    FileAttributes a = File.GetAttributes(PathUtil.Long(full));
+                    if ((a & (FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReparsePoint)) != 0) continue;
+                }
+                catch (Exception) { continue; }
+                if (!IsTreeEmpty(full)) continue;
+                res.Add(d);
+                if (res.Count >= MaxEmptyFolders) break;
+            }
+            return res;
+        }
+
+        /// <summary>フォルダの中（サブフォルダも）にファイルが1つもないか。読めないときは「空でない」とみなす。</summary>
+        public static bool IsTreeEmpty(string folder)
+        {
+            try
+            {
+                foreach (string f in Directory.EnumerateFiles(PathUtil.Long(folder), "*", SearchOption.AllDirectories)) return false;
+                foreach (string d in Directory.EnumerateDirectories(PathUtil.Long(folder), "*", SearchOption.AllDirectories))
+                    if ((File.GetAttributes(d) & FileAttributes.ReparsePoint) != 0) return false;
+                return true;
+            }
+            catch (Exception) { return false; }
         }
 
         private static DupEntry Entry(string rel, bool folder, int count, long size, long mt, string status, bool rec)
@@ -340,6 +425,24 @@ namespace AutoCopy
                 if (!e.CanDelete) continue;
                 string p = PathUtil.Long(PathUtil.Combine(dst, e.Rel));
                 if (!File.Exists(p) && !Directory.Exists(p)) continue;
+                if (e.Status == "empty")
+                {
+                    // チェックの後にファイルが入ったかもしれないので、削除の直前に空かどうかを確かめ直す
+                    if (!IsTreeEmpty(PathUtil.Combine(dst, e.Rel)))
+                    {
+                        Logger.Write(job.Name, "SKIP", e.Rel + "　空ではなくなったため削除しませんでした（重複チェック）", -1, -1);
+                        continue;
+                    }
+                    try
+                    {
+                        SafeFs.MoveToTrash(dst, e.Rel, "削除済み", batch);
+                        Logger.Write(job.Name, "DELETE", e.Rel + "（空のフォルダ）　（重複チェック）", 0, -1);
+                        n++;
+                    }
+                    catch (SourceProtectedException) { throw; }
+                    catch (Exception ex) { Logger.Write(job.Name, "ERROR", e.Rel + "　削除できません: " + ex.Message, -1, -1); }
+                    continue;
+                }
                 try
                 {
                     SafeFs.MoveToTrash(dst, e.Rel, "削除済み", batch);
@@ -375,6 +478,7 @@ namespace AutoCopy
             public string Name;     // yyyyMMdd-HHmmss
             public string Path;
             public int FileCount;
+            public int EmptyFolderCount;   // 空のフォルダ（中に何もないフォルダ）の数
             public long Bytes;
             public DateTime Time;
         }
@@ -402,6 +506,7 @@ namespace AutoCopy
                             b.FileCount++;
                             try { b.Bytes += new FileInfo(f).Length; } catch (Exception) { }
                         }
+                        b.EmptyFolderCount = EmptyLeaves(d).Count;
                     }
                     catch (Exception) { }
                     list.Add(b);
@@ -416,6 +521,16 @@ namespace AutoCopy
         {
             int n = 0;
             string baseLen = b.Path.TrimEnd('\\') + "\\";
+            // 空のフォルダ（中に何もないフォルダ）は作り直す
+            foreach (string d in EmptyLeaves(b.Path))
+            {
+                string rel = d.Substring(baseLen.Length);
+                string target = PathUtil.Combine(destRoot, rel);
+                if (Directory.Exists(PathUtil.Long(target))) continue;
+                SafeFs.CreateDirectory(target);
+                Logger.Write(jobName, "RESTORE", rel + "（空のフォルダ・" + b.Kind + " " + b.Name + " から）", -1, -1);
+                n++;
+            }
             foreach (string f in Directory.GetFiles(b.Path, "*", SearchOption.AllDirectories))
             {
                 string rel = f.Substring(baseLen.Length);
@@ -433,6 +548,22 @@ namespace AutoCopy
             }
             try { SafeFs.DeleteDirectoryTree(b.Path); } catch (Exception) { }
             return n;
+        }
+
+        /// <summary>中にファイルもフォルダもないフォルダ（長いパスのまま返す）</summary>
+        public static List<string> EmptyLeaves(string root)
+        {
+            List<string> list = new List<string>();
+            try
+            {
+                foreach (string d in Directory.GetDirectories(root, "*", SearchOption.AllDirectories))
+                {
+                    using (IEnumerator<string> e = Directory.EnumerateFileSystemEntries(d).GetEnumerator())
+                        if (!e.MoveNext()) list.Add(d);
+                }
+            }
+            catch (Exception) { }
+            return list;
         }
     }
 }

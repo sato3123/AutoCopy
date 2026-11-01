@@ -34,7 +34,7 @@ namespace AutoCopy
         // 接続・重複
         private ComboBox cbServer;
         private TextBox tUser, tPass, tDupTime;
-        private CheckBox cSaveCred, cDup, cSame, cOrphan;
+        private CheckBox cSaveCred, cDup, cSame, cOrphan, cEmpty;
         private Label lServerNote, lConn;
         private NumericUpDown nRetry, nRetryInt;
         private RadioButton rDaily, rWeekly, rManual;
@@ -291,10 +291,11 @@ namespace AutoCopy
             tDupTime = Ui.T("12:00", 60);
             cSame = Ui.C("中身が同じファイル（情報として表示のみ）", true);
             cOrphan = Ui.C("コピー元にないファイル（孤立ファイル）も表示する", false);
+            cEmpty = Ui.C("空のフォルダ（コピー元にないもの）", true);
             b.Controls.Add(Ui.Section("重複チェック",
                 cDup,
                 Ui.Row(Ui.L("実行", 110), rDaily, rWeekly, cbWeekday, rManual, Ui.L("時刻"), tDupTime),
-                Ui.Row(Ui.L("探すもの", 110), Ui.Column(Ui.C("ファイル名・フォルダ名の変更や移動の取りこぼし（常に探します）", true), cSame, cOrphan)),
+                Ui.Row(Ui.L("探すもの", 110), Ui.Column(Ui.C("ファイル名・フォルダ名の変更や移動の取りこぼし（常に探します）", true), cEmpty, cSame, cOrphan)),
                 Ui.Wrap("削除したファイルは「コピー先\\_AutoCopy\\削除済み」に移し、アプリ設定の保存日数が過ぎたら完全に削除します。", 640)));
             p.Controls.Add(b);
             return p;
@@ -412,6 +413,7 @@ namespace AutoCopy
             tDupTime.Text = j.DupTime;
             cSame.Checked = j.DupShowSameContent;
             cOrphan.Checked = j.DupShowOrphans;
+            cEmpty.Checked = j.DupShowEmptyFolders;
             loading = false;
             RefreshServers();
             loading = true;
@@ -481,6 +483,7 @@ namespace AutoCopy
             j.DupTime = tDupTime.Text.Trim();
             j.DupShowSameContent = cSame.Checked;
             j.DupShowOrphans = cOrphan.Checked;
+            j.DupShowEmptyFolders = cEmpty.Checked;
             return j;
         }
 

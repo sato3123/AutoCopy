@@ -132,6 +132,9 @@ namespace AutoCopy
             W(Path.Combine(src1, "集計\\月次.xlsx"), "updated", 300);
             new CopyEngine(a, s, st, false, false, CancellationToken.None).Run();
             AppCore.SaveState(a.Id);
+            // コピー元で整理した後に残った空のフォルダ（重複チェックの見本）
+            Directory.CreateDirectory(Path.Combine(d1, "見積\\旧版"));
+            Directory.CreateDirectory(Path.Combine(d1, "2024年度\\予算\\下書き"));
             DupResult dr = DupChecker.Run(a, s, st, CancellationToken.None);
             DupEntry first = null;
             foreach (DupGroup g in dr.Groups) foreach (DupEntry e in g.Entries) if (first == null && e.Recommended && !e.IsFolder) first = e;

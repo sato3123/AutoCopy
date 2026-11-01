@@ -73,6 +73,7 @@ namespace AutoCopy.Tests
             Add("T44", "ログのコピー実績の内訳（場所別・種類別・大きいファイル・同じフォルダ名のPCを分ける）", T44_CopyUsage);
             Add("T45", "フォルダの容量の内訳（フォルダ別・種類別・大きいファイル・読むだけ）", T45_DiskUsage);
             Add("T46", "容量の内訳を途中で中止できる（途中経過の通知・中止後もフォルダは変わらない）", T46_DiskUsageCancel);
+            Add("T47", "空のフォルダの削除（コピー先のみ・コピー元にあるものは残す・削除直前の再確認・元に戻す）", T47_EmptyFolders);
 
             int ng = 0;
             foreach (TestCase t in cases)
@@ -1218,6 +1219,66 @@ namespace AutoCopy.Tests
             Eq(3000, t.FileCount, "最後まで数える");
             CompareSnapshots(before, Snapshot(b.Dst));
             Note = "中止時点 " + filesAtStop + "件／途中経過 " + reports + "回";
+        }
+
+        private static void T47_EmptyFolders()
+        {
+            Box b = new Box("T47");
+            b.W("data\\a.txt", "aaa");
+            Directory.CreateDirectory(b.S("keep\\empty"));          // コピー元にもある空のフォルダ
+            Directory.CreateDirectory(b.S("src_only_empty"));
+            b.Run();
+            Dictionary<string, string> srcBefore = Snapshot(b.Src);
+
+            Directory.CreateDirectory(b.D("old\\sub\\deeper"));   // 入れ子の空フォルダ → いちばん上の old だけ
+            Directory.CreateDirectory(b.D("data\\emptyInDest"));
+            Directory.CreateDirectory(b.D("keep\\empty"));          // コピー元にもある → 残す
+            Directory.CreateDirectory(b.D("hid"));
+            File.SetAttributes(b.D("hid"), FileAttributes.Directory | FileAttributes.Hidden);   // 隠しフォルダ → 対象外
+            WriteFile(b.D("ckp\\x.ckpart"), "partial", 10);          // コピー作業中の一時ファイル → 対象外
+            Directory.CreateDirectory(b.D("later"));                  // チェックの後でファイルが入る
+            Directory.CreateDirectory(b.D("_AutoCopy\\空"));        // アプリのフォルダ → 対象外
+
+            DupResult d = DupChecker.Run(b.Job, b.App, b.State, CancellationToken.None);
+            DupGroup g = d.Groups.Find(delegate(DupGroup x) { return x.Kind == "empty"; });
+            True(g != null, "空のフォルダのグループがある");
+            List<string> rels = new List<string>();
+            foreach (DupEntry e in g.Entries) rels.Add(e.Rel);
+            rels.Sort(StringComparer.OrdinalIgnoreCase);
+            Eq("data\\emptyInDest|later|old", string.Join("|", rels.ToArray()), "候補（入れ子は上だけ・コピー元にあるもの・隠し・作業中・アプリのフォルダは除く）");
+            foreach (DupEntry e in g.Entries) True(e.Recommended && e.CanDelete && e.IsFolder, "削除を推奨");
+
+            // 入れなければ探さない
+            b.Job.DupShowEmptyFolders = false;
+            DupResult off = DupChecker.Run(b.Job, b.App, b.State, CancellationToken.None);
+            True(!off.Groups.Exists(delegate(DupGroup x) { return x.Kind == "empty"; }), "設定でオフにできる");
+            b.Job.DupShowEmptyFolders = true;
+
+            // チェック後にファイルが入ったフォルダは削除しない
+            WriteFile(b.D("later\\new.txt"), "new", 10);
+            int n = DupChecker.DeleteSelected(b.Job, b.App, b.State, g.Entries);
+            Eq(2, n, "削除した件数");
+            True(!Directory.Exists(b.D("old")), "old を削除");
+            True(!Directory.Exists(b.D("data\\emptyInDest")), "data\\emptyInDest を削除");
+            True(File.Exists(b.D("data\\a.txt")), "同じフォルダのファイルは残る");
+            True(File.Exists(b.D("later\\new.txt")), "空でなくなったフォルダは残す");
+            True(Directory.Exists(b.D("keep\\empty")) && Directory.Exists(b.D("hid")) && File.Exists(b.D("ckp\\x.ckpart")), "対象外は残る");
+            CompareSnapshots(srcBefore, Snapshot(b.Src));   // コピー元は一切変わらない（空のフォルダも）
+
+            // 削除済みに入り、元に戻せる
+            List<TrashStore.Batch> batches = TrashStore.List(b.Dst);
+            Eq(1, batches.Count, "削除済みの記録");
+            Eq(0, batches[0].FileCount, "ファイルは0件");
+            Eq(2, batches[0].EmptyFolderCount, "空のフォルダ2件（old\\sub\\deeper と data\\emptyInDest）");
+            Eq(2, TrashStore.Restore(b.Job.Name, b.Dst, batches[0]), "元に戻す件数");
+            True(Directory.Exists(b.D("old\\sub\\deeper")), "入れ子ごと戻る");
+            True(Directory.Exists(b.D("data\\emptyInDest")), "戻る");
+
+            // 2回目のチェック：同じ結果（元に戻したので）、ミラーでない普通のジョブでもコピー元は空フォルダごと残っている
+            DupResult again = DupChecker.Run(b.Job, b.App, b.State, CancellationToken.None);
+            DupGroup g2 = again.Groups.Find(delegate(DupGroup x) { return x.Kind == "empty"; });
+            Eq(2, g2.Entries.Count, "元に戻した2件がまた候補になる");
+            CompareSnapshots(srcBefore, Snapshot(b.Src));
         }
 
         private static void T42_Performance()

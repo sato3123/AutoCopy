@@ -96,6 +96,7 @@ namespace AutoCopy
         [DataMember] public int DupWeekday;           // 0=日 .. 6=土
         [DataMember] public bool DupShowSameContent;
         [DataMember] public bool DupShowOrphans;
+        [DataMember] public bool DupShowEmptyFolders;
 
         public JobConfig() { SetDefaults(); }
 
@@ -145,6 +146,7 @@ namespace AutoCopy
             DupWeekday = 1;
             DupShowSameContent = true;
             DupShowOrphans = false;
+            DupShowEmptyFolders = true;
         }
 
         public JobConfig Clone()

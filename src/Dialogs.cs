@@ -259,7 +259,7 @@ namespace AutoCopy
             {
                 ListViewItem it = new ListViewItem(b.Kind);
                 it.SubItems.Add(b.Time == DateTime.MinValue ? b.Name : b.Time.ToString("yyyy/MM/dd HH:mm:ss"));
-                it.SubItems.Add(Fmt.Count(b.FileCount));
+                it.SubItems.Add(Fmt.Count(b.FileCount) + (b.EmptyFolderCount > 0 ? "＋空のフォルダ " + Fmt.Count(b.EmptyFolderCount) : ""));
                 it.SubItems.Add(Fmt.Size(b.Bytes));
                 it.SubItems.Add(PathUtil.Plain(b.Path));
                 it.Tag = b;
@@ -271,7 +271,7 @@ namespace AutoCopy
         {
             if (lv.SelectedItems.Count == 0) { Ui.Info(this, "元に戻すものを選んでください。"); return; }
             TrashStore.Batch b = (TrashStore.Batch)lv.SelectedItems[0].Tag;
-            if (!Ui.Confirm(this, b.FileCount + "件を元の場所に戻します。よろしいですか？")) return;
+            if (!Ui.Confirm(this, b.FileCount + "件" + (b.EmptyFolderCount > 0 ? "（と空のフォルダ " + b.EmptyFolderCount + "件）" : "") + "を元の場所に戻します。よろしいですか？")) return;
             string dst = CopyEngine.ResolvedDest(job, AppCore.Settings);
             try
             {
@@ -363,16 +363,18 @@ namespace AutoCopy
                 foreach (DupGroup g in current.Groups)
                 {
                     ListViewGroup lg = new ListViewGroup(g.Title);
+                    lg.Tag = g.Kind;
                     lv.Groups.Add(lg);
                     foreach (DupEntry e in g.Entries)
                     {
                         ListViewItem it = new ListViewItem(e.CanDelete ? "削除" : "残す", lg);
-                        it.SubItems.Add(e.Rel + (e.IsFolder ? "\\（フォルダごと）" : ""));
-                        it.SubItems.Add(Fmt.Count(Math.Max(1, e.FileCount)));
+                        bool empty = e.Status == "empty";
+                        it.SubItems.Add(e.Rel + (empty ? "\\（空のフォルダ）" : e.IsFolder ? "\\（フォルダごと）" : ""));
+                        it.SubItems.Add(empty ? "—" : Fmt.Count(Math.Max(1, e.FileCount)));
                         it.SubItems.Add(Fmt.Size(e.Size));
                         it.SubItems.Add(Fmt.LocalTime(e.Mtime));
                         string judge = e.Status == "old" ? "古い名前（コピー元になし）" : e.Status == "current" ? "今の名前（コピー元と一致）"
-                            : e.Status == "info" ? "情報のみ" : "孤立（コピー元になし）";
+                            : e.Status == "info" ? "情報のみ" : empty ? "空のフォルダ（コピー元になし）" : "孤立（コピー元になし）";
                         it.SubItems.Add(judge);
                         it.Checked = e.CanDelete && e.Recommended;
                         it.ForeColor = e.Status == "old" ? Ui.Warn : e.Status == "current" ? Ui.Ok : Ui.Quiet;
@@ -397,6 +399,7 @@ namespace AutoCopy
             // 残す側が1つもなくなる選び方はできない
             ListViewGroup g = lv.Items[e.Index].Group;
             if (g == null) return;
+            if (g.Tag as string == "empty") return;   // 空のフォルダは全部選んでもよい
             int keep = 0, total = 0;
             foreach (ListViewItem it in g.Items)
             {
@@ -466,7 +469,7 @@ namespace AutoCopy
                 });
                 // 結果から消す
                 foreach (DupGroup g in current.Groups) g.Entries.RemoveAll(delegate(DupEntry x) { return sel.Contains(x); });
-                current.Groups.RemoveAll(delegate(DupGroup g) { return g.Entries.Count < 2 && g.Kind != "orphan" || g.Entries.Count == 0; });
+                current.Groups.RemoveAll(delegate(DupGroup g) { return g.Entries.Count < 2 && g.Kind != "orphan" && g.Kind != "empty" || g.Entries.Count == 0; });
                 try { Json.Save(DupChecker.ResultPath(job.Id), current); } catch (Exception) { }
                 Ui.Info(this, Fmt.Count(done) + "件を削除しました（削除済みフォルダへ移動）。");
             }
