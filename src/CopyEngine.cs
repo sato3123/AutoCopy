@@ -12,6 +12,8 @@ namespace AutoCopy
     {
         public int PlannedCopyCount, Scanned, Copied, Overwritten, Renamed, Conflicts, Deleted, Errors, Locked, Excluded, Deferred, PendingDeletes, SameAdopted;
         public int Deduped, PlannedDedup;          // 重複のためコピーせず、場所を書いたテキストを置いた件数
+        public int DedupAsked;                     // 大きいファイルの重複：扱いを選んでもらうまでコピーしない件数
+        public bool DedupNew;                      // 選んでもらう重複が新しく見つかった
         public long DedupBytes;                    // それで省いた容量
         public int Downloaded, PlannedDownloads;   // 同期：共有フォルダからこのPCへ取り込んだ件数
         public long DownloadBytes;
@@ -35,7 +37,8 @@ namespace AutoCopy
             return string.Format("走査 {0}件・コピー {1}件・上書き {2}件・名前変更 {3}件・削除 {4}件・確認待ち {5}件・エラー {6}件 {7:0.0}秒",
                 Fmt.Count(Scanned), Copied, Overwritten, Renamed, Deleted, Conflicts, Errors + Locked, Seconds)
                 + (Deduped > 0 ? "・重複で省略 " + Deduped + "件（" + Fmt.Size(DedupBytes) + "）" : "")
-                + (Downloaded > 0 ? "・取り込み " + Downloaded + "件" : "");
+                + (Downloaded > 0 ? "・取り込み " + Downloaded + "件" : "")
+                + (DedupAsked > 0 ? "・重複の扱い待ち " + DedupAsked + "件" : "");
         }
     }
 
@@ -61,11 +64,12 @@ namespace AutoCopy
         public const string Delete = "削除（ミラー）";
         public const string Hold = "削除の保留（ミラー）";
         public const string Dedup = "重複で省略";
+        public const string DedupAsk = "重複：扱いを選ぶ";
         public const string SyncIn = "取り込み（同期）";
         public const string Same = "同じファイル（記録だけ）";
         public const string Deferred = "次回に回す";
         public const string Excluded = "除外";
-        public static readonly string[] All = { Copy, Overwrite, Conflict, Skip, Rename, Delete, Hold, Dedup, SyncIn, Same, Deferred, Excluded };
+        public static readonly string[] All = { Copy, Overwrite, Conflict, Skip, Rename, Delete, Hold, Dedup, DedupAsk, SyncIn, Same, Deferred, Excluded };
     }
 
     public class FolderConflictException : Exception
@@ -224,7 +228,7 @@ namespace AutoCopy
                 Progress.SetPhase("変更を判定しています");
                 PlanSync(scan, remote, files, skipForever, tasks, downloads, conflicts, res);
             }
-            else if (job.DedupOn) dedup = PlanDedup(scan, files, skipForever);
+            else if (job.DedupOn) dedup = PlanDedup(scan, files, skipForever, res);
             foreach (KeyValuePair<string, ScanItem> kv in scan.Files)
             {
                 if (job.Sync) break;
@@ -235,6 +239,15 @@ namespace AutoCopy
                 FileRecord rec;
                 files.TryGetValue(rel, out rec);
 
+                // --- 大きいファイルの重複：選んでもらうまでコピーしない ---
+                string holdFirst;
+                if (dedupHold.TryGetValue(rel, out holdFirst))
+                {
+                    res.DedupAsked++;
+                    string first = holdFirst;
+                    Plan(PlanKind.DedupAsk, rel, it, -1, 0, "中身が「" + first + "」と同じ大きいファイル → 扱いを選ぶまでコピーしない（重複チェックの画面で選ぶ）");
+                    continue;
+                }
                 // --- 大きいファイルの重複：2つ目以降はコピーせず、場所を書いたテキストを置く ---
                 string target = null;
                 if (dedup != null) dedup.TryGetValue(rel, out target);
@@ -651,67 +664,41 @@ namespace AutoCopy
 
         private readonly Dictionary<string, byte[]> dedupHash = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
 
+        private readonly Dictionary<string, string> dedupHold = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // ファイル → 中身が同じ1つ目
+
         /// <summary>
-        /// コピー元の中で、一定以上の大きさで中身が同じファイルを探す。
-        /// 戻り値：2つ目以降のファイル → 1つ目（実際にコピーするファイル）。
-        /// 1つ目は、すでに普通にコピーしてあるものを優先し、なければパスの順で最初のもの。
+        /// コピー元の中で、一定以上の大きさで中身が同じファイルを探し、2つ目以降の扱いを決める。
+        /// 戻り値：テキストを置くファイル → 1つ目。「毎回選ぶ」で、まだ選んでいないものは dedupHold に入れてコピーせずに待つ。
+        /// コピー先に普通にコピー済みのものはそのまま（重複チェックの画面で選べる）。
         /// </summary>
-        private Dictionary<string, string> PlanDedup(ScanResult scan, Dictionary<string, FileRecord> files, HashSet<string> skip)
+        private Dictionary<string, string> PlanDedup(ScanResult scan, Dictionary<string, FileRecord> files, HashSet<string> skip, RunResult res)
         {
             Dictionary<string, string> map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            long min = job.DedupMinBytes;
-            Dictionary<long, List<string>> bySize = new Dictionary<long, List<string>>();
-            foreach (KeyValuePair<string, ScanItem> kv in scan.Files)
+            List<LargeDupGroup> groups = LargeDup.Find(src, dst, scan, files, job.DedupMinBytes, skip, ct, dedupHash);
+            DedupBook book = DedupStore.Get(job.Id);
+            List<DedupPendingItem> pend = new List<DedupPendingItem>();
+            foreach (LargeDupGroup g in groups)
             {
-                if (kv.Value.Size < min || kv.Value.Recent || skip.Contains(kv.Key)) continue;
-                if (kv.Key.EndsWith(AppPaths.PlaceholderSuffix, StringComparison.OrdinalIgnoreCase)) continue;
-                List<string> l;
-                if (!bySize.TryGetValue(kv.Value.Size, out l)) { l = new List<string>(); bySize[kv.Value.Size] = l; }
-                l.Add(kv.Key);
-            }
-            foreach (KeyValuePair<long, List<string>> g in bySize)
-            {
-                if (g.Value.Count < 2) continue;
-                Dictionary<string, List<string>> byHash = new Dictionary<string, List<string>>();
-                foreach (string rel in g.Value)
+                foreach (string o in g.Others)
                 {
-                    ct.ThrowIfCancellationRequested();
-                    ScanItem it = scan.Files[rel];
+                    ScanItem it = scan.Files[o];
                     FileRecord rec;
-                    byte[] h = null;
-                    if (files.TryGetValue(rel, out rec) && rec.Hash != null && rec.Size == it.Size && rec.Mtime == it.Mtime) h = rec.Hash;
-                    if (h == null) h = HashFile(PathUtil.Combine(src, rel));   // コピー元は読むだけ
-                    if (h == null) continue;
-                    dedupHash[rel] = h;
-                    string k = BitConverter.ToString(h);
-                    List<string> l;
-                    if (!byHash.TryGetValue(k, out l)) { l = new List<string>(); byHash[k] = l; }
-                    l.Add(rel);
+                    files.TryGetValue(o, out rec);
+                    string dec;
+                    lock (book) dec = book.DecisionFor(o, g.Hash);
+                    if (dec == "copy") continue;                              // 普通にコピーすると選んだ
+                    if (LargeDup.IsNormalCopy(dst, o, it, files)) continue;   // 普通にコピー済み
+                    bool isText = rec != null && rec.PlaceholderOf != null;
+                    if (dec == "text" || isText || job.Dedup == DedupMode.Auto) { map[o] = g.First; continue; }
+                    dedupHold[o] = g.First;                                   // 毎回選ぶ：選ぶまでコピーしない
+                    pend.Add(LargeDup.Pending(o, g, it, "copy", false));
                 }
-                foreach (List<string> same in byHash.Values)
-                {
-                    if (same.Count < 2) continue;
-                    same.Sort(StringComparer.OrdinalIgnoreCase);
-                    string first = null;
-                    foreach (string rel in same)
-                    {
-                        FileRecord rec;
-                        ScanItem it = scan.Files[rel];
-                        if (files.TryGetValue(rel, out rec) && rec.PlaceholderOf == null && rec.Size == it.Size && rec.Mtime == it.Mtime
-                            && File.Exists(PathUtil.Long(PathUtil.Combine(dst, rel)))) { first = rel; break; }
-                    }
-                    if (first == null) first = same[0];
-                    foreach (string rel in same)
-                    {
-                        if (string.Equals(rel, first, StringComparison.OrdinalIgnoreCase)) continue;
-                        // すでに普通にコピーしてあり変わっていないものは、そのまま残す（コピー先のファイルは消さない）
-                        FileRecord rec;
-                        ScanItem it = scan.Files[rel];
-                        if (files.TryGetValue(rel, out rec) && rec.PlaceholderOf == null && rec.Size == it.Size && rec.Mtime == it.Mtime
-                            && File.Exists(PathUtil.Long(PathUtil.Combine(dst, rel)))) continue;
-                        map[rel] = first;
-                    }
-                }
+            }
+            if (!dryRun)
+            {
+                bool changed;
+                lock (book) changed = book.ReplacePending("copy", pend);
+                if (changed) { DedupStore.Save(job.Id); res.DedupNew = pend.Count > 0; }
             }
             return map;
         }
@@ -766,17 +753,7 @@ namespace AutoCopy
 
         private string PlaceholderText(PlaceholderTask p, string firstDest, byte[] h)
         {
-            string nl = "\r\n";
-            return "自動コピー：このファイルはコピーしていません（容量を節約するため）" + nl + nl
-                + "コピー元のファイル：" + PathUtil.Plain(PathUtil.Combine(src, p.Rel)) + nl
-                + "中身が同じファイルの保管場所：" + PathUtil.Plain(firstDest) + nl
-                + "（コピー元では：" + PathUtil.Plain(PathUtil.Combine(src, p.Target)) + "）" + nl + nl
-                + "サイズ：" + Fmt.Size(p.Item.Size) + "（" + p.Item.Size.ToString("#,0") + " バイト）" + nl
-                + "更新日時：" + new DateTime(p.Item.Mtime, DateTimeKind.Utc).ToLocalTime().ToString("yyyy/MM/dd HH:mm:ss") + nl
-                + (h != null ? "MD5：" + BitConverter.ToString(h).Replace("-", "") + nl : "")
-                + "書いた日時：" + DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss") + nl + nl
-                + "このファイルが必要なときは、上の保管場所のファイルをコピーして、名前を「" + PathUtil.FileName(p.Rel) + "」に変えて使ってください。" + nl
-                + "コピー元でどちらかの中身が変わると、次の自動コピーで普通にコピーし直し、このテキストは片付けます。" + nl;
+            return LargeDup.PlaceholderText(src, dst, p.Rel, p.Target, p.Item.Size, p.Item.Mtime, LargeDup.Hex(h));
         }
 
         // ================= 同期（複数PC・双方向） =================

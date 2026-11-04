@@ -296,6 +296,7 @@ namespace AutoCopy
         private readonly ComboBox cbJob;
         private readonly ListView lv;
         private readonly Label summary, total;
+        private readonly Button bToText, bToCopy;
         private DupResult current;
         private JobConfig currentJob;
         private bool filling;
@@ -319,7 +320,11 @@ namespace AutoCopy
             total = Ui.L("");
             total.Font = Ui.Bold;
             Label note = Ui.Hint("チェックしたものを削除します。削除したものはコピー先の「_AutoCopy\\削除済み」に移り、保存日数の間は元に戻せます。各グループの「今の名前」は削除できません。");
-            FlowLayoutPanel bottom = Ui.Column(total, note);
+            bToText = Ui.B("選んだ重複をテキストにする（コピーしない）", delegate { ResolveLarge("text"); });
+            bToCopy = Ui.B("選んだ重複を普通にコピーする", delegate { ResolveLarge("copy"); });
+            Label lnote = Ui.Hint("大きいファイルの重複：チェックしたものを「テキストにする」と、コピー先には1つ目の保管場所を書いたテキストを置きます（コピー済みのものは削除済みへ移し、元に戻せます）。「普通にコピー」を選ぶと、今後もそのままコピーします。");
+            Ui.FitToForm(lnote, 1000);
+            FlowLayoutPanel bottom = Ui.Column(total, note, Ui.Row(bToText, bToCopy), lnote);
             bottom.Dock = DockStyle.Bottom;
             bottom.Padding = new Padding(12, 6, 12, 6);
 
@@ -366,13 +371,14 @@ namespace AutoCopy
             lv.BeginUpdate();
             lv.Items.Clear();
             lv.Groups.Clear();
+            int largeCount = AddLargeGroups();
             if (current == null)
             {
-                summary.Text = "まだ重複チェックをしていません。";
+                summary.Text = "まだ重複チェックをしていません。" + (largeCount > 0 ? "（大きいファイルの重複 " + largeCount + "件）" : "");
             }
             else
             {
-                summary.Text = current.Checked + " にチェック・グループ " + current.Groups.Count + "件";
+                summary.Text = current.Checked + " にチェック・グループ " + current.Groups.Count + "件" + (largeCount > 0 ? "・大きいファイルの重複 " + largeCount + "件" : "");
                 foreach (DupGroup g in current.Groups)
                 {
                     ListViewGroup lg = new ListViewGroup(g.Title);
@@ -401,10 +407,91 @@ namespace AutoCopy
             UpdateTotal();
         }
 
+        /// <summary>大きいファイルの重複（扱いを選んでもらうもの）を、1つ目ごとのまとまりで一覧に入れる。件数を返す。</summary>
+        private int AddLargeGroups()
+        {
+            bToText.Enabled = bToCopy.Enabled = false;
+            if (currentJob == null || !currentJob.DedupOn) return 0;
+            DedupBook book = DedupStore.Get(currentJob.Id);
+            List<DedupPendingItem> items;
+            lock (book) items = new List<DedupPendingItem>(book.Pending);
+            if (items.Count == 0) return 0;
+            items.Sort(delegate(DedupPendingItem a, DedupPendingItem b)
+            {
+                int c = string.Compare(a.Target, b.Target, StringComparison.OrdinalIgnoreCase);
+                return c != 0 ? c : string.Compare(a.Rel, b.Rel, StringComparison.OrdinalIgnoreCase);
+            });
+            ListViewGroup lg = null;
+            string lastTarget = null;
+            foreach (DedupPendingItem p in items)
+            {
+                if (!string.Equals(p.Target, lastTarget, StringComparison.OrdinalIgnoreCase))
+                {
+                    lastTarget = p.Target;
+                    lg = new ListViewGroup("大きいファイルの重複：「" + p.Target + "」と中身が同じ（" + Fmt.Size(p.Size) + "）　扱いを選んでください");
+                    lg.Tag = "large";
+                    lv.Groups.Add(lg);
+                    ListViewItem first = new ListViewItem("1つ目", lg);
+                    first.SubItems.Add(p.Target);
+                    first.SubItems.Add("1");
+                    first.SubItems.Add(Fmt.Size(p.Size));
+                    first.SubItems.Add("");
+                    first.SubItems.Add("コピーする（1つ目）");
+                    first.ForeColor = Ui.Ok;
+                    first.Tag = "first";
+                    lv.Items.Add(first);
+                }
+                ListViewItem it = new ListViewItem("選んでください", lg);
+                it.SubItems.Add(p.Rel);
+                it.SubItems.Add("1");
+                it.SubItems.Add(Fmt.Size(p.Size));
+                it.SubItems.Add(Fmt.LocalTime(p.Mtime));
+                it.SubItems.Add(p.Copied ? "普通にコピー済み（テキストにすると " + Fmt.Size(p.Size) + " 空く）" : "まだコピーしていない（選ぶまで待っています）");
+                it.ForeColor = Ui.Warn;
+                it.Tag = p;
+                lv.Items.Add(it);
+            }
+            bToText.Enabled = bToCopy.Enabled = true;
+            return items.Count;
+        }
+
+        private void ResolveLarge(string action)
+        {
+            if (currentJob == null) return;
+            List<DedupPendingItem> sel = new List<DedupPendingItem>();
+            foreach (ListViewItem it in lv.CheckedItems) { DedupPendingItem p = it.Tag as DedupPendingItem; if (p != null) sel.Add(p); }
+            if (sel.Count == 0) { Ui.Info(this, "大きいファイルの重複の行にチェックを入れてください。"); return; }
+            long bytes = 0; int copied = 0;
+            foreach (DedupPendingItem p in sel) if (p.Copied) { bytes += p.Size; copied++; }
+            string msg = action == "text"
+                ? sel.Count + "件をテキストにします（コピー先には1つ目の保管場所を書いたテキストを置きます）。" + (copied > 0 ? "\nコピー済みの " + copied + "件（" + Fmt.Size(bytes) + "）は「_AutoCopy\\削除済み」へ移します（元に戻せます）。" : "") + "\nよろしいですか？"
+                : sel.Count + "件を普通にコピーします（今後もこのままコピーします）。よろしいですか？";
+            if (!Ui.Confirm(this, msg)) return;
+            JobConfig job = currentJob;
+            List<string> errs = Ui.Busy<List<string>>(this, "処理しています…", delegate()
+            {
+                List<string> e = new List<string>();
+                JobState st = AppCore.GetState(job.Id);
+                foreach (DedupPendingItem p in sel)
+                {
+                    try { string r = LargeDup.Resolve(job, AppCore.Settings, st, p, action); if (r != null) e.Add(r); }
+                    catch (Exception ex) { e.Add(p.Rel + "：" + ex.Message); }
+                }
+                AppCore.SaveState(job.Id);
+                return e;
+            });
+            AppCore.RaiseChanged();
+            LoadResult();
+            if (errs.Count > 0) Ui.Error(this, "できなかったものがあります：\n" + string.Join("\n", errs.ToArray()));
+        }
+
         private void OnItemCheck(object sender, ItemCheckEventArgs e)
         {
             if (filling || e.NewValue == e.CurrentValue) return;
             if (e.Index < 0 || e.Index >= lv.Items.Count) return;
+            object tag = lv.Items[e.Index].Tag;
+            if (tag is string) { if (e.NewValue == CheckState.Checked) e.NewValue = CheckState.Unchecked; return; }   // 1つ目は選べない
+            if (tag is DedupPendingItem) return;
             DupEntry d = lv.Items[e.Index].Tag as DupEntry;
             if (d == null) return;
             if (!d.CanDelete && e.NewValue == CheckState.Checked) { e.NewValue = CheckState.Unchecked; return; }
@@ -432,12 +519,14 @@ namespace AutoCopy
         private void UpdateTotal()
         {
             int n = 0; long bytes = 0;
+            int large = 0;
             foreach (ListViewItem it in lv.CheckedItems)
             {
-                DupEntry d = (DupEntry)it.Tag;
+                DupEntry d = it.Tag as DupEntry;
+                if (d == null) { if (it.Tag is DedupPendingItem) large++; continue; }
                 n += Math.Max(1, d.FileCount); bytes += d.Size;
             }
-            total.Text = "削除するもの：" + Fmt.Count(n) + "件・" + Fmt.Size(bytes);
+            total.Text = "削除するもの：" + Fmt.Count(n) + "件・" + Fmt.Size(bytes) + (large > 0 ? "　／　大きいファイルの重複：" + large + "件を選択中" : "");
         }
 
         private void Recheck()
@@ -465,8 +554,8 @@ namespace AutoCopy
             int n = 0; long bytes = 0;
             foreach (ListViewItem it in lv.CheckedItems)
             {
-                DupEntry d = (DupEntry)it.Tag;
-                if (!d.CanDelete) continue;
+                DupEntry d = it.Tag as DupEntry;
+                if (d == null || !d.CanDelete) continue;
                 sel.Add(d); n += Math.Max(1, d.FileCount); bytes += d.Size;
             }
             if (sel.Count == 0) { Ui.Info(this, "削除するものにチェックを入れてください。"); return; }

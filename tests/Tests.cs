@@ -83,7 +83,8 @@ namespace AutoCopy.Tests
             Add("T54", "自動更新：版の比較・置き場所の確認・署名のない版の扱い", T54_UpdaterBasics);
             Add("T55", "実行結果の予測：コピー・上書き・確認待ち・名前変更・除外・ミラー削除を一覧にし、何も変えない", T55_Preview);
             Add("T56", "作業状況：件数・容量・進み具合・コピー中のファイル", T56_Progress);
-            Add("T57", "大きいファイルの重複は「使う・使わない」を選ぶ（初期値：使わない。前の版の設定は引き継がない）", T57_DedupChoice);
+            Add("T57", "大きいファイルの重複の扱い（使わない・毎回選ぶ・自動）と前の版の設定の引き継ぎ", T57_DedupChoice);
+            Add("T58", "大きいファイルの重複：見つけたら毎回選ぶ（コピー時・重複チェック）・テキストにする・普通にコピー", T58_DedupAsk);
 
             int ng = 0;
             foreach (TestCase t in cases)
@@ -1707,22 +1708,89 @@ namespace AutoCopy.Tests
 
         private static void T57_DedupChoice()
         {
-            Eq(false, new JobConfig().DedupLarge, "新しいジョブは使わない");
-            JobConfig old = Json.Deserialize<JobConfig>("{\"Name\":\"旧\",\"DedupLarge\":true,\"DedupMinMB\":10}");
-            Eq(false, old.DedupLarge, "前の版の設定（初期値オン）は引き継がない");
-            JobConfig on = Json.Deserialize<JobConfig>("{\"Name\":\"新\",\"DedupEnabled\":true,\"DedupMinMB\":20}");
-            Eq(true, on.DedupLarge, "使うと選んだ設定は保存・読み込みできる");
-            Eq(20, on.DedupMinMB, "大きさ");
-            string saved = Json.Serialize(on);
-            True(saved.Contains("DedupEnabled") && !saved.Contains("\"DedupLarge\""), "保存の名前");
-            Eq(true, Json.Deserialize<JobConfig>(saved).DedupLarge, "保存して読み直しても使う");
+            Eq(DedupMode.Ask, new JobConfig().Dedup, "新しいジョブは「見つけたら毎回選ぶ」");
+            Eq(DedupMode.Auto, Json.Deserialize<JobConfig>("{\"Name\":\"v17\",\"DedupEnabled\":true}").Dedup, "v1.7 で「使う」にしていたジョブは「自動」");
+            Eq(DedupMode.Ask, Json.Deserialize<JobConfig>("{\"Name\":\"v17\",\"DedupEnabled\":false}").Dedup, "v1.7 で「使わない」（初期値）だったジョブは「毎回選ぶ」");
+            Eq(DedupMode.Ask, Json.Deserialize<JobConfig>("{\"Name\":\"古い\"}").Dedup, "設定がなければ「毎回選ぶ」");
+            JobConfig off = Json.Deserialize<JobConfig>("{\"Name\":\"新\",\"DedupMode\":\"off\",\"DedupMinMB\":20}");
+            Eq(DedupMode.Off, off.Dedup, "使わない");
+            Eq(20, off.DedupMinMB, "大きさ");
+            string saved = Json.Serialize(off);
+            True(saved.Contains("DedupMode") && !saved.Contains("DedupEnabled"), "保存の名前: " + saved.Substring(0, Math.Min(80, saved.Length)));
+            Eq(DedupMode.Off, Json.Deserialize<JobConfig>(saved).Dedup, "保存して読み直しても同じ");
             // 使わないジョブでは重複しても普通にコピー
             Box b = new Box("T57");
+            b.Job.Dedup = DedupMode.Off;
             WriteBig(b.S("a.bin"), 11, 2, 300);
             WriteBig(b.S("b.bin"), 11, 2, 300);
             RunResult r = b.Run();
-            Eq(0, r.Deduped, "省略しない");
+            Eq(0, r.Deduped + r.DedupAsked, "省略も確認もしない");
             Eq(2, r.Copied, "両方コピー");
+            Eq(0, DedupStore.PendingCount(b.Job.Id), "確認待ちなし");
+        }
+
+        private static void T58_DedupAsk()
+        {
+            // 見つけたら毎回選ぶ（初期値）：選ぶまでコピーせずに待ち、確認が必要なものとして知らせる
+            Box b = new Box("T58");
+            Eq(DedupMode.Ask, b.Job.Dedup, "初期値");
+            WriteBig(b.S("動画\\元.mp4"), 11, 3, 300);
+            WriteBig(b.S("動画\\写し.mp4"), 11, 3, 300);
+            WriteBig(b.S("資料\\大.zip"), 11, 5, 300);
+            WriteBig(b.S("資料\\大_コピー.zip"), 11, 5, 300);
+            RunResult r = b.Run();
+            Eq(2, r.Copied, "1つ目だけコピー");
+            Eq(2, r.DedupAsked, "2つ目は扱いを選ぶまで待つ");
+            True(r.DedupNew, "新しく見つかった");
+            True(!File.Exists(b.D("動画\\写し.mp4")) && !File.Exists(b.D("動画\\写し.mp4" + AppPaths.PlaceholderSuffix)), "まだコピーもテキストもしない");
+            DedupBook book = DedupStore.Get(b.Job.Id);
+            Eq(2, book.Pending.Count, "確認待ち");
+            True(AppCore.AttentionItems().Exists(delegate(AppCore.AttentionItem x) { return x.Text.Contains("大きいファイルの重複 2件"); }), "確認が必要なものとして知らせる");
+            RunResult r2 = b.Run();
+            Eq(2, r2.DedupAsked, "2回目も待つ");
+            True(!r2.DedupNew, "同じものは新しく知らせない");
+
+            // 予測でも「扱いを選ぶ」と出る
+            RunResult pv = AppCore.DryRun(b.Job, false);
+            Eq(2, pv.Plan.FindAll(delegate(PlanItem p) { return p.Kind == PlanKind.DedupAsk; }).Count, "予測：扱いを選ぶ");
+
+            // テキストにする
+            DedupPendingItem v = book.Pending.Find(delegate(DedupPendingItem x) { return x.Rel == "動画\\写し.mp4"; });
+            Eq("動画\\元.mp4", v.Target, "1つ目");
+            Eq<string>(null, LargeDup.Resolve(b.Job, b.App, b.State, v, "text"), "テキストにする");
+            True(File.Exists(b.D("動画\\写し.mp4" + AppPaths.PlaceholderSuffix)) && !File.Exists(b.D("動画\\写し.mp4")), "テキストを置いた");
+            // 普通にコピーする
+            DedupPendingItem z = book.Pending.Find(delegate(DedupPendingItem x) { return x.Rel == "資料\\大_コピー.zip"; });
+            Eq<string>(null, LargeDup.Resolve(b.Job, b.App, b.State, z, "copy"), "普通にコピー");
+            True(File.Exists(b.D("資料\\大_コピー.zip")), "コピーした");
+            Eq(0, book.Pending.Count, "確認待ちは0件");
+            b.Apply(); AppCore.SaveState(b.Job.Id);
+            RunResult r3 = b.Run();
+            Eq(0, r3.Copied + r3.Overwritten + r3.Deduped + r3.DedupAsked, "選んだ後は何もしない");
+
+            // 重複チェックの画面：普通にコピー済みの重複も選べる（テキストにすると削除済みへ移して容量を空ける）
+            Box c = new Box("T58c");
+            c.Job.Dedup = DedupMode.Off;
+            WriteBig(c.S("a.mov"), 11, 7, 300);
+            WriteBig(c.S("b.mov"), 11, 7, 300);
+            c.Run();
+            True(File.Exists(c.D("a.mov")) && File.Exists(c.D("b.mov")), "両方コピー済み");
+            Dictionary<string, string> srcBefore = Snapshot(c.Src);
+            c.Job.Dedup = DedupMode.Ask;
+            DupResult d = DupChecker.Run(c.Job, c.App, c.State, CancellationToken.None);
+            Eq(1, d.LargePending, "重複チェックで見つける");
+            DedupPendingItem w = DedupStore.Get(c.Job.Id).Pending[0];
+            True(w.Copied && w.Origin == "check", "コピー済みとして出す");
+            Eq<string>(null, LargeDup.Resolve(c.Job, c.App, c.State, w, "text"), "テキストにする");
+            True(!File.Exists(c.D(w.Rel)) && File.Exists(c.D(w.Rel + AppPaths.PlaceholderSuffix)), "コピー先はテキストに");
+            List<TrashStore.Batch> tb = TrashStore.List(c.Dst);
+            True(tb.Count == 1 && tb[0].FileCount == 1, "コピー済みのものは削除済みへ（元に戻せる）");
+            CompareSnapshots(srcBefore, Snapshot(c.Src));   // コピー元は変えない
+            AppCore.SaveState(c.Job.Id);
+            RunResult rc = c.Run();
+            Eq(0, rc.Copied + rc.DedupAsked, "次のコピーでも戻さない");
+            DupResult d2 = DupChecker.Run(c.Job, c.App, c.State, CancellationToken.None);
+            Eq(0, d2.LargePending, "選んだものは出さない");
         }
 
         private static void T42_Performance()

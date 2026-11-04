@@ -16,7 +16,8 @@ namespace AutoCopy
         [DataMember] public string DestRoot;
         [DataMember] public List<DupGroup> Groups = new List<DupGroup>();
         [DataMember] public int OrphanCount;
-        [DataMember] public bool Seen;   // 結果の画面で一度見た（見るまでは「確認が必要」として目立たせる）
+        [DataMember] public bool Seen;
+        [DataMember] public int LargePending;   // 大きいファイルの重複で、扱いを選んでもらうもの   // 結果の画面で一度見た（見るまでは「確認が必要」として目立たせる）
 
         public int DeleteCandidateCount()
         {
@@ -280,6 +281,30 @@ namespace AutoCopy
                 g.Title = "孤立ファイル同士で中身が同じ　" + PathUtil.FileName(l[0]);
                 foreach (string r in l) { ScanItem it = ds.Files[r]; g.Entries.Add(Entry(r, false, 1, it.Size, it.Mtime, "orphan", false)); }
                 res.Groups.Add(g);
+            }
+
+            // 大きいファイルの重複（コピー元の中で中身が同じ）：扱いを選んでもらう
+            if (job.DedupOn)
+            {
+                ScanResult sx = Scanner.Scan(src, job.IncludeSubdirs, new ExcludeMatcher(job.Exclude), false, ct);
+                List<LargeDupGroup> groups = LargeDup.Find(src, dst, sx, recs, job.DedupMinBytes, null, ct, null);
+                DedupBook book = DedupStore.Get(job.Id);
+                List<DedupPendingItem> pend = new List<DedupPendingItem>();
+                foreach (LargeDupGroup g in groups)
+                    foreach (string o in g.Others)
+                    {
+                        string dec;
+                        lock (book) dec = book.DecisionFor(o, g.Hash);
+                        if (dec != null) continue;                                   // もう選んである
+                        FileRecord rec;
+                        if (recs.TryGetValue(o, out rec) && rec.PlaceholderOf != null) continue;   // もうテキスト
+                        bool copied = LargeDup.IsNormalCopy(dst, o, sx.Files[o], recs);
+                        if (!copied && job.Dedup == DedupMode.Auto) continue;       // 次のコピーで自動でテキストになる
+                        pend.Add(LargeDup.Pending(o, g, sx.Files[o], "check", copied));
+                    }
+                lock (book) book.ReplacePending("check", pend);
+                DedupStore.Save(job.Id);
+                lock (book) res.LargePending = book.Pending.Count;
             }
 
             // 空のフォルダ（コピー元にないもの）

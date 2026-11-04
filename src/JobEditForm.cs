@@ -17,7 +17,7 @@ namespace AutoCopy
         // 基本
         private TextBox tName, tSrc, tDst, tStart, tEnd;
         private CheckBox cEnabled, cSub, cWindow, cDelay, cFollow, cBackup;
-        private RadioButton rDedupOff, rDedupOn;
+        private RadioButton rDedupOff, rDedupAsk, rDedupOn;
         private CheckBox cAlwaysRename;
         private Label lSyncNote, lDedupNote;
         private RadioButton rDist, rLocal, rAppend, rMirror, rSync, rAsk, rSkip, rOver;
@@ -153,14 +153,15 @@ namespace AutoCopy
                 Ui.Row(Ui.L("同じとみなす日時の差", 160), nTol, Ui.L("秒以内")),
                 cBackup));
 
-            rDedupOff = Ui.R("使わない（重複していてもすべてコピーする）", true);
-            rDedupOn = Ui.R("使う：中身が同じ大きいファイルは1つだけコピーし、2つ目以降は保管場所を書いたテキストを置く", false);
+            rDedupOff = Ui.R("使わない（重複していてもすべてコピーする）", false);
+            rDedupAsk = Ui.R("見つけたら毎回選ぶ（初期値）：選ぶまで2つ目以降はコピーせずに待ち、お知らせする", true);
+            rDedupOn = Ui.R("自動でテキストにする：2つ目以降はコピーせず、1つ目の保管場所を書いたテキストを置く", false);
             rDedupOn.CheckedChanged += delegate { UpdateEnabled(); };
             nDedup = Ui.N(1, 1000000, 10, 72);
-            lDedupNote = Ui.Wrap("2つ目以降の代わりに「〇〇" + AppPaths.PlaceholderSuffix + "」を置き、1つ目の保管場所を書きます。中身はファイル全体で比べます（同じ大きさのものだけ読みます）。すでに普通にコピー済みのファイルはそのまま残します。", 600);
+            lDedupNote = Ui.Wrap("「テキスト」は「〇〇" + AppPaths.PlaceholderSuffix + "」で、1つ目の保管場所を書きます。中身はファイル全体で比べます（同じ大きさのものだけ読みます）。毎回選ぶ場合は、重複チェックの画面で「テキストにする」か「普通にコピー」を選びます。普通にコピー済みの重複も、重複チェックの画面でテキストにできます。", 600);
             lDedupNote.ForeColor = Ui.Quiet;
             b.Controls.Add(Ui.Section("大きいファイルの重複（コピー元の中で中身が同じファイル）",
-                Ui.Column(rDedupOff, rDedupOn),
+                Ui.Column(rDedupOff, rDedupAsk, rDedupOn),
                 Ui.Row(Ui.L("　　対象の大きさ", 160), nDedup, Ui.L("MB 以上")),
                 lDedupNote));
 
@@ -198,7 +199,7 @@ namespace AutoCopy
         {
             EventHandler h = delegate { UpdateEnabled(); };
             foreach (CheckBox c in new CheckBox[] { cWindow, cDelay, cMax, cOlder, cDup }) c.CheckedChanged += h;
-            foreach (RadioButton r in new RadioButton[] { rAppend, rMirror, rSync, rAsk, rSkip, rOver, rDaily, rWeekly, rManual, rDedupOff, rDedupOn }) r.CheckedChanged += h;
+            foreach (RadioButton r in new RadioButton[] { rAppend, rMirror, rSync, rAsk, rSkip, rOver, rDaily, rWeekly, rManual, rDedupOff, rDedupAsk, rDedupOn }) r.CheckedChanged += h;
             nRetry.ValueChanged += h;
         }
 
@@ -218,9 +219,8 @@ namespace AutoCopy
             // 上書きのルール：常に上書き・確認のときだけ「退避」に意味がある（上書きしないなら不要）
             cBackup.Enabled = !rSkip.Checked;
             // 大きいファイルの重複：同期では使えない。使うときだけ大きさを決められる
-            rDedupOn.Enabled = rDedupOff.Enabled = !sync;
-            if (sync && rDedupOn.Checked) { rDedupOff.Checked = true; }
-            nDedup.Enabled = rDedupOn.Checked && !sync;
+            rDedupOn.Enabled = rDedupAsk.Enabled = rDedupOff.Enabled = !sync;
+            nDedup.Enabled = !rDedupOff.Checked && !sync;
             lDedupNote.Enabled = nDedup.Enabled;
             // 除外ルール
             nMax.Enabled = cbMaxUnit.Enabled = cMax.Checked;
@@ -265,8 +265,11 @@ namespace AutoCopy
                 expect(!rSync.Checked && !rMirror.Checked, "追加・更新を選んでも他の方式の選択が外れない");
                 rDedupOff.Checked = true; UpdateEnabled();
                 expect(rDedupOn.Enabled && !nDedup.Enabled, "重複の省略を使わないのに大きさを変えられる");
+                expect(!rDedupAsk.Checked && !rDedupOn.Checked, "使わないを選んでも他の選択が外れない");
+                rDedupAsk.Checked = true; UpdateEnabled();
+                expect(nDedup.Enabled && !rDedupOff.Checked, "毎回選ぶのに大きさを変えられない");
                 rDedupOn.Checked = true; UpdateEnabled();
-                expect(nDedup.Enabled, "重複の省略を使うのに大きさを変えられない");
+                expect(nDedup.Enabled && !rDedupAsk.Checked, "自動にしたのに大きさを変えられない");
                 cWindow.Checked = false; UpdateEnabled();
                 expect(!tStart.Enabled && !tEnd.Enabled, "時間帯を限定しないのに時刻を変えられる");
                 cWindow.Checked = true; UpdateEnabled();
@@ -512,8 +515,9 @@ namespace AutoCopy
             rMirror.Checked = j.Mirror && !j.Sync;
             rSync.Checked = j.Sync;
             rAppend.Checked = !j.Mirror && !j.Sync;
-            rDedupOn.Checked = j.DedupLarge;
-            rDedupOff.Checked = !j.DedupLarge;
+            rDedupOff.Checked = j.Dedup == DedupMode.Off;
+            rDedupAsk.Checked = j.Dedup == DedupMode.Ask;
+            rDedupOn.Checked = j.Dedup == DedupMode.Auto;
             nDedup.Value = Clamp(nDedup, j.DedupMinMB);
             nMirrorCount.Value = Clamp(nMirrorCount, j.MirrorMaxCount);
             nMirrorPct.Value = Clamp(nMirrorPct, j.MirrorMaxPercent);
@@ -595,7 +599,7 @@ namespace AutoCopy
             j.Dest = ToUncIfNetworkDrive(tDst.Text.Trim());
             j.Mirror = rMirror.Checked;
             j.Sync = rSync.Checked;
-            j.DedupLarge = rDedupOn.Checked && !rSync.Checked;
+            j.Dedup = rDedupOff.Checked ? DedupMode.Off : rDedupOn.Checked ? DedupMode.Auto : DedupMode.Ask;
             j.DedupMinMB = (int)nDedup.Value;
             j.MirrorMaxCount = (int)nMirrorCount.Value;
             j.MirrorMaxPercent = (int)nMirrorPct.Value;

@@ -143,6 +143,9 @@ namespace AutoCopy
             AppCore.Settings = s;
             AppCore.SaveSettings();
 
+            // 大きいファイルの重複の見本（中身が同じ12MB）：毎回選ぶ（初期値）なので、2つ目は選ぶまで待つ
+            Sized(Path.Combine(src1, "会議録画\\定例会_10月.mp4"), 12 * 1024 * 1024, 20);
+            Sized(Path.Combine(src1, "共有用\\定例会_10月_コピー.mp4"), 12 * 1024 * 1024, 20);
             // 1回目のコピー → 名前変更（追従オフで取りこぼし）→ 重複チェック → 上書き確認
             JobState st = AppCore.GetState(a.Id);
             new CopyEngine(a, s, st, false, false, CancellationToken.None).Run();
@@ -302,7 +305,7 @@ namespace AutoCopy
                     f.StartPosition = FormStartPosition.Manual; f.Location = new Point(20, 20);
                     f.Show(); Pump(800);
                     List<string> bad = f.SelfTestEnabled();
-                    if (bad.Count == 0) lines.Add("| ジョブ設定（" + j.Name + "） | OK | 22項目 |");
+                    if (bad.Count == 0) lines.Add("| ジョブ設定（" + j.Name + "） | OK | 26項目 |");
                     foreach (string x in bad) { lines.Add("| ジョブ設定（" + j.Name + "） | NG | " + x + " |"); ng++; }
                 }
                 catch (Exception ex) { errors.Add("操作できる項目の確認: " + ex); }

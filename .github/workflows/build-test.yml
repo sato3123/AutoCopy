@@ -51,7 +51,7 @@ jobs:
         shell: pwsh
         run: |
           $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-          $core = 'Models','Util','Native','NetAccess','SafeFs','StateStore','Exclude','Scanner','Progress','CopyEngine','DupChecker','Usage','Updater','Logger','Distribution','SystemIntegration','AppCore','AssemblyInfo' | ForEach-Object { "src\$_.cs" }
+          $core = 'Models','Util','Native','NetAccess','SafeFs','StateStore','Exclude','Scanner','Progress','CopyEngine','DupChecker','LargeDup','Usage','Updater','Logger','Distribution','SystemIntegration','AppCore','AssemblyInfo' | ForEach-Object { "src\$_.cs" }
           New-Item -ItemType Directory -Force test | Out-Null
           & $csc /nologo /target:exe /platform:anycpu /codepage:65001 /out:test\AutoCopyTests.exe `
             /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Runtime.Serialization.dll /r:System.Xml.dll /r:System.Security.dll `

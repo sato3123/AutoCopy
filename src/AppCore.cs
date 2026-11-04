@@ -152,6 +152,7 @@ namespace AutoCopy
                 JobState s;
                 if (states.TryGetValue(id, out s)) { s.Delete(); states.Remove(id); }
             }
+            DedupStore.Forget(id);
         }
 
         // ---------------- スケジュール ----------------
@@ -350,6 +351,9 @@ namespace AutoCopy
                     if (res.PendingDeletes > 0)
                         Notify(NoticeLevel.Warning, "ミラー：" + res.PendingDeletes + "件の削除を保留しています",
                             job.Name + "：一度に多くのファイルが削除されるため、確認をお待ちしています。", "pending", job.Id);
+                    if (res.DedupNew && res.DedupAsked > 0)
+                        Notify(NoticeLevel.Warning, "大きいファイルの重複 " + res.DedupAsked + "件：扱いを選んでください",
+                            job.Name + "：中身が同じ大きいファイルを見つけました。選ぶまでコピーせずに待っています（1つ目はコピー済み）。", "dup", job.Id);
                     if (res.Renamed > 0)
                         AddNoticeOnly(NoticeLevel.Ok, job.Name + "：名前の変更 " + res.Renamed + "件 をコピー先にも反映しました（再コピーなし）", "log", job.Id);
                     if (res.Locked > 0)
@@ -431,6 +435,9 @@ namespace AutoCopy
                     int n = r.DeleteCandidateCount();
                     Logger.Write(job.Name, "DUPCHECK", "重複チェック完了：削除候補 " + n + "件（" + Fmt.Size(r.DeleteCandidateBytes()) + "）・グループ " + r.Groups.Count + "件",
                         -1, (DateTime.Now - t0).TotalSeconds);
+                    if (r.LargePending > 0)
+                        Notify(NoticeLevel.Warning, "大きいファイルの重複 " + r.LargePending + "件：扱いを選んでください",
+                            job.Name + "：中身が同じ大きいファイルがあります。テキストにする（容量を節約）か、普通にコピーするかを選んでください。", "dup", job.Id);
                     if (r.Groups.Count > 0)
                         Notify(NoticeLevel.Info, "重複チェック：" + (n > 0 ? "削除候補 " + n + "件（" + Fmt.Size(r.DeleteCandidateBytes()) + "）" : "情報 " + r.Groups.Count + "件"),
                             job.Name + "：結果を確認してください。削除は確認後に行います。", "dup", job.Id);
@@ -627,6 +634,8 @@ namespace AutoCopy
             }
             foreach (JobConfig j in Settings.Jobs.ToArray())
             {
+                int lp = DedupStore.PendingCount(j.Id);
+                if (lp > 0 && j.DedupOn) list.Add(Item(j.Name + "：大きいファイルの重複 " + lp + "件 の扱いを選んでください", "dup", j.Id, false));
                 int n = DupChecker.UnseenCandidates(j.Id);
                 if (n > 0) list.Add(Item(j.Name + "：重複チェックで削除候補が " + n + "件 見つかりました", "dup", j.Id, false));
             }

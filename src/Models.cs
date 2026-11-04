@@ -109,15 +109,23 @@ namespace AutoCopy
         [DataMember] public bool DupShowOrphans;
         [DataMember] public bool DupShowEmptyFolders;
         [DataMember] public bool Sync;                // 複数PCで同期（双方向・削除は伝えない）
-        // 大きいファイルの重複は1つだけコピーし、残りは場所を書いたテキストにする（使うかどうかはジョブごとに選ぶ。初期値：使わない）
-        // v1.5 の「DedupLarge」（初期値オン）は引き継がず、改めて選んでもらう
-        [DataMember(Name = "DedupEnabled")] public bool DedupLarge;
+        // 大きいファイルの重複（コピー元の中で中身が同じ）の扱い：off = 使わない / ask = 見つけたら毎回選ぶ（初期値） / auto = 自動でテキストにする
+        [DataMember(Name = "DedupMode")] public string Dedup;
+        // v1.7 の「使う・使わない」（使う = 自動でテキスト）。読み込んだら DedupMode に移す
+        [DataMember(Name = "DedupEnabled", EmitDefaultValue = false)] private bool oldDedupEnabled;
+
+        /// <summary>互換用：true = 自動でテキストにする、false = 使わない</summary>
+        public bool DedupLarge
+        {
+            get { return Dedup == DedupMode.Auto; }
+            set { Dedup = value ? DedupMode.Auto : DedupMode.Off; }
+        }
         [DataMember] public int DedupMinMB;
 
         public JobConfig() { SetDefaults(); }
 
         [OnDeserializing]
-        private void OnDeserializing(StreamingContext c) { SetDefaults(); }
+        private void OnDeserializing(StreamingContext c) { SetDefaults(); Dedup = null; }   // 保存されていなければ前の版の設定から決める
 
         [OnDeserialized]
         private void OnDeserialized(StreamingContext c)
@@ -128,13 +136,16 @@ namespace AutoCopy
             if (string.IsNullOrEmpty(NewerDestPolicy)) NewerDestPolicy = NewerPolicy.Ask;
             if (string.IsNullOrEmpty(DupSchedule)) DupSchedule = "daily";
             if (DedupMinMB <= 0) DedupMinMB = 10;
+            if (string.IsNullOrEmpty(Dedup)) Dedup = oldDedupEnabled ? DedupMode.Auto : DedupMode.Ask;
+            if (Dedup != DedupMode.Off && Dedup != DedupMode.Ask && Dedup != DedupMode.Auto) Dedup = DedupMode.Ask;
+            oldDedupEnabled = false;
             if (Sync) Mirror = false;
         }
 
         /// <summary>方式の表示名</summary>
         public string ModeLabel { get { return Sync ? "同期（複数PC）" : Mirror ? "ミラー" : "追加・更新"; } }
         /// <summary>大きいファイルの重複を省略するか（同期では使わない：他のPCにテキストが届いてしまうため）</summary>
-        public bool DedupOn { get { return DedupLarge && !Sync; } }
+        public bool DedupOn { get { return Dedup != DedupMode.Off && !Sync; } }
         public long DedupMinBytes { get { return Math.Max(1, DedupMinMB) * 1024L * 1024; } }
 
         private void SetDefaults()
@@ -172,7 +183,8 @@ namespace AutoCopy
             DupShowOrphans = false;
             DupShowEmptyFolders = true;
             Sync = false;
-            DedupLarge = false;
+            Dedup = DedupMode.Ask;
+            oldDedupEnabled = false;
             DedupMinMB = 10;
         }
 
