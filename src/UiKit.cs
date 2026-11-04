@@ -243,7 +243,8 @@ namespace AutoCopy
             foreach (object o in c.Items) need = Math.Max(need, TextWidth(c.GetItemText(o), c.Font));
             need += SystemInformation.VerticalScrollBarWidth + 12;
             if (need > c.Width) c.Width = Math.Min(need, S(600));
-            if (c.Parent != null) c.Parent.PerformLayout();   // 大きくなった分だけ並びを直す
+            // 大きくなった分だけ並びを直す（入れ物が自動の大きさなら、上の入れ物まで）
+            for (Control p = c.Parent; p != null && !(p is Form); p = p.Parent) p.PerformLayout();
             if (c.DropDownWidth < need) c.DropDownWidth = need;
         }
 

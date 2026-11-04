@@ -237,7 +237,7 @@ namespace AutoCopy
             tPat = Ui.T("", 460);
             b.Controls.Add(Ui.Section("ファイルの種類", presets,
                 Ui.Row(Ui.L("追加の拡張子", 110), tExt, Ui.Hint("例：.log; .psd")),
-                Ui.Row(Ui.L("ファイル名", 110), tPat, Ui.Hint("* と ? が使えます"))));
+                Ui.Row(Ui.L("ファイル名", 110), Ui.Column(tPat, Ui.Hint("* と ? が使えます")))));
 
             cMax = Ui.C("", false);
             nMax = Ui.N(1, 1000000, 500, 72);
