@@ -307,11 +307,12 @@ namespace AutoCopy
             cbJob = Ui.Combo(260);
             cbJob.SelectedIndexChanged += delegate { LoadResult(); };
             summary = Ui.L("");
-            FlowLayoutPanel top = Ui.Row(Ui.L("ジョブ"), cbJob, Ui.B("今すぐ再チェック", delegate { Recheck(); }), summary);
+            Ui.FitToForm(summary, 1000);
+            FlowLayoutPanel top = Ui.Column(Ui.Row(Ui.L("ジョブ"), cbJob, Ui.B("今すぐ再チェック", delegate { Recheck(); })), summary);
             top.Dock = DockStyle.Top;
             top.Padding = new Padding(10, 8, 10, 4);
 
-            lv = Ui.List("操作|90", "コピー先のパス|440", "ファイル数|80", "サイズ|90", "更新日時|130", "判定|160");
+            lv = Ui.List("操作|90", "コピー先のパス|360", "ファイル数|70", "サイズ|80", "更新日時|120", "判定|300");
             lv.CheckBoxes = true;
             lv.Dock = DockStyle.Fill;
             lv.ItemCheck += OnItemCheck;
