@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -68,6 +69,21 @@ namespace AutoCopy
             c.VisibleChanged += delegate { if (c.Visible) fit(c, EventArgs.Empty); };
         }
 
+        public static void Relayout(Control root)
+        {
+            List<Control> all = new List<Control>();
+            Stack<Control> st = new Stack<Control>();
+            st.Push(root);
+            while (st.Count > 0)
+            {
+                Control c = st.Pop();
+                all.Add(c);
+                foreach (Control ch in c.Controls) st.Push(ch);
+            }
+            for (int i = all.Count - 1; i >= 0; i--)
+                if (all[i] is ScrollableControl && all[i].Controls.Count > 0) all[i].PerformLayout();
+        }
+
         /// <summary>文字の幅（px）</summary>
         public static int TextWidth(string text, Font font)
         {
@@ -110,6 +126,8 @@ namespace AutoCopy
             }
             catch (Exception) { }
             f.ClientSize = want;
+            // 表示した直後に、部品の大きさ（文字の大きさで変わる）に合わせて並びを奥から順に直す
+            f.Shown += delegate { Relayout(f); };
             f.BackColor = Color.FromArgb(249, 249, 249);
         }
 

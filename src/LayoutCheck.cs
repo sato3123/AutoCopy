@@ -139,8 +139,9 @@ namespace AutoCopy
                 if (c.Right > cs.Width + 1 || c.Bottom > cs.Height + 1)
                 {
                     int over = Math.Max(c.Right - cs.Width, c.Bottom - cs.Height);
+                    string dir = c.Right - cs.Width >= c.Bottom - cs.Height ? "右" : "下";
                     if (c.Left < cs.Width && c.Top < cs.Height)
-                        issues.Add(Name(c) + "：枠からはみ出して一部が見えない（" + over + "px）");
+                        issues.Add(Name(c) + "：枠からはみ出して一部が見えない（" + dir + "に " + over + "px）");
                     else
                         issues.Add(Name(c) + "：枠の外にあって見えない");
                 }
