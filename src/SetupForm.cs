@@ -30,7 +30,7 @@ namespace AutoCopy
             this.env = env;
             this.firstRun = firstRun;
             bool dist = env != null;
-            Ui.SetupDialog(this, "自動コピー - " + (firstRun ? "初回セットアップ" : "配布設定の読み込み"), 700, dist ? 720 : 520);
+            Ui.SetupDialog(this, "自動コピー - " + (firstRun ? "初回セットアップ" : "配布設定の読み込み"), 700, dist ? 660 : 520);
             FlowLayoutPanel b = Ui.Body();
 
             b.Controls.Add(Ui.Heading(firstRun ? "このPCで自動コピーを使い始めます" : "新しい配布設定を読み込みます"));
@@ -82,7 +82,7 @@ namespace AutoCopy
             b.Controls.Add(cShortcut);
 
             Button start = Ui.B(firstRun ? "開始" : "読み込む", delegate { Finish(); });
-            start.MinimumSize = new Size(88, 28);
+            start.MinimumSize = new Size(Ui.S(88), Ui.S(28));
             Button cancel = Ui.B("キャンセル", delegate { DialogResult = DialogResult.Cancel; Close(); });
             AcceptButton = start;
             CancelButton = cancel;

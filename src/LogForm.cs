@@ -22,8 +22,8 @@ namespace AutoCopy
         {
             Ui.SetupForm(this, "ログ", 1100, 640);
             cbPc = Ui.Combo(150, "このPC", "すべてのPC");
-            dFrom = new DateTimePicker(); dFrom.Format = DateTimePickerFormat.Short; dFrom.Width = 110; dFrom.Value = DateTime.Today;
-            dTo = new DateTimePicker(); dTo.Format = DateTimePickerFormat.Short; dTo.Width = 110; dTo.Value = DateTime.Today;
+            dFrom = new DateTimePicker(); dFrom.Format = DateTimePickerFormat.Short; dFrom.Width = Ui.S(110); dFrom.Value = DateTime.Today;
+            dTo = new DateTimePicker(); dTo.Format = DateTimePickerFormat.Short; dTo.Width = Ui.S(110); dTo.Value = DateTime.Today;
             cbJob = Ui.Combo(140, "すべて");
             foreach (JobConfig j in AppCore.Settings.Jobs) cbJob.Items.Add(j.Name);
             cbType = Ui.Combo(130, "すべて", "エラーのみ", "コピー・上書き", "名前変更", "削除・復元", "確認待ち", "集計");
@@ -47,7 +47,7 @@ namespace AutoCopy
 
             pcs = Ui.List("フォルダ名|140", "PC名|120", "更新|130", "ジョブ|160", "結果|80", "内容|440");
             pcs.Dock = DockStyle.Top;
-            pcs.Height = 120;
+            pcs.Height = Ui.S(120);
             pcs.Visible = false;
 
             lv = Ui.List("時刻|130", "PC（フォルダ名）|140", "ジョブ|130", "種類|90", "内容|500", "サイズ|80", "時間|60");
@@ -58,7 +58,7 @@ namespace AutoCopy
             status = Ui.L("");
             status.Dock = DockStyle.Bottom;
             status.AutoSize = false;
-            status.Height = 24;
+            status.Height = Ui.S(24);
             status.Padding = new Padding(8, 4, 8, 0);
             status.BackColor = Color.FromArgb(243, 243, 243);
 

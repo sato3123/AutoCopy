@@ -133,13 +133,13 @@ namespace AutoCopy
                 {
                     SizeF sz = g.MeasureString(names[i], Font);
                     float w = 14 + 6 + sz.Width + 16;
-                    if (cx + w > x + maxWidth && cx > x) { cx = x; cy += 22; }
+                    if (cx + w > x + maxWidth && cx > x) { cx = x; cy += Ui.S(22); }
                     using (Brush b = new SolidBrush(colors[i])) FillRound(g, b, new RectangleF(cx, cy + 3, 14, 14), 3);
                     g.DrawString(names[i], Font, ink, cx + 20, cy + 1);
                     cx += w;
                 }
             }
-            bottom = cy + 22;
+            bottom = cy + Ui.S(22);
         }
 
         protected static void FillRound(Graphics g, Brush b, RectangleF r, float radius)
@@ -196,7 +196,7 @@ namespace AutoCopy
             Invalidate();
         }
 
-        public override int PreferredHeight { get { return 90 + Math.Max(1, rows.Count) * 34; } }
+        public override int PreferredHeight { get { return Ui.S(90) + Math.Max(1, rows.Count) * Ui.S(34); } }
 
         protected override void Draw(Graphics g, Rectangle area)
         {
@@ -207,10 +207,10 @@ namespace AutoCopy
             float legendBottom;
             Legend(g, 16, 10, area.Width - 32, new string[] { "新規コピー", "上書き" }, new Color[] { Series[0], Series[1] }, out legendBottom);
 
-            float labelW = 190, valueW = 90;
+            float labelW = Ui.S(190), valueW = Ui.S(90);
             float left = 16 + labelW, right = area.Width - 16 - valueW;
             float plotW = Math.Max(50, right - left);
-            float rowH = 34, barH = 18;
+            float rowH = Ui.S(34), barH = Ui.S(18);
             float y0 = legendBottom + 8;
             float plotBottom = y0 + rows.Count * rowH;
 
@@ -241,7 +241,7 @@ namespace AutoCopy
                     string name = s.Folder ?? "";
                     g.DrawString(Clip(g, name, Font, labelW - 8), Font, ink, 16, cy - 1);
                     if (!string.IsNullOrEmpty(s.Pc))
-                        g.DrawString(Clip(g, s.Pc, small, labelW - 8), small, ink2, 16, cy + 15);
+                        g.DrawString(Clip(g, s.Pc, small, labelW - 8), small, ink2, 16, cy + Ui.S(15));
 
                     float wNew = (float)(s.CopiedBytes / unit / top) * plotW;
                     float wOver = (float)(s.OverwrittenBytes / unit / top) * plotW;
@@ -355,7 +355,7 @@ namespace AutoCopy
             double unit, step, top; string unitName;
             NiceScale(max, out unit, out unitName, out step, out top);
 
-            float left = 78, right = area.Width - 20, y0 = legendBottom + 14, bottom = area.Height - 40;
+            float left = Ui.S(78), right = area.Width - Ui.S(20), y0 = legendBottom + Ui.S(14), bottom = area.Height - Ui.S(40);
             float plotW = Math.Max(50, right - left), plotH = Math.Max(40, bottom - y0);
             float slot = plotW / days.Count;
             float barW = Math.Max(2, Math.Min(42, slot * 0.62f));
@@ -472,7 +472,7 @@ namespace AutoCopy
             Invalidate();
         }
 
-        public override int PreferredHeight { get { return 70 + Math.Max(1, items.Count) * 34 + 16; } }
+        public override int PreferredHeight { get { return Ui.S(86) + Math.Max(1, items.Count) * Ui.S(34); } }
 
         private Color ColorOf(int i)
         {
@@ -498,7 +498,7 @@ namespace AutoCopy
             using (Font small = new Font(Font.FontFamily, 8.25f * Ui.TextScale))
             {
                 // --- 全体を100%とした帯（上位7項目＋残り） ---
-                float sy = 14, sh = 24;
+                float sy = Ui.S(14), sh = Ui.S(24);
                 float cx = x0;
                 long restBytes = 0;
                 for (int i = 0; i < items.Count; i++) if (i >= Colored || items[i].Rest) restBytes += items[i].Bytes;
@@ -526,11 +526,11 @@ namespace AutoCopy
                 // --- 容量の多い順の横棒 ---
                 long max = 0;
                 foreach (ShareItem it in items) max = Math.Max(max, it.Bytes);
-                float labelW = Math.Min(330, Math.Max(180, w * 0.36f));
-                float left = x0 + 20 + labelW, valueW = 150;
+                float labelW = Math.Min(Ui.S(330), Math.Max(Ui.S(180), w * 0.36f));
+                float left = x0 + 20 + labelW, valueW = Ui.S(150);
                 float plotW = Math.Max(40, x0 + w - valueW - left);
-                float rowH = 34, barH = 16;
-                float y0 = sy + sh + 18;
+                float rowH = Ui.S(34), barH = Ui.S(16);
+                float y0 = sy + sh + Ui.S(18);
                 for (int i = 0; i < items.Count; i++)
                 {
                     ShareItem it = items[i];
@@ -541,7 +541,7 @@ namespace AutoCopy
                     string label = it.Label + (it.Data != null ? "  ›" : "");
                     g.DrawString(PcVolumeChart.Clip(g, label, Font, labelW), Font, ink, x0 + 20, cy - 4);
                     if (!string.IsNullOrEmpty(it.Sub))
-                        g.DrawString(PcVolumeChart.Clip(g, it.Sub, small, labelW), small, ink2, x0 + 20, cy + 13);
+                        g.DrawString(PcVolumeChart.Clip(g, it.Sub, small, labelW), small, ink2, x0 + 20, cy + Ui.S(13));
                     float bw = max > 0 ? (float)(it.Bytes * (double)plotW / max) : 0;
                     if (bw > 0)
                         using (Brush b = new SolidBrush(c)) FillRound(g, b, new RectangleF(left, cy, Math.Max(1, bw), barH), 4);

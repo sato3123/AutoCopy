@@ -20,7 +20,7 @@ namespace AutoCopy
         public MainForm()
         {
             Ui.SetupForm(this, "自動コピー", 1210, 640);
-            MinimumSize = new Size(760, 480);
+            MinimumSize = new Size(Ui.S(760), Ui.S(480));
 
             // ---- ツールバー ----
             Button pauseBtn = Ui.B("一時停止 ▾", null);
@@ -96,7 +96,7 @@ namespace AutoCopy
             };
             Panel noticePanel = new Panel();
             noticePanel.Dock = DockStyle.Bottom;
-            noticePanel.Height = 170;
+            noticePanel.Height = Ui.S(170);
             Label nh = Ui.L("最近のお知らせ（ダブルクリックで該当の画面を開きます）");
             nh.Font = Ui.Bold;
             nh.Dock = DockStyle.Top;
@@ -141,7 +141,7 @@ namespace AutoCopy
         {
             Label l = new Label();
             l.AutoSize = false;
-            l.Width = 1; l.Height = 26;
+            l.Width = Ui.S(1); l.Height = Ui.S(26);
             l.BackColor = Color.FromArgb(224, 224, 224);
             l.Margin = new Padding(6, 4, 6, 4);
             return l;

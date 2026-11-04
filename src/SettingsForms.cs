@@ -19,7 +19,7 @@ namespace AutoCopy
         public SettingsForm()
         {
             AppSettings s = AppCore.Settings;
-            Ui.SetupForm(this, "アプリ設定", 760, 800);
+            Ui.SetupForm(this, "アプリ設定", 760, 660);
             FlowLayoutPanel b = Ui.Body();
 
             lFolder = Ui.L(s.FolderName);
@@ -62,7 +62,7 @@ namespace AutoCopy
                 Ui.Hint("ダブルクリックすると、動いている自動コピーに実行を指示します。")));
 
             Button ok = Ui.B("OK", delegate { if (Save()) Close(); });
-            ok.MinimumSize = new Size(88, 28);
+            ok.MinimumSize = new Size(Ui.S(88), Ui.S(28));
             Controls.Add(b);
             Controls.Add(Ui.Footer(Ui.B("キャンセル", delegate { Close(); }), ok, Ui.B("操作説明書を開く", delegate { Ui.OpenManual(); })));
             UpdateDist();
@@ -285,7 +285,7 @@ namespace AutoCopy
         public DistCreateForm()
         {
             AppSettings s = AppCore.Settings;
-            Ui.SetupDialog(this, "配布フォルダを作成", 740, 700);
+            Ui.SetupDialog(this, "配布フォルダを作成", 740, 660);
             FlowLayoutPanel b = Ui.Body();
             b.Controls.Add(Ui.Wrap("このPCの設定のうち「配布設定に含める」ジョブと、ログ保管先・保存期間・ID とパスワードを配布用のファイルにします。各PCのフォルダ名・このPCだけのジョブは含めません。", 660));
 
@@ -316,7 +316,7 @@ namespace AutoCopy
 
             servers = Distribution.ServersUsed(s, true);
             lvCred = Ui.List("サーバー|200", "ユーザーID|200", "状態|160");
-            lvCred.Size = new Size(600, 110);
+            lvCred.Size = new Size(Ui.S(600), Ui.S(110));
             Button setCred = Ui.B("ID・パスワードを設定…", delegate
             {
                 if (lvCred.SelectedItems.Count == 0) { Ui.Info(this, "サーバーを選んでください。"); return; }
@@ -331,7 +331,7 @@ namespace AutoCopy
             b.Controls.Add(Ui.Hint("Windows 7 のPCに配る場合は、ndp48-x86-x64-allos-jpn.exe を AutoCopy.exe と同じフォルダに置いておくと同梱されます。"));
 
             Button create = Ui.B("作成", delegate { Create(); });
-            create.MinimumSize = new Size(88, 28);
+            create.MinimumSize = new Size(Ui.S(88), Ui.S(28));
             Controls.Add(b);
             Controls.Add(Ui.Footer(Ui.B("キャンセル", delegate { Close(); }), create));
             FillCreds();

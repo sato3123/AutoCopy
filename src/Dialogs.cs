@@ -237,7 +237,7 @@ namespace AutoCopy
             h.Dock = DockStyle.Top;
             h.Padding = new Padding(8);
             h.AutoSize = false;
-            h.Height = 34;
+            h.Height = Ui.S(34);
             Controls.Add(lv);
             Controls.Add(h);
             Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Ui.B("選んだものを元に戻す", delegate { Restore(); }),

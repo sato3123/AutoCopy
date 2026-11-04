@@ -46,7 +46,7 @@ namespace AutoCopy
         {
             job = j;
             this.isNew = isNew;
-            Ui.SetupForm(this, "ジョブ設定 - " + j.Name, 800, 720);
+            Ui.SetupForm(this, "ジョブ設定 - " + j.Name, 800, 660);
             MinimizeBox = false;
 
             TabControl tabs = new TabControl();
@@ -57,7 +57,7 @@ namespace AutoCopy
             tabs.TabPages.Add(BuildConnect());
 
             Button ok = Ui.B("OK", delegate { if (Collect()) { DialogResult = DialogResult.OK; Close(); } });
-            ok.MinimumSize = new Size(88, 28);
+            ok.MinimumSize = new Size(Ui.S(88), Ui.S(28));
             Button cancel = Ui.B("キャンセル", delegate { DialogResult = DialogResult.Cancel; Close(); });
             Button test = Ui.B("テスト（コピーせずに件数を確認）", delegate { RunTest(); });
             FlowLayoutPanel foot = Ui.Footer(cancel, ok);
@@ -98,7 +98,7 @@ namespace AutoCopy
             tDst.TextChanged += delegate { UpdatePreview(); };
             b.Controls.Add(Ui.Row(Ui.L("コピー先フォルダ", 130), tDst, Ui.B("参照…", delegate { string f = Ui.BrowseFolder(this, PathUtil.Expand(tDst.Text, AppCore.Settings.FolderName), "コピー先フォルダを選んでください"); if (f != null) tDst.Text = f; })));
             lPreview = Ui.Hint("");
-            lPreview.MaximumSize = new Size(600, 0);
+            lPreview.MaximumSize = new Size(Ui.S(600), 0);
             Button ins = Ui.B("{フォルダ名} を末尾に入れる", delegate
             {
                 string t = tDst.Text.TrimEnd('\\');
@@ -225,7 +225,7 @@ namespace AutoCopy
 
             FlowLayoutPanel presets = new FlowLayoutPanel();
             presets.AutoSize = true;
-            presets.MaximumSize = new Size(700, 0);
+            presets.MaximumSize = new Size(Ui.S(700), 0);
             presets.WrapContents = true;
             foreach (string k in ExcludePresets.Keys)
             {
@@ -246,7 +246,7 @@ namespace AutoCopy
             cOlder = Ui.C("", false);
             dOlder = new DateTimePicker();
             dOlder.Format = DateTimePickerFormat.Short;
-            dOlder.Width = 120;
+            dOlder.Width = Ui.S(120);
             dOlder.Value = new DateTime(2020, 1, 1);
             cHidden = Ui.C("隠しファイル", true);
             cSystem = Ui.C("システムファイル", true);
@@ -257,7 +257,7 @@ namespace AutoCopy
                 Ui.Row(cHidden, cSystem)));
 
             lbFolders = new ListBox();
-            lbFolders.Size = new Size(380, 100);
+            lbFolders.Size = new Size(Ui.S(380), Ui.S(100));
             b.Controls.Add(Ui.Section("フォルダ（名前だけ書くと全階層が対象。相対パスも可）",
                 Ui.Row(lbFolders, Ui.Column(
                     Ui.B("フォルダを選んで追加…", delegate { AddFolderByBrowse(); }),
@@ -612,15 +612,15 @@ namespace AutoCopy
             {
                 Ui.SetupDialog(f, title, 420, 130);
                 Label l = Ui.L(prompt);
-                l.Location = new Point(12, 12);
+                l.Location = new Point(Ui.S(12), Ui.S(12));
                 TextBox t = Ui.T(value, 390);
-                t.Location = new Point(14, 40);
+                t.Location = new Point(Ui.S(14), Ui.S(40));
                 Button ok = Ui.B("OK", null);
                 ok.DialogResult = DialogResult.OK;
-                ok.Location = new Point(240, 80);
+                ok.Location = new Point(Ui.S(240), Ui.S(80));
                 Button cancel = Ui.B("キャンセル", null);
                 cancel.DialogResult = DialogResult.Cancel;
-                cancel.Location = new Point(320, 80);
+                cancel.Location = new Point(Ui.S(320), Ui.S(80));
                 f.Controls.AddRange(new Control[] { l, t, ok, cancel });
                 f.AcceptButton = ok; f.CancelButton = cancel;
                 return f.ShowDialog(owner) == DialogResult.OK ? t.Text : null;

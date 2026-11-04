@@ -20,6 +20,28 @@ namespace AutoCopy
         public static readonly Font Title = new Font("Meiryo UI", 12f * TextScale, FontStyle.Bold);
         public static readonly Font Small = new Font("Meiryo UI", 8.25f * TextScale);
 
+        /// <summary>
+        /// 画面の部品の大きさの倍率。Windows 7 の 125% 表示（XP 形式の拡大：文字だけが大きくなる）では 1.25。
+        /// Windows 8 以降・Windows 7 の 150% は Windows が画面ごと拡大するため 1。
+        /// </summary>
+        public static readonly float Factor = ReadFactor();
+
+        private static float ReadFactor()
+        {
+            float dpi = 1f;
+            try { using (Graphics g = Graphics.FromHwnd(IntPtr.Zero)) dpi = g.DpiX / 96f; } catch (Exception) { }
+            return Math.Max(1f, Math.Min(3f, dpi * TextScale));
+        }
+
+        /// <summary>100% 表示のときの大きさ（px）を、今の表示倍率に合わせる</summary>
+        public static int S(int px) { return (int)Math.Round(px * Factor); }
+
+        /// <summary>文字の幅（px）</summary>
+        public static int TextWidth(string text, Font font)
+        {
+            return TextRenderer.MeasureText(text ?? "", font).Width;
+        }
+
         private static float ReadScale()
         {
             try
@@ -46,7 +68,16 @@ namespace AutoCopy
             f.Font = Base;
             f.Icon = IconFactory.App;
             f.StartPosition = FormStartPosition.CenterScreen;
-            f.ClientSize = new Size(w, h);
+            // 小さい画面でもはみ出さないよう、作業領域（タスクバーを除いた画面）に収める。中身はスクロールできる
+            Size want = new Size(S(w), S(h));
+            try
+            {
+                Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+                want.Width = Math.Min(want.Width, wa.Width - 24);
+                want.Height = Math.Min(want.Height, wa.Height - 48);
+            }
+            catch (Exception) { }
+            f.ClientSize = want;
             f.BackColor = Color.FromArgb(249, 249, 249);
         }
 
@@ -72,8 +103,8 @@ namespace AutoCopy
         {
             Label l = L(text);
             l.AutoSize = false;
-            l.Width = width;
-            l.Height = 22;
+            l.Width = Math.Max(S(width), TextWidth(text, Base) + 8);   // 文字が大きくても欠けないように
+            l.Height = Math.Max(S(22), TextRenderer.MeasureText("あ", Base).Height + 6);
             return l;
         }
 
@@ -90,7 +121,7 @@ namespace AutoCopy
             Label l = new Label();
             l.Text = text;
             l.AutoSize = true;
-            l.MaximumSize = new Size(width, 0);
+            l.MaximumSize = new Size(S(width), 0);
             l.Margin = new Padding(3, 4, 3, 4);
             return l;
         }
@@ -110,7 +141,7 @@ namespace AutoCopy
             b.AutoSize = true;
             b.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             b.Padding = new Padding(6, 2, 6, 2);
-            b.MinimumSize = new Size(0, 28);
+            b.MinimumSize = new Size(0, S(28));
             b.UseVisualStyleBackColor = true;
             if (onClick != null) b.Click += onClick;
             return b;
@@ -120,7 +151,7 @@ namespace AutoCopy
         {
             TextBox t = new TextBox();
             t.Text = text ?? "";
-            t.Width = width;
+            t.Width = S(width);
             t.Margin = new Padding(3, 4, 3, 3);
             return t;
         }
@@ -151,7 +182,8 @@ namespace AutoCopy
             n.Minimum = min;
             n.Maximum = max;
             n.Value = Math.Max(min, Math.Min(max, value));
-            n.Width = width;
+            // 最大の桁数まで入れても数字が欠けない幅にする
+            n.Width = Math.Max(S(width), TextWidth(Math.Max(Math.Abs(max), Math.Abs(min)).ToString("0"), Base) + SystemInformation.VerticalScrollBarWidth + 14);
             n.TextAlign = HorizontalAlignment.Right;
             n.Margin = new Padding(3, 4, 3, 3);
             return n;
@@ -161,11 +193,22 @@ namespace AutoCopy
         {
             ComboBox c = new ComboBox();
             c.DropDownStyle = ComboBoxStyle.DropDownList;
-            c.Width = width;
+            c.Width = S(width);
             c.Items.AddRange(items);
+            // 表示する前に、いちばん長い選択肢が入る幅にする（後から追加した選択肢も含む）
+            c.HandleCreated += delegate { FitCombo(c); };
             if (items.Length > 0) c.SelectedIndex = 0;
             c.Margin = new Padding(3, 4, 3, 3);
             return c;
+        }
+
+        public static void FitCombo(ComboBox c)
+        {
+            int need = 0;
+            foreach (object o in c.Items) need = Math.Max(need, TextWidth(c.GetItemText(o), c.Font));
+            need += SystemInformation.VerticalScrollBarWidth + 12;
+            if (need > c.Width) c.Width = Math.Min(need, S(600));
+            if (c.DropDownWidth < need) c.DropDownWidth = need;
         }
 
         public static FlowLayoutPanel Row(params Control[] controls)
@@ -202,7 +245,7 @@ namespace AutoCopy
             g.Padding = new Padding(8, 6, 8, 8);
             g.Margin = new Padding(3, 3, 3, 8);
             FlowLayoutPanel inner = Column(rows);
-            inner.Location = new Point(10, 22);
+            inner.Location = new Point(S(10), TextRenderer.MeasureText("あ", Base).Height + S(8));
             g.Controls.Add(inner);
             return g;
         }
@@ -225,7 +268,9 @@ namespace AutoCopy
             FlowLayoutPanel p = new FlowLayoutPanel();
             p.FlowDirection = FlowDirection.RightToLeft;
             p.Dock = DockStyle.Bottom;
-            p.Height = 48;
+            p.AutoSize = true;   // 文字が大きいときはボタンに合わせて高くする
+            p.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            p.MinimumSize = new Size(0, S(48));
             p.Padding = new Padding(8, 8, 8, 4);
             p.BackColor = Color.FromArgb(243, 243, 243);
             p.Controls.AddRange(buttons);
@@ -253,6 +298,8 @@ namespace AutoCopy
             {
                 string[] parts = c.Split('|');
                 int w = parts.Length > 1 ? int.Parse(parts[1]) : 120;
+                // 見出しが欠けない幅にする（幅 0 はわざと隠す列）
+                if (w > 0) w = Math.Max(S(w), TextWidth(parts[0], Base) + 16);
                 lv.Columns.Add(parts[0], w);
             }
             return lv;
@@ -345,10 +392,13 @@ namespace AutoCopy
                 SetupDialog(f, "自動コピー", 360, 90);
                 f.ControlBox = false;
                 Label l = L(message);
-                l.Location = new Point(16, 20);
+                l.Location = new Point(S(16), S(20));
+                l.MaximumSize = new Size(f.ClientSize.Width - S(32), 0);
                 ProgressBar pb = new ProgressBar();
                 pb.Style = ProgressBarStyle.Marquee;
-                pb.SetBounds(16, 50, 328, 16);
+                int lh = TextRenderer.MeasureText(message ?? "", Base, new Size(f.ClientSize.Width - S(32), 0), TextFormatFlags.WordBreak).Height;
+                pb.SetBounds(S(16), S(20) + lh + S(10), f.ClientSize.Width - S(32), S(16));
+                f.ClientSize = new Size(f.ClientSize.Width, pb.Bottom + S(24));
                 f.Controls.Add(l);
                 f.Controls.Add(pb);
                 f.Shown += delegate
@@ -389,19 +439,23 @@ namespace AutoCopy
         {
             Ui.SetupDialog(this, "自動コピー", 440, 150);
             ControlBox = false;
+            int w = ClientSize.Width - Ui.S(32);
+            int lineH = TextRenderer.MeasureText("あ", Ui.Base).Height;
             Label l = Ui.L(message);
-            l.Location = new Point(16, 16);
-            l.MaximumSize = new Size(408, 0);
+            l.Location = new Point(Ui.S(16), Ui.S(16));
+            l.MaximumSize = new Size(w, 0);
+            int lh = TextRenderer.MeasureText(message ?? "", Ui.Base, new Size(w, 0), TextFormatFlags.WordBreak).Height;
             ProgressBar pb = new ProgressBar();
             pb.Style = ProgressBarStyle.Marquee;
-            pb.SetBounds(16, 48, 408, 16);
+            pb.SetBounds(Ui.S(16), Ui.S(16) + lh + Ui.S(10), w, Ui.S(16));
             progressLabel = Ui.L("");
             progressLabel.ForeColor = Ui.Quiet;
             progressLabel.AutoSize = false;
             progressLabel.AutoEllipsis = true;
-            progressLabel.SetBounds(16, 72, 408, 22);
+            progressLabel.SetBounds(Ui.S(16), pb.Bottom + Ui.S(8), w, lineH + Ui.S(6));
             stop = Ui.B("中止", delegate { RequestStop(); });
-            stop.Location = new Point(440 - 16 - stop.PreferredSize.Width - 8, 108);
+            stop.Location = new Point(ClientSize.Width - Ui.S(16) - stop.PreferredSize.Width, progressLabel.Bottom + Ui.S(8));
+            ClientSize = new Size(ClientSize.Width, stop.Location.Y + stop.PreferredSize.Height + Ui.S(14));
             CancelButton = stop;
             Controls.Add(l);
             Controls.Add(pb);
@@ -458,7 +512,7 @@ namespace AutoCopy
             h.Dock = DockStyle.Top;
             h.Padding = new Padding(8);
             h.AutoSize = false;
-            h.Height = 32;
+            h.Height = TextRenderer.MeasureText("あ", Ui.Base).Height + Ui.S(16);
             Controls.Add(lb);
             Controls.Add(h);
             Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); })));
