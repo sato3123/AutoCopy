@@ -221,7 +221,7 @@ namespace AutoCopy
             using (Pen axis = new Pen(Axis, 1))
             using (Brush ink = new SolidBrush(Ink))
             using (Brush ink2 = new SolidBrush(Ink2))
-            using (Font small = new Font(Font.FontFamily, 8.25f))
+            using (Font small = new Font(Font.FontFamily, 8.25f * Ui.TextScale))
             {
                 // 目盛り（控えめに）
                 for (double v = 0; v <= top + 1e-9; v += step)
@@ -364,7 +364,7 @@ namespace AutoCopy
             using (Pen axis = new Pen(Axis, 1))
             using (Brush ink = new SolidBrush(Ink))
             using (Brush ink2 = new SolidBrush(Ink2))
-            using (Font small = new Font(Font.FontFamily, 8.25f))
+            using (Font small = new Font(Font.FontFamily, 8.25f * Ui.TextScale))
             {
                 for (double v = 0; v <= top + 1e-9; v += step)
                 {
@@ -495,7 +495,7 @@ namespace AutoCopy
 
             using (Brush ink = new SolidBrush(Ink))
             using (Brush ink2 = new SolidBrush(Ink2))
-            using (Font small = new Font(Font.FontFamily, 8.25f))
+            using (Font small = new Font(Font.FontFamily, 8.25f * Ui.TextScale))
             {
                 // --- 全体を100%とした帯（上位7項目＋残り） ---
                 float sy = 14, sh = 24;

@@ -10,10 +10,28 @@ namespace AutoCopy
     /// <summary>画面部品を作る小さなヘルパー（デザイナー不要で組み立てる）</summary>
     public static class Ui
     {
-        public static readonly Font Base = new Font("Meiryo UI", 9f);
-        public static readonly Font Bold = new Font("Meiryo UI", 9f, FontStyle.Bold);
-        public static readonly Font Title = new Font("Meiryo UI", 12f, FontStyle.Bold);
-        public static readonly Font Small = new Font("Meiryo UI", 8.25f);
+        /// <summary>
+        /// 文字の拡大率（確認用）。環境変数 AUTOCOPY_FONTSCALE=1.25 などで、
+        /// Windows 7 の 125%・150% 表示（文字だけが大きくなる）と同じ状態を作って表示切れを調べる。通常は 1。
+        /// </summary>
+        public static readonly float TextScale = ReadScale();
+        public static readonly Font Base = new Font("Meiryo UI", 9f * TextScale);
+        public static readonly Font Bold = new Font("Meiryo UI", 9f * TextScale, FontStyle.Bold);
+        public static readonly Font Title = new Font("Meiryo UI", 12f * TextScale, FontStyle.Bold);
+        public static readonly Font Small = new Font("Meiryo UI", 8.25f * TextScale);
+
+        private static float ReadScale()
+        {
+            try
+            {
+                string v = Environment.GetEnvironmentVariable("AUTOCOPY_FONTSCALE");
+                float f;
+                if (!string.IsNullOrEmpty(v) && float.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out f))
+                    return Math.Max(1f, Math.Min(2f, f));
+            }
+            catch (Exception) { }
+            return 1f;
+        }
         public static readonly Color Accent = Color.FromArgb(0, 95, 184);
         public static readonly Color Quiet = Color.FromArgb(85, 85, 85);
         public static readonly Color Ok = Color.FromArgb(15, 123, 15);

@@ -17,6 +17,7 @@ namespace AutoCopy
     {
         private static string outDir;
         private static readonly List<string> errors = new List<string>();
+        private static readonly List<KeyValuePair<string, List<string>>> layout = new List<KeyValuePair<string, List<string>>>();
 
         public static void Run(string dir)
         {
@@ -93,6 +94,11 @@ namespace AutoCopy
             CaptureTrayMenu();
 
             File.WriteAllText(Path.Combine(outDir, "errors.txt"), errors.Count == 0 ? "なし" : string.Join("\r\n\r\n", errors.ToArray()));
+            string scale = (Ui.TextScale * 100).ToString("0") + "%";
+            File.WriteAllText(Path.Combine(outDir, "layout.md"), LayoutCheck.Report(layout, scale), new System.Text.UTF8Encoding(false));
+            int ng = 0;
+            foreach (KeyValuePair<string, List<string>> r in layout) ng += r.Value.Count;
+            File.WriteAllText(Path.Combine(outDir, "layout-count.txt"), layout.Count + " " + ng);
         }
 
         private static void Prepare()
@@ -277,6 +283,18 @@ namespace AutoCopy
                 Pump(1500);
                 if (after != null) { after(f); Pump(1200); }
                 Save(f, name);
+                // 表示切れの確認（画像を保存してから。タブを切り替えるため）
+                try
+                {
+                    layout.Add(new KeyValuePair<string, List<string>>(name, LayoutCheck.Check(f)));
+                    if (f.FormBorderStyle == FormBorderStyle.Sizable && !f.MinimumSize.IsEmpty && f.MinimumSize != f.Size)
+                    {
+                        f.Size = f.MinimumSize;
+                        Pump(600);
+                        layout.Add(new KeyValuePair<string, List<string>>(name + "（最小の大きさ " + f.Width + "×" + f.Height + "）", LayoutCheck.Check(f)));
+                    }
+                }
+                catch (Exception ex) { errors.Add(name + "（表示切れの確認）: " + ex); }
             }
             catch (Exception ex) { errors.Add(name + ": " + ex); }
             finally
