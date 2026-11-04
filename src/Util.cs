@@ -90,6 +90,10 @@ namespace AutoCopy
         public static string LogDir { get { return Path.Combine(Local, "logs"); } }
         public static string OutboxDir { get { return Path.Combine(Local, "outbox"); } }
         public static string DupDir { get { return Path.Combine(Local, "dup"); } }
+        /// <summary>同期で取り込む前の、このPCの古い版の控え</summary>
+        public static string SyncBackupDir { get { return Path.Combine(Local, "sync-backup"); } }
+        /// <summary>重複のためコピーしなかったファイルの代わりに置くテキストの末尾</summary>
+        public const string PlaceholderSuffix = ".重複.txt";
         public static string BinDir { get { return Path.Combine(Local, "bin"); } }
         public static string ExePath { get { return System.Reflection.Assembly.GetExecutingAssembly().Location; } }
         public static string ExeDir { get { return Path.GetDirectoryName(ExePath); } }

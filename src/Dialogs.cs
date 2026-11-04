@@ -73,10 +73,11 @@ namespace AutoCopy
 
         public ConflictForm()
         {
-            Ui.SetupForm(this, "上書きの確認", 920, 560);
+            Ui.SetupForm(this, "上書きの確認", 1100, 560);
             FlowLayoutPanel top = Ui.Column(
                 Ui.Heading("コピー先の方が新しいファイルがあります"),
-                Ui.Hint("上書きすると、コピー先で行われた変更が失われる可能性があります。ファイルにチェックを入れて、どうするかを選んでください。"));
+                Ui.Hint("上書きすると、コピー先で行われた変更が失われる可能性があります。ファイルにチェックを入れて、どうするかを選んでください。"),
+                Ui.Hint("同期のジョブでは「コピー元」がこのPC、「コピー先」が共有フォルダです。どちらを使っても、使わなかった方の版は控えに残ります。"));
             top.Dock = DockStyle.Top;
             top.Padding = new Padding(12, 10, 12, 6);
 
@@ -86,7 +87,8 @@ namespace AutoCopy
 
             backup = Ui.C("上書きする前に、コピー先の古いファイルを「_AutoCopy\\退避」に残す", true);
             FlowLayoutPanel actions = Ui.Row(Ui.L("チェックしたファイルを"),
-                Ui.B("上書きする", delegate { Apply(AppCore.ActOverwrite); }),
+                Ui.B("上書きする（このPCの方を使う）", delegate { Apply(AppCore.ActOverwrite); }),
+                Ui.B("共有フォルダの方を使う（同期のみ）", delegate { Apply(AppCore.ActTakeShared); }),
                 Ui.B("今回はスキップ", delegate { Apply(AppCore.ActSkipOnce); }),
                 Ui.B("今後も上書きしない", delegate { Apply(AppCore.ActSkipForever); }),
                 Ui.B("すべてチェック", delegate { foreach (ListViewItem it in lv.Items) it.Checked = true; }),
@@ -124,7 +126,8 @@ namespace AutoCopy
                     it.SubItems.Add(j.Name);
                     it.SubItems.Add(Fmt.LocalTime(c.SrcMtime) + "・" + Fmt.Size(c.SrcSize));
                     it.SubItems.Add(Fmt.LocalTime(c.DstMtime) + "・" + Fmt.Size(c.DstSize));
-                    it.SubItems.Add(c.Reason == "newer" ? "コピー先が新しい" : "日時同じ・サイズ違い");
+                    it.SubItems.Add(c.Reason == "newer" ? "コピー先が新しい" : c.Reason == "both" ? "同期：両方で変更" : c.Reason == "first" ? "同期：初回で中身が違う" : "日時同じ・サイズ違い");
+                    if (j.Sync) it.ForeColor = Ui.Warn;
                     it.ForeColor = SystemColors.WindowText;
                     Row r = new Row(); r.Job = j; r.Item = c;
                     it.Tag = r;
@@ -141,6 +144,7 @@ namespace AutoCopy
             foreach (ListViewItem it in lv.CheckedItems) rows.Add((Row)it.Tag);
             if (rows.Count == 0) { Ui.Info(this, "ファイルにチェックを入れてください。"); return; }
             if (action == AppCore.ActOverwrite && !Ui.Confirm(this, rows.Count + "件を、コピー元のファイルで上書きします。よろしいですか？")) return;
+            if (action == AppCore.ActTakeShared && !Ui.Confirm(this, rows.Count + "件を、共有フォルダのファイルでこのPCのファイルを置き換えます。\nこのPCの今のファイルは控え（" + AppPaths.SyncBackupDir + "）に残ります。よろしいですか？")) return;
             bool bk = backup.Checked;
             List<string> errors = Ui.Busy<List<string>>(this, "処理しています…", delegate()
             {

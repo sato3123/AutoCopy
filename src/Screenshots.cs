@@ -35,6 +35,9 @@ namespace AutoCopy
             Capture("03_ジョブ設定_除外ルール", delegate() { return new JobEditForm(j0.Clone(), false); }, delegate(Form f) { SelectTab(f, 1); });
             Capture("04_ジョブ設定_接続と重複チェック", delegate() { return new JobEditForm(j1.Clone(), false); }, delegate(Form f) { SelectTab(f, 2); });
             Capture("05_ミラーの注意", delegate() { return new MirrorWarnForm(j1); }, null);
+            JobConfig jsy = AppCore.Settings.Jobs[3];
+            Capture("31_ジョブ設定_同期", delegate() { return new JobEditForm(jsy.Clone(), false); }, delegate(Form f) { SelectTab(f, 0); });
+            Capture("32_ジョブ設定_重複の省略", delegate() { return new JobEditForm(j0.Clone(), false); }, delegate(Form f) { SelectTab(f, 0); ScrollBottom(f); });
             Capture("06_上書きの確認", delegate() { return new ConflictForm(); }, delegate(Form f) { CheckFirst(f); });
             Capture("07_ミラーの保留中の削除", delegate() { return new PendingDeleteForm(j1); }, null);
             Capture("08_重複チェック結果", delegate() { DupForm d = new DupForm(); d.SelectJob(j0.Id); return d; }, null);
@@ -117,7 +120,11 @@ namespace AutoCopy
             JobConfig c = new JobConfig();
             c.Name = "作業メモ"; c.Scope = JobScope.Local; c.Source = Path.Combine(root, "メモ"); c.Dest = Path.Combine(root, "usb\\メモ"); c.Enabled = false; c.IntervalMinutes = 60;
             Directory.CreateDirectory(c.Source);
-            s.Jobs.Add(a); s.Jobs.Add(b); s.Jobs.Add(c);
+            JobConfig sy = new JobConfig();
+            sy.Name = "部署の共有資料"; sy.Scope = JobScope.Dist; sy.Source = Path.Combine(root, "共有資料"); sy.Dest = Path.Combine(root, "nas\\部署共有");
+            sy.Sync = true; sy.IntervalMinutes = 10;
+            Directory.CreateDirectory(sy.Source);
+            s.Jobs.Add(a); s.Jobs.Add(b); s.Jobs.Add(c); s.Jobs.Add(sy);
             AppCore.Settings = s;
             AppCore.SaveSettings();
 
@@ -154,6 +161,12 @@ namespace AutoCopy
             rt2.LastResult = st2.LastResult; rt2.LastMessage = st2.LastMessage; rt2.LastRun = DateTime.Now.AddMinutes(-5);
 
             AppCore.Notify(NoticeLevel.Error, "図面共有：エラー", "\\\\fs02\\設計部 に接続できません（3回再試行しました）", "retry", b.Id);
+            JobState st3 = AppCore.GetState(sy.Id);
+            ConflictItem sc = new ConflictItem();
+            sc.Rel = "議事録\\2026-11_定例.docx"; sc.SrcSize = 48211; sc.SrcMtime = DateTime.UtcNow.AddMinutes(-40).Ticks;
+            sc.DstSize = 51022; sc.DstMtime = DateTime.UtcNow.AddMinutes(-25).Ticks; sc.Reason = "both"; sc.Detected = Fmt.Now();
+            st3.Conflicts.Add(sc);
+            AppCore.SaveState(sy.Id);
             AppCore.Notify(NoticeLevel.Warning, "上書きの確認が 1件 あります", "経理バックアップ：コピー先の方が新しいファイルがあるため、上書きせずに待っています。", "conflicts", a.Id);
             AppCore.Notify(NoticeLevel.Info, "重複チェック：削除候補 " + dr.DeleteCandidateCount() + "件", "経理バックアップ：結果を確認してください。", "dup", a.Id);
             Logger.Flush();
@@ -215,6 +228,21 @@ namespace AutoCopy
             DistCredential cr = new DistCredential(); cr.Server = "nas01"; cr.User = "nas01\\yamada"; cr.Password = "x";
             pl.Credentials.Add(cr);
             Distribution.Write(Path.Combine(root, AppPaths.SetupFileName), pl, "secret");
+        }
+
+        /// <summary>タブの中をいちばん下までスクロールする</summary>
+        private static void ScrollBottom(Form f)
+        {
+            Stack<Control> st = new Stack<Control>();
+            st.Push(f);
+            while (st.Count > 0)
+            {
+                Control c = st.Pop();
+                ScrollableControl sc = c as ScrollableControl;
+                if (sc != null && sc.AutoScroll && sc.Visible && sc.DisplayRectangle.Height > sc.ClientSize.Height)
+                    sc.AutoScrollPosition = new Point(0, sc.DisplayRectangle.Height);
+                foreach (Control ch in c.Controls) st.Push(ch);
+            }
         }
 
         private static void Sized(string path, long size, int ageDays)

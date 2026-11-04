@@ -78,6 +78,9 @@ namespace AutoCopy
             List<string> sources = new List<string>();
             foreach (JobConfig j in Settings.Jobs) sources.Add(CopyEngine.ResolvedSource(j, Settings));
             SafeFs.SetProtectedSources(sources);
+            List<string> syncs = new List<string>();
+            foreach (JobConfig j in Settings.Jobs) if (j.Sync) syncs.Add(CopyEngine.ResolvedSource(j, Settings));
+            SafeFs.SetSyncRoots(syncs);
             Logger.Configure(Settings);
             lock (sync)
             {
@@ -444,7 +447,7 @@ namespace AutoCopy
             return n;
         }
 
-        public const string ActOverwrite = "overwrite", ActSkipOnce = "skiponce", ActSkipForever = "skipforever";
+        public const string ActOverwrite = "overwrite", ActSkipOnce = "skiponce", ActSkipForever = "skipforever", ActTakeShared = "takeshared";
 
         /// <summary>上書き確認の結果を反映する。overwrite はコピーを行う。</summary>
         public static string ResolveConflict(JobConfig job, ConflictItem c, string action, bool backup)
@@ -466,6 +469,21 @@ namespace AutoCopy
                     rec.DestMtime = File.GetLastWriteTimeUtc(PathUtil.Long(d)).Ticks;
                     lock (st) { st.Files[c.Rel] = rec; }
                     Logger.Write(job.Name, "OVERWRITE", c.Rel + "　（確認して上書き）", fi.Length, -1);
+                }
+                else if (action == ActTakeShared)
+                {
+                    // 同期：共有フォルダの版をこのPCに取り込む（このPCの版は控えに保存）
+                    if (!job.Sync) return c.Rel + "：「共有フォルダの方を使う」は同期のジョブだけで使えます";
+                    string s = PathUtil.Combine(dst, c.Rel), l = PathUtil.Combine(src, c.Rel);
+                    FileInfo fi = new FileInfo(PathUtil.Long(s));
+                    if (!fi.Exists) return "共有フォルダにファイルがありません: " + c.Rel;
+                    string backupRoot = Path.Combine(Path.Combine(AppPaths.SyncBackupDir, job.Id), DateTime.Now.ToString("yyyyMMdd-HHmmss"));
+                    byte[] hash = SafeFs.CopyIntoSync(s, l, c.Rel, fi.LastWriteTimeUtc, backupRoot, CancellationToken.None);
+                    FileRecord rec = new FileRecord();
+                    rec.Size = fi.Length; rec.Mtime = File.GetLastWriteTimeUtc(PathUtil.Long(l)).Ticks; rec.Hash = hash; rec.CopiedByApp = true;
+                    rec.DestMtime = fi.LastWriteTimeUtc.Ticks;
+                    lock (st) { st.Files[c.Rel] = rec; }
+                    Logger.Write(job.Name, "SYNCIN", c.Rel + "　（確認して共有フォルダの版を取り込み。このPCの版は控えに保存）", fi.Length, -1);
                 }
                 else if (action == ActSkipOnce)
                 {

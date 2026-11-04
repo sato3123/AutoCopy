@@ -88,6 +88,16 @@ namespace AutoCopy
             catch (Exception ex) { Ui.Error(null, ex.Message); }
         }
 
+        private bool trayNoticeShown;
+
+        /// <summary>メイン画面を閉じたとき：最初の1回だけ、通知領域で動き続けていることを知らせる</summary>
+        public void NotifyInTray()
+        {
+            if (trayNoticeShown) return;
+            trayNoticeShown = true;
+            Balloon("自動コピーは動き続けています", "画面右下のアイコンに入りました。アイコンをダブルクリックすると画面が開きます。終了するときはアイコンを右クリック →「終了」。", ToolTipIcon.Info);
+        }
+
         private void Balloon(string title, string text, ToolTipIcon ic)
         {
             lastBalloon = null;

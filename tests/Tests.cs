@@ -74,6 +74,11 @@ namespace AutoCopy.Tests
             Add("T45", "フォルダの容量の内訳（フォルダ別・種類別・大きいファイル・読むだけ）", T45_DiskUsage);
             Add("T46", "容量の内訳を途中で中止できる（途中経過の通知・中止後もフォルダは変わらない）", T46_DiskUsageCancel);
             Add("T47", "空のフォルダの削除（コピー先のみ・コピー元にあるものは残す・削除直前の再確認・元に戻す）", T47_EmptyFolders);
+            Add("T48", "コピー先の _AutoCopy フォルダは隠しフォルダ", T48_HiddenMeta);
+            Add("T49", "大きいファイルの重複は1つだけコピーし、2つ目以降は保管場所を書いたテキストを置く", T49_Dedup);
+            Add("T50", "重複のテキスト：中身が変わったら普通にコピー・ミラーで1つ目が消えたら付け替え・重複チェックで孤立にしない", T50_DedupChanges);
+            Add("T51", "複数PCの同期：双方向の取り込み・前の版の控え・削除は伝えない・持ち主の確認をしない", T51_Sync);
+            Add("T52", "同期：両方で変えたら確認待ち・共有の方を使う・このPCの方を使う・コピー元の削除は今までどおり拒否", T52_SyncConflict);
 
             int ng = 0;
             foreach (TestCase t in cases)
@@ -1279,6 +1284,263 @@ namespace AutoCopy.Tests
             DupGroup g2 = again.Groups.Find(delegate(DupGroup x) { return x.Kind == "empty"; });
             Eq(2, g2.Entries.Count, "元に戻した2件がまた候補になる");
             CompareSnapshots(srcBefore, Snapshot(b.Src));
+        }
+
+        private static void T48_HiddenMeta()
+        {
+            Box b = new Box("T48");
+            b.W("a.txt", "a");
+            b.Run();
+            string meta = b.D("_AutoCopy");
+            True(Directory.Exists(meta), "_AutoCopy がある（持ち主の記録）");
+            True((File.GetAttributes(meta) & FileAttributes.Hidden) != 0, "隠しフォルダ");
+            // 隠しを外されても、次の実行でまた隠す
+            File.SetAttributes(meta, FileAttributes.Directory);
+            b.W("b.txt", "b");
+            b.Run();
+            True((File.GetAttributes(meta) & FileAttributes.Hidden) != 0, "次の実行でまた隠す");
+        }
+
+        private static void WriteBig(string path, int mb, byte seed, int ageSec)
+        {
+            string l = PathUtil.Long(path);
+            Directory.CreateDirectory(Path.GetDirectoryName(l));
+            byte[] buf = new byte[1024 * 1024];
+            using (FileStream fs = new FileStream(l, FileMode.Create, FileAccess.Write))
+            {
+                for (int i = 0; i < mb; i++)
+                {
+                    for (int k = 0; k < buf.Length; k += 4096) buf[k] = (byte)(seed + i + k / 4096);
+                    fs.Write(buf, 0, buf.Length);
+                }
+            }
+            File.SetLastWriteTimeUtc(l, DateTime.UtcNow.AddSeconds(-ageSec));
+        }
+
+        private static void T49_Dedup()
+        {
+            Box b = new Box("T49");
+            WriteBig(b.S("a\\動画.mp4"), 12, 1, 300);
+            WriteBig(b.S("z\\コピー\\動画_コピー.mp4"), 12, 1, 200);   // 中身が同じ
+            WriteBig(b.S("m\\別の動画.mp4"), 12, 9, 300);              // 大きさは同じで中身が違う
+            WriteBig(b.S("小1.bin"), 1, 5, 300);                        // 10MB未満の重複は普通にコピー
+            WriteBig(b.S("小2.bin"), 1, 5, 300);
+            RunResult r = b.Run();
+            Eq(1, r.Deduped, "重複で省略した件数");
+            Eq(12L * 1024 * 1024, r.DedupBytes, "省略した容量");
+            Eq(4, r.Copied, "普通にコピーした件数");
+            True(File.Exists(b.D("a\\動画.mp4")), "1つ目はコピー");
+            True(!File.Exists(b.D("z\\コピー\\動画_コピー.mp4")), "2つ目はコピーしない");
+            string ph = b.D("z\\コピー\\動画_コピー.mp4" + AppPaths.PlaceholderSuffix);
+            True(File.Exists(ph), "代わりにテキストを置く");
+            string text = File.ReadAllText(ph, Encoding.UTF8);
+            True(text.Contains(b.D("a\\動画.mp4")), "1つ目の保管場所が書いてある");
+            True(text.Contains(b.S("z\\コピー\\動画_コピー.mp4")), "コピー元のファイルも書いてある");
+            byte[] head = new byte[3];
+            using (FileStream fs = File.OpenRead(ph)) fs.Read(head, 0, 3);
+            True(head[0] == 0xEF && head[1] == 0xBB && head[2] == 0xBF, "BOM 付き（Windows 7 のメモ帳でも読める）");
+            True(File.Exists(b.D("m\\別の動画.mp4")) && File.Exists(b.D("小1.bin")) && File.Exists(b.D("小2.bin")), "中身が違うもの・小さいものは普通にコピー");
+
+            RunResult r2 = b.Run();
+            Eq(0, r2.Copied + r2.Overwritten + r2.Deduped, "2回目は何もしない");
+
+            // オフにすると、次から普通にコピーする
+            b.Job.DedupLarge = false;
+            RunResult r3 = b.Run();
+            Eq(1, r3.Copied, "オフにすると普通にコピー");
+            True(File.Exists(b.D("z\\コピー\\動画_コピー.mp4")) && !File.Exists(ph), "テキストは片付ける");
+            Note = "省略 " + Fmt.Size(r.DedupBytes);
+        }
+
+        private static void T50_DedupChanges()
+        {
+            // 中身が変わったら普通にコピーし、テキストを片付ける
+            Box b = new Box("T50");
+            WriteBig(b.S("a.bin"), 11, 3, 300);
+            WriteBig(b.S("b.bin"), 11, 3, 300);
+            WriteBig(b.S("c.bin"), 11, 3, 300);
+            RunResult r = b.Run();
+            Eq(2, r.Deduped, "2つ目・3つ目を省略");
+            True(File.Exists(b.D("a.bin")) && File.Exists(b.D("b.bin" + AppPaths.PlaceholderSuffix)) && File.Exists(b.D("c.bin" + AppPaths.PlaceholderSuffix)), "a だけコピー");
+            WriteBig(b.S("b.bin"), 11, 7, 100);   // b の中身が変わる
+            RunResult r2 = b.Run();
+            Eq(1, r2.Copied, "b を普通にコピー");
+            True(File.Exists(b.D("b.bin")) && !File.Exists(b.D("b.bin" + AppPaths.PlaceholderSuffix)), "b のテキストを片付ける");
+            True(File.Exists(b.D("c.bin" + AppPaths.PlaceholderSuffix)), "c はテキストのまま");
+
+            // 重複チェック：テキストは孤立ファイルにしない
+            b.Job.DupShowOrphans = true;
+            DupResult d = DupChecker.Run(b.Job, b.App, b.State, CancellationToken.None);
+            foreach (DupGroup g in d.Groups)
+                foreach (DupEntry e in g.Entries)
+                    True(!e.Rel.EndsWith(AppPaths.PlaceholderSuffix), "テキストは重複チェックの候補にならない: " + e.Rel);
+
+            // ミラー：1つ目（a）をコピー元で消すと、c を普通にコピーし、a はコピー先から削除済みへ
+            Box m = new Box("T50m");
+            m.Job.Mirror = true;
+            WriteBig(m.S("a.bin"), 11, 4, 300);
+            WriteBig(m.S("c.bin"), 11, 4, 300);
+            m.Run();
+            True(File.Exists(m.D("c.bin" + AppPaths.PlaceholderSuffix)), "c はテキスト");
+            File.Delete(m.S("a.bin"));
+            RunResult rm = m.Run();
+            True(File.Exists(m.D("c.bin")), "c を普通にコピー");
+            True(!File.Exists(m.D("c.bin" + AppPaths.PlaceholderSuffix)), "c のテキストを片付ける");
+            True(!File.Exists(m.D("a.bin")), "a はミラーで削除済みへ");
+            Eq(1, rm.Deleted, "ミラー削除 1件");
+
+            // ミラー：テキストを置いたファイルをコピー元で消すと、テキストを削除済みへ
+            Box m2 = new Box("T50n");
+            m2.Job.Mirror = true;
+            WriteBig(m2.S("a.bin"), 11, 6, 300);
+            WriteBig(m2.S("c.bin"), 11, 6, 300);
+            m2.Run();
+            File.Delete(m2.S("c.bin"));
+            RunResult rm2 = m2.Run();
+            Eq(1, rm2.Deleted, "テキストを削除");
+            True(!File.Exists(m2.D("c.bin" + AppPaths.PlaceholderSuffix)) && File.Exists(m2.D("a.bin")), "テキストだけ片付け、a は残る");
+        }
+
+        /// <summary>同期のテスト用：2台のPC（このPCのフォルダ A・B）と共有フォルダ S</summary>
+        private class SyncPair
+        {
+            public string Root, A, B, S;
+            public AppSettings App;
+            public JobConfig JA, JB;
+            public SyncPair(string name)
+            {
+                Root = Path.Combine(baseDir, name);
+                A = Path.Combine(Root, "PC1"); B = Path.Combine(Root, "PC2"); S = Path.Combine(Root, "共有");
+                foreach (string d in new string[] { A, B, S }) Directory.CreateDirectory(d);
+                App = new AppSettings();
+                App.InstanceId = "test-instance";
+                App.FolderName = "PC1";
+                App.TrashDays = 30;
+                JA = new JobConfig(); JA.Name = name + "A"; JA.Source = A; JA.Dest = S; JA.Sync = true; JA.RetryCount = 0;
+                JB = new JobConfig(); JB.Name = name + "B"; JB.Source = B; JB.Dest = S; JB.Sync = true; JB.RetryCount = 0;
+                App.Jobs.Add(JA); App.Jobs.Add(JB);
+                AppCore.Settings = App;
+                SafeFs.SetProtectedSources(new string[] { A, B });
+                SafeFs.SetSyncRoots(new string[] { A, B });
+                Logger.Configure(App);
+            }
+            public RunResult Run(JobConfig j, string instance)
+            {
+                App.InstanceId = instance;   // 別のPCとして動かす
+                AppCore.Settings = App;
+                RunResult r = new CopyEngine(j, App, AppCore.GetState(j.Id), false, false, CancellationToken.None).Run();
+                AppCore.SaveState(j.Id);
+                return r;
+            }
+        }
+
+        private static string Read(string p) { return File.ReadAllText(PathUtil.Long(p), Encoding.UTF8); }
+
+        private static void T51_Sync()
+        {
+            SyncPair p = new SyncPair("T51");
+            WriteFile(Path.Combine(p.A, "a.txt"), "PC1が作った", 600);
+            WriteFile(Path.Combine(p.B, "資料\\b.txt"), "PC2が作った", 600);
+            RunResult r1 = p.Run(p.JA, "pc1");
+            Eq(1, r1.Copied, "PC1：共有へ a");
+            RunResult r2 = p.Run(p.JB, "pc2");
+            Eq(1, r2.Copied, "PC2：共有へ b");
+            Eq(1, r2.Downloaded, "PC2：a を取り込み");
+            RunResult r3 = p.Run(p.JA, "pc1");
+            Eq(1, r3.Downloaded, "PC1：b を取り込み");
+            Eq("PC2が作った", Read(Path.Combine(p.A, "資料\\b.txt")), "PC1 に b");
+            Eq("PC1が作った", Read(Path.Combine(p.B, "a.txt")), "PC2 に a");
+            True(!File.Exists(Path.Combine(p.S, "_AutoCopy\\owner.json")), "同期では持ち主の記録を作らない（複数PCで使える）");
+
+            RunResult r4 = p.Run(p.JA, "pc1");
+            Eq(0, r4.Copied + r4.Overwritten + r4.Downloaded + r4.Conflicts, "変更がなければ何もしない");
+
+            // PC2 で a を更新 → 共有へ → PC1 に取り込み（PC1 の前の版は控えに）
+            WriteFile(Path.Combine(p.B, "a.txt"), "PC2が更新", 100);
+            RunResult r5 = p.Run(p.JB, "pc2");
+            Eq(1, r5.Overwritten, "PC2：共有の a を更新");
+            RunResult r6 = p.Run(p.JA, "pc1");
+            Eq(1, r6.Downloaded, "PC1：新しい a を取り込み");
+            Eq("PC2が更新", Read(Path.Combine(p.A, "a.txt")), "PC1 の a が新しい版");
+            string[] backups = Directory.GetFiles(Path.Combine(AppPaths.SyncBackupDir, p.JA.Id), "a.txt", SearchOption.AllDirectories);
+            Eq(1, backups.Length, "前の版の控え");
+            Eq("PC1が作った", Read(backups[0]), "控えの中身は前の版");
+
+            // PC1 で b を削除 → 共有・PC2 からは消さない、PC1 にも取り込み直さない
+            File.Delete(Path.Combine(p.A, "資料\\b.txt"));
+            RunResult r7 = p.Run(p.JA, "pc1");
+            Eq(0, r7.Downloaded, "消したものは取り込み直さない");
+            True(!File.Exists(Path.Combine(p.A, "資料\\b.txt")), "PC1 では消えたまま");
+            True(File.Exists(Path.Combine(p.S, "資料\\b.txt")), "共有には残る（削除は伝えない）");
+            p.Run(p.JB, "pc2");
+            True(File.Exists(Path.Combine(p.B, "資料\\b.txt")), "PC2 にも残る");
+            // ただし、他のPCがその後で更新したら取り込む
+            WriteFile(Path.Combine(p.B, "資料\\b.txt"), "PC2がb更新", 50);
+            p.Run(p.JB, "pc2");
+            RunResult r8 = p.Run(p.JA, "pc1");
+            Eq(1, r8.Downloaded, "更新されたら取り込む");
+            Eq("PC2がb更新", Read(Path.Combine(p.A, "資料\\b.txt")), "新しい版");
+        }
+
+        private static void T52_SyncConflict()
+        {
+            SyncPair p = new SyncPair("T52");
+            WriteFile(Path.Combine(p.A, "c.txt"), "最初の版", 600);
+            p.Run(p.JA, "pc1");
+            p.Run(p.JB, "pc2");
+            Eq("最初の版", Read(Path.Combine(p.B, "c.txt")), "PC2 に c");
+
+            WriteFile(Path.Combine(p.A, "c.txt"), "PC1の変更", 80);
+            WriteFile(Path.Combine(p.B, "c.txt"), "PC2の変更", 70);
+            RunResult r1 = p.Run(p.JA, "pc1");
+            Eq(1, r1.Overwritten, "PC1 の変更を共有へ");
+            RunResult r2 = p.Run(p.JB, "pc2");
+            Eq(1, r2.Conflicts, "PC2：両方で変わったので確認待ち");
+            Eq(0, r2.Downloaded + r2.Overwritten, "勝手に上書きしない");
+            Eq("PC2の変更", Read(Path.Combine(p.B, "c.txt")), "PC2 の版はそのまま");
+            Eq("PC1の変更", Read(Path.Combine(p.S, "c.txt")), "共有の版もそのまま");
+            JobState stB = AppCore.GetState(p.JB.Id);
+            ConflictItem c;
+            lock (stB) { c = stB.Conflicts[0]; }
+            Eq("both", c.Reason, "理由");
+
+            // 共有の方を使う → PC2 は PC1 の版になり、PC2 の版は控えに
+            Eq<string>(null, AppCore.ResolveConflict(p.JB, c, AppCore.ActTakeShared, true), "共有の方を使う");
+            Eq("PC1の変更", Read(Path.Combine(p.B, "c.txt")), "PC2 が共有の版になる");
+            string[] bk = Directory.GetFiles(Path.Combine(AppPaths.SyncBackupDir, p.JB.Id), "c.txt", SearchOption.AllDirectories);
+            True(bk.Length >= 1 && Read(bk[bk.Length - 1]) == "PC2の変更", "PC2 の版は控えに残る");
+            RunResult r3 = p.Run(p.JB, "pc2");
+            Eq(0, r3.Conflicts + r3.Downloaded + r3.Overwritten, "解決後は何もしない");
+
+            // もう一度ぶつけて、このPCの方を使う
+            WriteFile(Path.Combine(p.A, "c.txt"), "PC1の再変更", 40);
+            WriteFile(Path.Combine(p.B, "c.txt"), "PC2の再変更!", 30);
+            p.Run(p.JA, "pc1");
+            RunResult r4 = p.Run(p.JB, "pc2");
+            Eq(1, r4.Conflicts, "また確認待ち");
+            lock (stB) { c = stB.Conflicts[0]; }
+            Eq<string>(null, AppCore.ResolveConflict(p.JB, c, AppCore.ActOverwrite, true), "このPCの方を使う");
+            Eq("PC2の再変更!", Read(Path.Combine(p.S, "c.txt")), "共有が PC2 の版になる");
+            RunResult r5 = p.Run(p.JA, "pc1");
+            Eq(1, r5.Downloaded, "PC1 に取り込む");
+            Eq("PC2の再変更!", Read(Path.Combine(p.A, "c.txt")), "PC1 も PC2 の版");
+
+            // 初回：同じ名前で中身が違うファイルが両方にある → 確認待ち（勝手に上書きしない）
+            WriteFile(Path.Combine(p.B, "初回.txt"), "PC2の初回", 500);
+            WriteFile(Path.Combine(p.S, "初回.txt"), "共有の初回です", 400);
+            RunResult r6 = p.Run(p.JB, "pc2");
+            lock (stB) { True(stB.Conflicts.Exists(delegate(ConflictItem x) { return x.Rel == "初回.txt" && x.Reason == "first"; }), "初回で中身が違う → 確認待ち"); }
+            Eq("PC2の初回", Read(Path.Combine(p.B, "初回.txt")), "そのまま");
+
+            // 同期でも、このPCのフォルダの削除・移動は今までどおり拒否する
+            Throws<SourceProtectedException>(delegate { SafeFs.DeleteFile(Path.Combine(p.A, "c.txt")); }, "削除は拒否");
+            Throws<SourceProtectedException>(delegate { SafeFs.Move(Path.Combine(p.A, "c.txt"), Path.Combine(p.A, "x.txt")); }, "移動は拒否");
+            // 同期でないジョブのコピー元へは取り込みもできない
+            Box nb = new Box("T52n");
+            nb.W("x.txt", "x");
+            SafeFs.SetSyncRoots(new string[] { p.A, p.B });
+            Throws<SourceProtectedException>(delegate { SafeFs.CopyIntoSync(Path.Combine(p.S, "c.txt"), nb.S("y.txt"), "y.txt", DateTime.UtcNow, null, CancellationToken.None); }, "同期でないコピー元への取り込みは拒否");
+            True(File.Exists(Path.Combine(p.A, "c.txt")), "PC1 の c は残っている");
         }
 
         private static void T42_Performance()

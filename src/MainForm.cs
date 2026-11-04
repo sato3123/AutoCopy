@@ -119,6 +119,17 @@ namespace AutoCopy
 
             AppCore.Changed += OnCoreChanged;
             FormClosed += delegate { AppCore.Changed -= OnCoreChanged; timer.Stop(); };
+            // 閉じる・最小化：終了も最小化もせず、通知領域（画面右下のアイコン）に入れる
+            FormClosing += delegate(object sender, FormClosingEventArgs e)
+            {
+                if (e.CloseReason != CloseReason.UserClosing || TrayApp.Instance == null) return;
+                e.Cancel = true;
+                ToTray();
+            };
+            Resize += delegate
+            {
+                if (WindowState == FormWindowState.Minimized && TrayApp.Instance != null) ToTray();
+            };
             timer = new System.Windows.Forms.Timer();
             timer.Interval = 2000;
             timer.Tick += delegate { RefreshView(); };
@@ -134,6 +145,13 @@ namespace AutoCopy
             l.BackColor = Color.FromArgb(224, 224, 224);
             l.Margin = new Padding(6, 4, 6, 4);
             return l;
+        }
+
+        private void ToTray()
+        {
+            Hide();
+            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+            TrayApp.Instance.NotifyInTray();
         }
 
         private void ShowUsage()
@@ -256,8 +274,8 @@ namespace AutoCopy
 
                     string interval = j.IntervalMinutes % 60 == 0 ? (j.IntervalMinutes / 60) + "時間" : j.IntervalMinutes + "分";
                     string last = rt.LastRun == DateTime.MinValue ? "—" : (rt.LastRun.Date == DateTime.Today ? rt.LastRun.ToString("HH:mm") : rt.LastRun.ToString("M/d HH:mm"));
-                    string paths = CopyEngine.ResolvedSource(j, s) + "  →  " + CopyEngine.ResolvedDest(j, s);
-                    string[] cols = new string[] { j.Name + (j.Scope == JobScope.Dist ? "" : "（このPCだけ）"), j.Mirror ? "ミラー" : "追加・更新", paths, interval, last, result, next };
+                    string paths = CopyEngine.ResolvedSource(j, s) + (j.Sync ? "  ⇄  " : "  →  ") + CopyEngine.ResolvedDest(j, s);
+                    string[] cols = new string[] { j.Name + (j.Scope == JobScope.Dist ? "" : "（このPCだけ）"), j.ModeLabel, paths, interval, last, result, next };
 
                     ListViewItem it;
                     if (i < jobs.Items.Count) it = jobs.Items[i];
@@ -272,7 +290,7 @@ namespace AutoCopy
                     for (int c = 0; c < cols.Length; c++) if (it.SubItems[c].Text != cols[c]) it.SubItems[c].Text = cols[c];
                     it.Checked = j.Enabled;
                     it.SubItems[5].ForeColor = color;
-                    it.SubItems[1].ForeColor = j.Mirror ? Ui.Warn : SystemColors.WindowText;
+                    it.SubItems[1].ForeColor = j.Mirror || j.Sync ? Ui.Warn : SystemColors.WindowText;
                     it.ForeColor = j.Enabled ? SystemColors.WindowText : Ui.Quiet;
                 }
                 jobs.EndUpdate();

@@ -41,6 +41,114 @@ namespace AutoCopy
             lock (sync) { protectedRoots = list; }
         }
 
+        private static List<string> syncRoots = new List<string>();
+
+        /// <summary>
+        /// 同期ジョブの「このPCのフォルダ」を登録する。ここへは CopyIntoSync だけが書き込める
+        /// （新しいファイルの追加と、古い版を控えてからの更新だけ。削除・移動・名前変更は今までどおり拒否）。
+        /// </summary>
+        public static void SetSyncRoots(IEnumerable<string> roots)
+        {
+            List<string> list = new List<string>();
+            foreach (string s in roots)
+            {
+                if (string.IsNullOrEmpty(s)) continue;
+                string n = PathUtil.Normalize(s);
+                if (n.Length == 0) continue;
+                list.Add(n);
+                string unc = PathUtil.Normalize(NetAccess.ToUncIfMapped(n));
+                if (!string.Equals(unc, n, StringComparison.OrdinalIgnoreCase)) list.Add(unc);
+            }
+            lock (sync) { syncRoots = list; }
+        }
+
+        public static bool IsInSyncRoot(string path)
+        {
+            string n = PathUtil.Normalize(path);
+            string unc = PathUtil.Normalize(NetAccess.ToUncIfMapped(n));
+            List<string> roots;
+            lock (sync) { roots = syncRoots; }
+            foreach (string r in roots)
+                if (PathUtil.IsSameOrInside(n, r) || PathUtil.IsSameOrInside(unc, r)) return true;
+            return false;
+        }
+
+        /// <summary>
+        /// 同期：共有フォルダのファイルを、このPCのフォルダへ取り込む。
+        /// すでにあるファイルは、置き換える前に backupRoot\rel へ「コピー」して控える（元のファイルは置き換えの瞬間まで残る）。
+        /// </summary>
+        public static byte[] CopyIntoSync(string from, string toLocal, string rel, DateTime mtimeUtc, string backupRoot, CancellationToken ct)
+        {
+            if (!IsInSyncRoot(toLocal))
+            {
+                if (Blocked != null) Blocked(PathUtil.Normalize(toLocal));
+                throw new SourceProtectedException(toLocal);
+            }
+            string lto = PathUtil.Long(toLocal);
+            string tmp = PathUtil.Long(toLocal + ".ckpart");
+            string parent = Path.GetDirectoryName(PathUtil.Plain(toLocal));
+            if (!Directory.Exists(PathUtil.Long(parent))) Directory.CreateDirectory(PathUtil.Long(parent));
+            if (File.Exists(lto) && backupRoot != null)
+            {
+                string b = PathUtil.Combine(backupRoot, rel);
+                string lb = PathUtil.Long(b);
+                Directory.CreateDirectory(Path.GetDirectoryName(lb));
+                if (File.Exists(lb)) lb = lb + "." + DateTime.Now.Ticks;
+                File.Copy(lto, lb, false);
+            }
+            byte[] hash;
+            byte[] buf = new byte[1024 * 1024];
+            using (MD5 md5 = MD5.Create())
+            {
+                try
+                {
+                    using (FileStream fin = new FileStream(PathUtil.Long(from), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, buf.Length, FileOptions.SequentialScan))
+                    using (FileStream fout = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, buf.Length))
+                    {
+                        int n;
+                        while ((n = fin.Read(buf, 0, buf.Length)) > 0)
+                        {
+                            ct.ThrowIfCancellationRequested();
+                            fout.Write(buf, 0, n);
+                            md5.TransformBlock(buf, 0, n, null, 0);
+                        }
+                        md5.TransformFinalBlock(buf, 0, 0);
+                    }
+                }
+                catch
+                {
+                    try { if (File.Exists(tmp)) File.Delete(tmp); } catch (Exception) { }   // 自分で作った一時ファイルだけ消す
+                    throw;
+                }
+                hash = md5.Hash;
+            }
+            File.SetLastWriteTimeUtc(tmp, mtimeUtc);
+            if (File.Exists(lto))
+            {
+                FileAttributes a = File.GetAttributes(lto);
+                if ((a & FileAttributes.ReadOnly) != 0) File.SetAttributes(lto, a & ~FileAttributes.ReadOnly);
+                File.Replace(tmp, lto, null, true);
+                File.SetLastWriteTimeUtc(lto, mtimeUtc);
+            }
+            else File.Move(tmp, lto);
+            return hash;
+        }
+
+        /// <summary>コピー先の「_AutoCopy」フォルダを隠しフォルダにする（ない場合は何もしない）</summary>
+        public static void HideMeta(string destRoot)
+        {
+            try
+            {
+                string l = PathUtil.Long(PathUtil.Combine(destRoot, AppPaths.DestMetaFolder));
+                if (!Directory.Exists(l)) return;
+                Guard(l);
+                FileAttributes a = File.GetAttributes(l);
+                if ((a & FileAttributes.Hidden) == 0) File.SetAttributes(l, a | FileAttributes.Hidden);
+            }
+            catch (SourceProtectedException) { throw; }
+            catch (Exception) { }
+        }
+
         public static void Guard(string path)
         {
             string n = PathUtil.Normalize(path);
@@ -69,6 +177,14 @@ namespace AutoCopy
             Guard(path);
             CreateDirectory(Path.GetDirectoryName(PathUtil.Plain(path)));
             File.WriteAllText(PathUtil.Long(path), text, new UTF8Encoding(false));
+        }
+
+        /// <summary>BOM 付き UTF-8 で書く（Windows 7 のメモ帳でも文字化けしないように）</summary>
+        public static void WriteTextBom(string path, string text)
+        {
+            Guard(path);
+            CreateDirectory(Path.GetDirectoryName(PathUtil.Plain(path)));
+            File.WriteAllText(PathUtil.Long(path), text, new UTF8Encoding(true));
         }
 
         public static void AppendText(string path, string text)
@@ -137,6 +253,7 @@ namespace AutoCopy
             string lt = PathUtil.Long(to);
             if (File.Exists(lt) || Directory.Exists(lt)) to = to + "." + DateTime.Now.Ticks;
             Move(from, to);
+            HideMeta(destRoot);
             return to;
         }
 

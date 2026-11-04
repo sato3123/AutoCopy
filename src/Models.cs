@@ -97,6 +97,9 @@ namespace AutoCopy
         [DataMember] public bool DupShowSameContent;
         [DataMember] public bool DupShowOrphans;
         [DataMember] public bool DupShowEmptyFolders;
+        [DataMember] public bool Sync;                // 複数PCで同期（双方向・削除は伝えない）
+        [DataMember] public bool DedupLarge;          // 大きいファイルの重複は1つだけコピーし、残りは場所を書いたテキストにする
+        [DataMember] public int DedupMinMB;
 
         public JobConfig() { SetDefaults(); }
 
@@ -111,7 +114,15 @@ namespace AutoCopy
             if (string.IsNullOrEmpty(Scope)) Scope = JobScope.Local;
             if (string.IsNullOrEmpty(NewerDestPolicy)) NewerDestPolicy = NewerPolicy.Ask;
             if (string.IsNullOrEmpty(DupSchedule)) DupSchedule = "daily";
+            if (DedupMinMB <= 0) DedupMinMB = 10;
+            if (Sync) Mirror = false;
         }
+
+        /// <summary>方式の表示名</summary>
+        public string ModeLabel { get { return Sync ? "同期（複数PC）" : Mirror ? "ミラー" : "追加・更新"; } }
+        /// <summary>大きいファイルの重複を省略するか（同期では使わない：他のPCにテキストが届いてしまうため）</summary>
+        public bool DedupOn { get { return DedupLarge && !Sync; } }
+        public long DedupMinBytes { get { return Math.Max(1, DedupMinMB) * 1024L * 1024; } }
 
         private void SetDefaults()
         {
@@ -147,6 +158,9 @@ namespace AutoCopy
             DupShowSameContent = true;
             DupShowOrphans = false;
             DupShowEmptyFolders = true;
+            Sync = false;
+            DedupLarge = true;
+            DedupMinMB = 10;
         }
 
         public JobConfig Clone()
@@ -279,7 +293,7 @@ namespace AutoCopy
         [DataMember] public long SrcMtime;   // UTC ticks
         [DataMember] public long DstSize;
         [DataMember] public long DstMtime;
-        [DataMember] public string Reason;   // newer / sizediff
+        [DataMember] public string Reason;   // newer / sizediff / both（同期：両方で変更） / first（同期：初回で中身が違う）
         [DataMember] public string Detected;
     }
 

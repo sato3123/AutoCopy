@@ -91,6 +91,20 @@ Start-Process -FilePath $exe -Wait
 $ok = WaitFor { (Win $main) -like '自動コピー*' } 15
 Check 'I13' '引数なしで起動するとメイン画面が開く' $ok ("ウィンドウ: '" + (Win $main) + "'")
 
+# ---------- I14 メイン画面を閉じても終了せず、通知領域に入る ----------
+$closed = $main.CloseMainWindow()
+Start-Sleep -Seconds 2
+$ok = (-not $main.HasExited) -and ((Win $main) -eq '')
+Check 'I14' '閉じるボタンでは終了せず通知領域に入る（ウィンドウは隠れる）' $ok ("終了: " + $main.HasExited + "・タイトル: '" + (Win $main) + "'")
+Start-Process -FilePath $exe -Wait
+$ok = WaitFor { (Win $main) -like '自動コピー*' } 15
+Check 'I15' '通知領域に入った後も、もう一度起動するとメイン画面が開く' $ok ("ウィンドウ: '" + (Win $main) + "'")
+
+# ---------- I16 コピー先の _AutoCopy は隠しフォルダ ----------
+$meta = Get-Item -Force (Join-Path $dst '_AutoCopy') -ErrorAction SilentlyContinue
+$ok = ($meta -ne $null) -and (($meta.Attributes -band [IO.FileAttributes]::Hidden) -ne 0)
+Check 'I16' 'コピー先の _AutoCopy フォルダは隠しフォルダ' $ok ("属性: " + $(if ($meta) { $meta.Attributes } else { 'なし' }))
+
 if (-not $main.HasExited) { $main.Kill(); $main.WaitForExit() }
 
 $md = @('| No | テスト | 結果 | メモ |', '| --- | --- | --- | --- |') + $results

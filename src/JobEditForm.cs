@@ -16,9 +16,9 @@ namespace AutoCopy
 
         // 基本
         private TextBox tName, tSrc, tDst, tStart, tEnd;
-        private CheckBox cEnabled, cSub, cWindow, cDelay, cFollow, cBackup;
-        private RadioButton rDist, rLocal, rAppend, rMirror, rAsk, rSkip, rOver;
-        private NumericUpDown nInterval, nDelay, nTol, nPar, nBw, nMirrorCount, nMirrorPct;
+        private CheckBox cEnabled, cSub, cWindow, cDelay, cFollow, cBackup, cDedup;
+        private RadioButton rDist, rLocal, rAppend, rMirror, rSync, rAsk, rSkip, rOver;
+        private NumericUpDown nInterval, nDelay, nTol, nPar, nBw, nMirrorCount, nMirrorPct, nDedup;
         private ComboBox cbUnit;
         private Label lPreview;
         // 除外
@@ -70,6 +70,7 @@ namespace AutoCopy
             Controls.Add(foot);
             LoadValues();
             loading = false;
+            UpdateSyncControls();
             UpdatePreview();
         }
 
@@ -115,6 +116,11 @@ namespace AutoCopy
             nMirrorCount = Ui.N(1, 1000000, 100, 80);
             nMirrorPct = Ui.N(1, 100, 10, 56);
             b.Controls.Add(Ui.Row(Ui.L("", 130), Ui.Hint("ミラーで一度に"), nMirrorCount, Ui.Hint("件、またはコピー先の"), nMirrorPct, Ui.Hint("% を超える削除は確認する")));
+            rSync = Ui.R("複数PCで同期（例外：コピー先を共有フォルダにして、複数のPCで双方向に同期する）", false);
+            rSync.ForeColor = Ui.Warn;
+            rSync.CheckedChanged += OnSyncChanged;
+            b.Controls.Add(Ui.Row(Ui.L("", 130), rSync));
+            b.Controls.Add(Ui.Row(Ui.L("", 130), Ui.Wrap("同期では、他のPCが共有フォルダに入れた・更新したファイルを、このPCのコピー元フォルダにも取り込みます。削除はどちらにも伝えません。両方で変えたファイルは「上書きの確認」で選びます。取り込みで置き換えたこのPCの古い版は控えに残ります。", 600)));
 
             nInterval = Ui.N(1, 1440, 30, 72);
             cbUnit = Ui.Combo(80, "分", "時間");
@@ -142,12 +148,46 @@ namespace AutoCopy
                 Ui.Row(Ui.L("同じとみなす日時の差", 160), nTol, Ui.L("秒以内")),
                 cBackup));
 
+            cDedup = Ui.C("コピー元の中で中身が同じ大きいファイルは、1つだけコピーし、2つ目以降は保管場所を書いたテキスト（〇〇" + AppPaths.PlaceholderSuffix + "）を置く", true);
+            nDedup = Ui.N(1, 1000000, 10, 72);
+            b.Controls.Add(Ui.Section("大きいファイルの重複",
+                cDedup,
+                Ui.Row(Ui.L("対象の大きさ", 160), nDedup, Ui.L("MB 以上")),
+                Ui.Wrap("中身はファイル全体で比べます（同じ大きさのものだけ読みます）。すでに普通にコピー済みのファイルはそのまま残します。同期のジョブでは使いません。", 600)));
+
             nPar = Ui.N(0, 8, 0, 56);
             b.Controls.Add(Ui.Row(Ui.L("同時にコピーする数", 130), nPar, Ui.Hint("0 = 自動（ネットワークは 2、PC内は 4）")));
             nBw = Ui.N(0, 1000000, 0, 90);
             b.Controls.Add(Ui.Row(Ui.L("転送速度の上限", 130), nBw, Ui.Hint("KB/秒（0 = 制限なし）")));
             p.Controls.Add(b);
             return p;
+        }
+
+        private void OnSyncChanged(object sender, EventArgs e)
+        {
+            UpdateSyncControls();
+            if (loading || !rSync.Checked) return;
+            string msg = "「複数PCで同期」は例外的な使い方です。\n\n"
+                + "・コピー先は、同期するすべてのPCから見える共有フォルダにしてください（{フォルダ名} は使えません）。\n"
+                + "・他のPCが入れた・更新したファイルが、このPCのコピー元フォルダに入ってきます。\n"
+                + "・削除はどちらにも伝えません。両方で変えたファイルは確認画面で選びます。\n"
+                + "・このPCの古い版は、置き換える前に控え（" + AppPaths.SyncBackupDir + "）に残します。\n"
+                + "・重複チェックと大きいファイルの重複の省略は、同期では行いません。\n\n同期にしますか？";
+            if (!Ui.Confirm(this, msg))
+            {
+                loading = true;
+                rAppend.Checked = true;
+                loading = false;
+                UpdateSyncControls();
+            }
+        }
+
+        private void UpdateSyncControls()
+        {
+            if (cDedup == null) return;
+            bool sync = rSync != null && rSync.Checked;
+            cDedup.Enabled = !sync; nDedup.Enabled = !sync;
+            if (cDup != null) cDup.Enabled = !sync;
         }
 
         private void OnMirrorChanged(object sender, EventArgs e)
@@ -365,8 +405,11 @@ namespace AutoCopy
             tSrc.Text = j.Source;
             cSub.Checked = j.IncludeSubdirs;
             tDst.Text = j.Dest;
-            rMirror.Checked = j.Mirror;
-            rAppend.Checked = !j.Mirror;
+            rMirror.Checked = j.Mirror && !j.Sync;
+            rSync.Checked = j.Sync;
+            rAppend.Checked = !j.Mirror && !j.Sync;
+            cDedup.Checked = j.DedupLarge;
+            nDedup.Value = Clamp(nDedup, j.DedupMinMB);
             nMirrorCount.Value = Clamp(nMirrorCount, j.MirrorMaxCount);
             nMirrorPct.Value = Clamp(nMirrorPct, j.MirrorMaxPercent);
             if (j.IntervalMinutes >= 60 && j.IntervalMinutes % 60 == 0) { cbUnit.SelectedIndex = 1; nInterval.Value = Clamp(nInterval, j.IntervalMinutes / 60); }
@@ -446,6 +489,9 @@ namespace AutoCopy
             j.IncludeSubdirs = cSub.Checked;
             j.Dest = ToUncIfNetworkDrive(tDst.Text.Trim());
             j.Mirror = rMirror.Checked;
+            j.Sync = rSync.Checked;
+            j.DedupLarge = cDedup.Checked;
+            j.DedupMinMB = (int)nDedup.Value;
             j.MirrorMaxCount = (int)nMirrorCount.Value;
             j.MirrorMaxPercent = (int)nMirrorPct.Value;
             int iv = (int)nInterval.Value * (cbUnit.SelectedIndex == 1 ? 60 : 1);

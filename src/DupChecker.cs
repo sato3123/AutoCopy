@@ -72,13 +72,22 @@ namespace AutoCopy
 
             DupResult res = new DupResult();
             res.JobId = job.Id; res.JobName = job.Name; res.Checked = Fmt.Now(); res.DestRoot = dst;
+            // 同期の共有フォルダには他のPCのファイルもあるため、重複チェックで削除候補を出さない
+            if (job.Sync) { Save(res); lock (state) { state.LastDupCheckTicks = DateTime.UtcNow.Ticks; } return res; }
             if (!Directory.Exists(PathUtil.Long(dst))) { Save(res); return res; }
 
             ScanResult ds = Scanner.Scan(dst, true, null, true, ct);
             ScanResult ss = Scanner.Scan(src, job.IncludeSubdirs, null, false, ct);
 
             HashSet<string> orphans = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (string k in ds.Files.Keys) if (!ss.Files.ContainsKey(k)) orphans.Add(k);
+            foreach (string k in ds.Files.Keys)
+            {
+                if (ss.Files.ContainsKey(k)) continue;
+                // 重複のため代わりに置いたテキスト（元のファイルがコピー元にある）は孤立ではない
+                if (k.EndsWith(AppPaths.PlaceholderSuffix, StringComparison.OrdinalIgnoreCase)
+                    && ss.Files.ContainsKey(k.Substring(0, k.Length - AppPaths.PlaceholderSuffix.Length))) continue;
+                orphans.Add(k);
+            }
             res.OrphanCount = orphans.Count;
 
             Dictionary<string, FileRecord> recs;
