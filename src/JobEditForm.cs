@@ -98,7 +98,7 @@ namespace AutoCopy
             tDst.TextChanged += delegate { UpdatePreview(); };
             b.Controls.Add(Ui.Row(Ui.L("コピー先フォルダ", 130), tDst, Ui.B("参照…", delegate { string f = Ui.BrowseFolder(this, PathUtil.Expand(tDst.Text, AppCore.Settings.FolderName), "コピー先フォルダを選んでください"); if (f != null) tDst.Text = f; })));
             lPreview = Ui.Hint("");
-            lPreview.MaximumSize = new Size(Ui.MaxWidth(600), 0);
+            Ui.FitToForm(lPreview, 600);
             Button ins = Ui.B("{フォルダ名} を末尾に入れる", delegate
             {
                 string t = tDst.Text.TrimEnd('\\');
@@ -225,7 +225,7 @@ namespace AutoCopy
 
             FlowLayoutPanel presets = new FlowLayoutPanel();
             presets.AutoSize = true;
-            presets.MaximumSize = new Size(Ui.MaxWidth(700), 0);
+            Ui.FitToForm(presets, 700);
             presets.WrapContents = true;
             foreach (string k in ExcludePresets.Keys)
             {

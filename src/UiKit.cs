@@ -47,6 +47,27 @@ namespace AutoCopy
             return Math.Max(S(200), w);
         }
 
+        /// <summary>
+        /// 表示したときに、画面（フォーム）の右端を越えないよう最大幅を縮める。
+        /// 文字が大きい・画面が狭いときに横スクロールや欠けが出ないようにする（文章は折り返す）。
+        /// </summary>
+        public static void FitToForm(Control c, int px)
+        {
+            c.MaximumSize = new Size(MaxWidth(px), 0);
+            EventHandler fit = null;
+            fit = delegate
+            {
+                Form f = c.FindForm();
+                if (f == null || c.Parent == null) return;
+                int left = f.PointToClient(c.Parent.PointToScreen(c.Location)).X;
+                int avail = f.ClientSize.Width - left - S(36);   // スクロールバーと余白の分
+                int w = Math.Max(S(160), Math.Min(MaxWidth(px), avail));
+                if (c.MaximumSize.Width != w) { c.MaximumSize = new Size(w, 0); if (c.Parent != null) c.Parent.PerformLayout(); }
+            };
+            c.HandleCreated += fit;
+            c.VisibleChanged += delegate { if (c.Visible) fit(c, EventArgs.Empty); };
+        }
+
         /// <summary>文字の幅（px）</summary>
         public static int TextWidth(string text, Font font)
         {
@@ -124,6 +145,7 @@ namespace AutoCopy
             Label l = L(text);
             l.ForeColor = Quiet;
             l.Font = Small;
+            FitToForm(l, 2000);   // 長い説明は画面の幅で折り返す
             return l;
         }
 
@@ -132,8 +154,8 @@ namespace AutoCopy
             Label l = new Label();
             l.Text = text;
             l.AutoSize = true;
-            l.MaximumSize = new Size(MaxWidth(width), 0);
             l.Margin = new Padding(3, 4, 3, 4);
+            FitToForm(l, width);
             return l;
         }
 
