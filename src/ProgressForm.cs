@@ -20,7 +20,7 @@ namespace AutoCopy
             Ui.SetupForm(this, "作業状況", 900, 600);
             selectedId = jobId;
 
-            jobs = Ui.List("ジョブ|170", "状態|170", "進み具合|80", "ファイル|130", "容量|170", "速さ|90", "残り|90");
+            jobs = Ui.List("ジョブ|150", "状態|160", "進み具合|70", "ファイル|120", "容量|160", "速さ|90", "残り|80");
             jobs.Dock = DockStyle.Top;
             jobs.Height = Ui.S(140);
             foreach (int i in new int[] { 2, 3, 4, 5, 6 }) jobs.Columns[i].TextAlign = HorizontalAlignment.Right;

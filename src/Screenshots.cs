@@ -267,6 +267,17 @@ namespace AutoCopy
             }
             finally { rt.Running = wasRunning; }
 
+            // 予測の見本：新しいファイル・更新したファイル・除外されるファイルを足す
+            try
+            {
+                string src1 = CopyEngine.ResolvedSource(j0, AppCore.Settings);
+                W(Path.Combine(src1, "請求書\\11月.xlsx"), "nov", 300);
+                W(Path.Combine(src1, "請求書\\11月_控え.pdf"), "nov pdf", 300);
+                W(Path.Combine(src1, "見積\\見積書_追加.xlsx"), "add", 300);
+                W(Path.Combine(src1, "集計\\月次.xlsx"), "updated again", 200);
+                W(Path.Combine(src1, "作業\\メモ.log"), "log", 300);
+            }
+            catch (Exception ex) { errors.Add("予測の見本: " + ex); }
             Capture("37_実行結果の予測", delegate()
             {
                 PreviewForm f = new PreviewForm(j0, true);
