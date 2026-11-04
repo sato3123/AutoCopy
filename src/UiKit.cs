@@ -36,6 +36,17 @@ namespace AutoCopy
         /// <summary>100% 表示のときの大きさ（px）を、今の表示倍率に合わせる</summary>
         public static int S(int px) { return (int)Math.Round(px * Factor); }
 
+        /// <summary>
+        /// 折り返す文章などの最大幅。表示倍率に合わせて広げるが、画面が狭いときは画面に収まる幅までにする
+        /// （左の見出しの列とスクロールバーの分を残す）。
+        /// </summary>
+        public static int MaxWidth(int px)
+        {
+            int w = S(px);
+            try { w = Math.Min(w, Screen.PrimaryScreen.WorkingArea.Width - S(220)); } catch (Exception) { }
+            return Math.Max(S(200), w);
+        }
+
         /// <summary>文字の幅（px）</summary>
         public static int TextWidth(string text, Font font)
         {
@@ -121,7 +132,7 @@ namespace AutoCopy
             Label l = new Label();
             l.Text = text;
             l.AutoSize = true;
-            l.MaximumSize = new Size(S(width), 0);
+            l.MaximumSize = new Size(MaxWidth(width), 0);
             l.Margin = new Padding(3, 4, 3, 4);
             return l;
         }
@@ -209,7 +220,8 @@ namespace AutoCopy
             int need = 0;
             foreach (object o in c.Items) need = Math.Max(need, TextWidth(c.GetItemText(o), c.Font));
             need += SystemInformation.VerticalScrollBarWidth + 12;
-            if (need > c.Width) { c.Width = Math.Min(need, S(600)); if (c.Parent != null) c.Parent.PerformLayout(); }
+            if (need > c.Width) c.Width = Math.Min(need, S(600));
+            if (c.Parent != null) c.Parent.PerformLayout();   // 大きくなった分だけ並びを直す
             if (c.DropDownWidth < need) c.DropDownWidth = need;
         }
 
