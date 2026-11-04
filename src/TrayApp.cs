@@ -221,7 +221,7 @@ namespace AutoCopy
         {
             if (cmd == null) return;
             if (cmd == "show") ShowMain();
-            else if (cmd == "run") { AppCore.RunAll(true); Balloon("今すぐ実行", "すべてのジョブを実行しています。", ToolTipIcon.Info); }
+            else if (cmd == "run") { AppCore.RunAll(true); Balloon("強制データ送信", "すべてのジョブを今すぐ実行しています。", ToolTipIcon.Info); }
             else if (cmd.StartsWith("run|"))
             {
                 string name = cmd.Substring(4);
@@ -315,7 +315,7 @@ namespace AutoCopy
                 menu.Items.Add(a);
             }
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("すべて今すぐ実行", null, delegate { HandleCommand("run"); });
+            menu.Items.Add("強制データ送信（すべて今すぐ実行）", null, delegate { HandleCommand("run"); });
 
             ToolStripMenuItem pick = new ToolStripMenuItem("ジョブを選んで実行");
             foreach (JobConfig j in AppCore.Settings.Jobs.ToArray())
