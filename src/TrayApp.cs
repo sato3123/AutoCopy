@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Threading;
 using System.Windows.Forms;
@@ -21,6 +22,20 @@ namespace AutoCopy
         private ConflictForm conflictForm;
         private DupForm dupForm;
         private SettingsForm settingsForm;
+
+        // 確認が必要なときの目立つ表示
+        private readonly System.Windows.Forms.Timer blink;
+        private bool blinkOn;
+        private Icon normalIcon;
+        private AttentionForm attentionForm;
+        private HashSet<string> lastAttention = new HashSet<string>();
+        private DateTime nextRemind = DateTime.MinValue;
+
+        // 自動更新
+        private readonly System.Windows.Forms.Timer updateTimer;
+        private DateTime nextUpdateCheck = DateTime.Now.AddMinutes(2);
+        private Updater.Candidate pendingUpdate;
+        private bool updateChecking;
 
         public TrayApp()
         {
@@ -48,7 +63,153 @@ namespace AutoCopy
             refresh.Interval = 2000;
             refresh.Tick += delegate { UpdateIcon(); };
             refresh.Start();
+
+            blink = new System.Windows.Forms.Timer();
+            blink.Interval = 700;
+            blink.Tick += delegate
+            {
+                blinkOn = !blinkOn;
+                icon.Icon = blinkOn ? IconFactory.Alert : normalIcon;
+            };
+
+            updateTimer = new System.Windows.Forms.Timer();
+            updateTimer.Interval = 60 * 1000;
+            updateTimer.Tick += delegate { UpdateTick(); };
+            updateTimer.Start();
             UpdateIcon();
+        }
+
+        // ================= 確認が必要なとき =================
+
+        /// <summary>確認が必要なものを調べ、アイコンの点滅・お知らせ画面を出す</summary>
+        private void CheckAttention(List<AppCore.AttentionItem> items)
+        {
+            AppSettings s = AppCore.Settings;
+            HashSet<string> now = new HashSet<string>();
+            foreach (AppCore.AttentionItem it in items) now.Add(it.Action + "|" + it.JobId + "|" + (it.IsError ? "error" : it.Text));
+            bool hasNew = false;
+            foreach (string k in now) if (!lastAttention.Contains(k)) { hasNew = true; break; }
+            lastAttention = now;
+
+            if (items.Count == 0)
+            {
+                blink.Stop();
+                if (attentionForm != null && !attentionForm.IsDisposed) attentionForm.Close();
+                nextRemind = DateTime.MinValue;
+                return;
+            }
+            if (s.AttentionBlink) { if (!blink.Enabled) blink.Start(); }
+            else blink.Stop();
+
+            if (!s.AttentionPopup) return;
+            if (hasNew || DateTime.Now >= nextRemind)
+            {
+                ShowAttention(items);
+                nextRemind = DateTime.Now.AddMinutes(Math.Max(5, s.AttentionRemindMinutes));
+            }
+            else if (attentionForm != null && !attentionForm.IsDisposed && attentionForm.Visible)
+                attentionForm.SetItems(items);
+        }
+
+        public void ShowAttention(List<AppCore.AttentionItem> items)
+        {
+            if (items == null) items = AppCore.AttentionItems();
+            if (items.Count == 0) return;
+            if (attentionForm == null || attentionForm.IsDisposed)
+            {
+                attentionForm = new AttentionForm();
+                attentionForm.OpenRequested += delegate(string action, string jobId)
+                {
+                    if (action == null)
+                    {
+                        List<AppCore.AttentionItem> cur = AppCore.AttentionItems();
+                        if (cur.Count > 0) DoAction(cur[0].Action, cur[0].JobId); else ShowMain();
+                    }
+                    else DoAction(action, jobId);
+                };
+                attentionForm.Snoozed += delegate { nextRemind = DateTime.Now.AddHours(1); };
+            }
+            attentionForm.SetItems(items);
+            if (!attentionForm.Visible) attentionForm.Show();
+            System.Media.SystemSounds.Exclamation.Play();
+            // メイン画面を開いていれば、タスクバーのボタンも点滅させる
+            if (mainForm != null && !mainForm.IsDisposed && mainForm.Visible) Native.Flash(mainForm.Handle);
+        }
+
+        // ================= 自動更新 =================
+
+        private void UpdateTick()
+        {
+            if (pendingUpdate != null) { TryApplyUpdate(); return; }
+            if (DateTime.Now < nextUpdateCheck) return;
+            nextUpdateCheck = DateTime.Now.AddMinutes(60);
+            if (AppCore.Settings.AutoUpdate) CheckUpdate(false);
+        }
+
+        /// <summary>更新版を探す（ネットワークを使うので裏で）。manual = メニューから：結果を知らせる</summary>
+        public void CheckUpdate(bool manual)
+        {
+            if (updateChecking) return;
+            updateChecking = true;
+            AppSettings s = AppCore.Settings;
+            System.Threading.Tasks.Task.Factory.StartNew(delegate()
+            {
+                string reason;
+                Updater.Candidate c = null;
+                try { c = Updater.Find(s, out reason); }
+                catch (Exception ex) { reason = ex.Message; }
+                Post(delegate
+                {
+                    updateChecking = false;
+                    if (c == null)
+                    {
+                        if (manual) Ui.Info(null, "更新はありません。\n今の版：" + Updater.CurrentVersion + "\n" + reason);
+                        else if (reason != null && (reason.Contains("署名") || reason.Contains("改ざん")))
+                            AppCore.Notify(NoticeLevel.Warning, "更新版を使いませんでした", reason, "log", null);
+                        if (reason != null && !reason.StartsWith("新しい版ではありません") && !reason.StartsWith("更新版の置き場所が設定"))
+                            Logger.Info(null, "更新の確認：" + reason);
+                        return;
+                    }
+                    Logger.Info(null, "更新版を見つけました：" + c.Version + "（今の版 " + Updater.CurrentVersion + "）" + c.Path);
+                    pendingUpdate = c;
+                    TryApplyUpdate();
+                });
+            });
+        }
+
+        /// <summary>コピー中・画面を開いている間は待ち、手が空いたら入れ替えて起動し直す</summary>
+        private void TryApplyUpdate()
+        {
+            Updater.Candidate c = pendingUpdate;
+            if (c == null) return;
+            if (AppCore.AnyRunning()) return;
+            foreach (Form f in Application.OpenForms)
+                if (f.Visible && !(f is AttentionForm)) return;   // 何か操作中：閉じるまで待つ
+            pendingUpdate = null;
+            Version old = Updater.CurrentVersion;
+            string exe;
+            try { exe = Updater.Install(c); }
+            catch (Exception ex)
+            {
+                Logger.Error(null, "更新できませんでした：" + ex.Message);
+                AppCore.Notify(NoticeLevel.Warning, "更新できませんでした", ex.Message, "log", null);
+                return;
+            }
+            Logger.Write(null, "UPDATE", old + " → " + c.Version + "（" + c.Path + "）", -1, -1);
+            Logger.Flush();
+            try
+            {
+                System.Diagnostics.Process.Start(exe, "/updated " + System.Diagnostics.Process.GetCurrentProcess().Id + " " + old);
+            }
+            catch (Exception ex)
+            {
+                Logger.Error(null, "新しい版を起動できませんでした：" + ex.Message);
+                return;
+            }
+            AppCore.Stop();
+            icon.Visible = false;
+            SingleInstance.Release();
+            ExitThread();
         }
 
         public void Post(Action a)
@@ -70,6 +231,9 @@ namespace AutoCopy
             }
             else if (cmd == "dupcheck") { AppCore.RunDupAll(); Balloon("重複チェック", "重複チェックを始めました。終わったらお知らせします。", ToolTipIcon.Info); }
             else if (cmd.StartsWith("import|")) ImportSetup(cmd.Substring(7));
+            else if (cmd == "checkupdate") CheckUpdate(false);
+            else if (cmd.StartsWith("updated|"))
+                Balloon("新しい版に更新しました", (cmd.Length > 8 ? cmd.Substring(8) + " → " : "") + Updater.CurrentVersion, ToolTipIcon.Info);
             // "startup" は何も表示しない
         }
 
@@ -118,14 +282,17 @@ namespace AutoCopy
             Color main = AppCore.GlobalPaused ? IconFactory.Gray : IconFactory.Blue;
             Color? badge = null;
             string status;
-            bool problem = AppCore.AnyError() || AppCore.TotalConflicts() > 0 || AppCore.TotalPendingDeletes() > 0;
-            if (problem) badge = IconFactory.Orange;
+            List<AppCore.AttentionItem> items = AppCore.AttentionItems();
+            bool problem = items.Count > 0;
+            if (problem) badge = AppCore.AnyError() ? IconFactory.Red : IconFactory.Orange;
             else if (AppCore.AnyRunning()) badge = IconFactory.Green;
             if (AppCore.GlobalPaused) status = "一時停止中";
             else if (AppCore.AnyRunning()) status = "コピー中";
             else status = "動作中";
-            if (problem) status += "（確認が必要です）";
-            icon.Icon = IconFactory.Get(main, badge);
+            if (problem) status = "確認が必要です（" + items.Count + "件）";
+            normalIcon = IconFactory.Get(main, badge);
+            if (!blink.Enabled || !blinkOn) icon.Icon = normalIcon;
+            CheckAttention(items);
             string t = "自動コピー：" + status;
             icon.Text = t.Length > 63 ? t.Substring(0, 63) : t;
         }
@@ -139,6 +306,14 @@ namespace AutoCopy
             ToolStripMenuItem head = new ToolStripMenuItem(status + "　確認待ち " + AppCore.TotalConflicts() + "件");
             head.Enabled = false;
             menu.Items.Add(head);
+            List<AppCore.AttentionItem> att = AppCore.AttentionItems();
+            if (att.Count > 0)
+            {
+                ToolStripMenuItem a = new ToolStripMenuItem("⚠ 確認が必要です（" + att.Count + "件）", null, delegate { ShowAttention(null); });
+                a.Font = new Font(menu.Font, FontStyle.Bold);
+                a.ForeColor = Ui.Warn;
+                menu.Items.Add(a);
+            }
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("すべて今すぐ実行", null, delegate { HandleCommand("run"); });
 
@@ -176,6 +351,7 @@ namespace AutoCopy
             menu.Items.Add("ログを見る", null, delegate { ShowLog(); });
             menu.Items.Add("設定", null, delegate { ShowSettings(); });
             menu.Items.Add("操作説明書", null, delegate { Ui.OpenManual(); });
+            menu.Items.Add("更新を確認（今の版 " + Updater.CurrentVersion + "）", null, delegate { CheckUpdate(true); });
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("終了", null, delegate { ExitApp(); });
         }
@@ -262,6 +438,9 @@ namespace AutoCopy
             if (disposing)
             {
                 refresh.Dispose();
+                blink.Dispose();
+                if (attentionForm != null && !attentionForm.IsDisposed) attentionForm.Close();
+                updateTimer.Dispose();
                 icon.Visible = false;
                 icon.Dispose();
                 menu.Dispose();

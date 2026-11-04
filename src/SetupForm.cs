@@ -77,7 +77,7 @@ namespace AutoCopy
             b.Controls.Add(mirrorPanel);
 
             cAuto = Ui.C("Windows にサインインしたら自動で起動する", true);
-            cShortcut = Ui.C("デスクトップに「自動コピー（今すぐ実行）」のショートカットを作る", firstRun);
+            cShortcut = Ui.C("デスクトップに「" + Shortcuts.ForceSendName + "」のショートカットを作る（ダブルクリックですぐにコピー）", firstRun);
             b.Controls.Add(cAuto);
             b.Controls.Add(cShortcut);
 
@@ -208,6 +208,12 @@ namespace AutoCopy
                     Dictionary<string, JobConfig> before = new Dictionary<string, JobConfig>();
                     foreach (JobConfig j in s.Jobs) before[j.Id] = j;
                     Distribution.Apply(s, payload);
+                    // 更新版の置き場所が配布設定になければ、この配布フォルダを使う（NAS の配布フォルダに新しい exe を置けば全PCが更新される）
+                    if (string.IsNullOrEmpty(s.UpdateFolder) && setupPath != null)
+                    {
+                        string distDir = Path.GetDirectoryName(Path.GetFullPath(setupPath));
+                        if (PathUtil.IsUnc(NetAccess.ToUncIfMapped(distDir))) s.UpdateFolder = NetAccess.ToUncIfMapped(distDir);
+                    }
                     foreach (JobConfig j in s.Jobs)
                     {
                         JobConfig o;
@@ -245,7 +251,7 @@ namespace AutoCopy
                 StartupRegistration.Set(cAuto.Checked, exe);
                 if (cShortcut.Checked)
                 {
-                    try { Shortcuts.CreateOnDesktop("自動コピー（今すぐ実行）", "/run", exe); }
+                    try { Shortcuts.CreateOnDesktop(Shortcuts.ForceSendName, "/run", exe); }
                     catch (Exception ex) { Logger.Error(null, "ショートカットを作れませんでした: " + ex.Message); }
                 }
                 Logger.Info(null, payload != null

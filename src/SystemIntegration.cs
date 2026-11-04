@@ -38,6 +38,32 @@ namespace AutoCopy
 
     public static class Shortcuts
     {
+        /// <summary>すべてのジョブを今すぐ実行するショートカットの名前</summary>
+        public const string ForceSendName = "強制データ送信";
+        public const string OldForceSendName = "自動コピー（今すぐ実行）";
+
+        /// <summary>
+        /// 前の版で作った「自動コピー（今すぐ実行）」のショートカットを「強制データ送信」に名前を変える（1回だけ）。
+        /// ショートカットの中身（実行する内容）は同じ。
+        /// </summary>
+        public static void RenameOld(AppSettings s)
+        {
+            if (s.ShortcutRenamed) return;
+            s.ShortcutRenamed = true;
+            try
+            {
+                string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+                string oldPath = Path.Combine(desktop, OldForceSendName + ".lnk");
+                string newPath = Path.Combine(desktop, ForceSendName + ".lnk");
+                if (File.Exists(oldPath) && !File.Exists(newPath))
+                {
+                    SafeFs.Move(oldPath, newPath);   // デスクトップがコピー元の場合は動かさない
+                    Logger.Info(null, "デスクトップのショートカットの名前を「" + ForceSendName + "」に変えました");
+                }
+            }
+            catch (Exception) { }
+        }
+
         /// <summary>デスクトップにショートカットを作る（WScript.Shell を使用。Windows 7〜11 共通）</summary>
         public static string CreateOnDesktop(string title, string arguments)
         {
@@ -114,6 +140,11 @@ namespace AutoCopy
             if (File.Exists(cfg)) File.Copy(cfg, target + ".config", true);
             string manual = Path.Combine(AppPaths.ExeDir, AppPaths.ManualFileName);
             if (File.Exists(manual)) File.Copy(manual, Path.Combine(bin, AppPaths.ManualFileName), true);
+            foreach (string name in new string[] { AppPaths.CertFileName, AppPaths.CertInstallerName })
+            {
+                string f = Path.Combine(AppPaths.ExeDir, name);
+                try { if (File.Exists(f)) File.Copy(f, Path.Combine(bin, name), true); } catch (Exception) { }
+            }
             // Windows 7 用の .NET Framework インストーラーがあれば、配布フォルダ作成用に一緒に置いておく
             foreach (string f in Directory.GetFiles(AppPaths.ExeDir, "ndp48*.exe"))
             {

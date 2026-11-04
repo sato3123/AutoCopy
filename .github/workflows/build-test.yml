@@ -35,11 +35,22 @@ jobs:
           if not "%RC%"=="0" exit /b 1
           dir dist
 
+      - name: Build a newer version for the auto-update test (version 99)
+        shell: pwsh
+        run: |
+          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          New-Item -ItemType Directory -Force dist-next | Out-Null
+          & $csc /nologo /target:winexe /platform:anycpu /optimize+ /codepage:65001 /define:UPDATETEST /win32icon:app.ico /out:dist-next\AutoCopy.exe `
+            /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Runtime.Serialization.dll /r:System.Xml.dll /r:System.Security.dll `
+            src\*.cs
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          (Get-Item dist-next\AutoCopy.exe).VersionInfo.FileVersion
+
       - name: Build test runner
         shell: pwsh
         run: |
           $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-          $core = 'Models','Util','Native','NetAccess','SafeFs','StateStore','Exclude','Scanner','CopyEngine','DupChecker','Usage','Logger','Distribution','SystemIntegration','AppCore','AssemblyInfo' | ForEach-Object { "src\$_.cs" }
+          $core = 'Models','Util','Native','NetAccess','SafeFs','StateStore','Exclude','Scanner','CopyEngine','DupChecker','Usage','Updater','Logger','Distribution','SystemIntegration','AppCore','AssemblyInfo' | ForEach-Object { "src\$_.cs" }
           New-Item -ItemType Directory -Force test | Out-Null
           & $csc /nologo /target:exe /platform:anycpu /codepage:65001 /out:test\AutoCopyTests.exe `
             /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Runtime.Serialization.dll /r:System.Xml.dll /r:System.Security.dll `

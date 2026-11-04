@@ -188,7 +188,7 @@ namespace AutoCopy
                 if (j == null) return;
                 try
                 {
-                    Shortcuts.CreateOnDesktop("自動コピー（" + j.Name + "）", "/run \"" + j.Name + "\"");
+                    Shortcuts.CreateOnDesktop(Shortcuts.ForceSendName + "（" + j.Name + "）", "/run \"" + j.Name + "\"");
                     Ui.Info(this, "デスクトップにショートカットを作りました。");
                 }
                 catch (Exception ex) { Ui.Error(this, ex.Message); }

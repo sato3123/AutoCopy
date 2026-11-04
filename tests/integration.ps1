@@ -107,6 +107,76 @@ Check 'I16' 'コピー先の _AutoCopy フォルダは隠しフォルダ' $ok ("
 
 if (-not $main.HasExited) { $main.Kill(); $main.WaitForExit() }
 
+# ---------- I17〜I21 自動更新（NAS などの置き場所に新しい版を置く） ----------
+$updApp = Join-Path $env:RUNNER_TEMP 'upd-app'; $updSrc = Join-Path $env:RUNNER_TEMP 'upd-src'
+foreach ($d in $updApp, $updSrc) { if (Test-Path $d) { Remove-Item -Recurse -Force $d }; New-Item -ItemType Directory $d | Out-Null }
+Copy-Item 'dist\AutoCopy.exe', 'dist\AutoCopy.exe.config' $updApp
+$appExe = Join-Path $updApp 'AutoCopy.exe'
+$nextExe = (Resolve-Path 'dist-next\AutoCopy.exe').Path
+function Ver($p) { (Get-Item $p).VersionInfo.FileVersion }
+function AppProcs { Get-Process -Name AutoCopy -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $appExe } }
+$homeU = NewHome 'int-upd'
+$env:AUTOCOPY_HOME = $homeU
+$us = [ordered]@{
+  FormatVersion = 1; InstanceId = 'upd-instance'; FolderName = 'UPD'; LocalLogDays = 90; NetLogDays = 365; TrashDays = 30
+  AutoStart = $false; NotifyErrors = $true; NotifyConfirm = $true; NotifyDone = $false; DistVersion = 0
+  UpdateFolder = $updSrc; AutoUpdate = $true; AttentionBlink = $true; AttentionPopup = $false; AttentionRemindMinutes = 120; ShortcutRenamed = $true
+  Jobs = @()
+}
+New-Item -ItemType Directory -Force "$homeU\roaming" | Out-Null
+$us | ConvertTo-Json -Depth 6 | Out-File -Encoding utf8 "$homeU\roaming\settings.json"
+$ulog = Join-Path $homeU ("local\logs\" + (Get-Date -Format 'yyyy-MM-dd') + '.log')
+function ULog { if (Test-Path $ulog) { Get-Content -Encoding utf8 $ulog -Raw } else { '' } }
+
+# 署名なしで動いているとき：署名なしの新しい版に更新できる
+Copy-Item $nextExe $updSrc
+$p0 = Start-Process -FilePath $appExe -ArgumentList '/startup' -PassThru
+Start-Sleep -Seconds 5
+Start-Process -FilePath $appExe -ArgumentList '/checkupdate' -Wait
+$ok = WaitFor { (Ver $appExe) -eq '99.0.0.0' -and $p0.HasExited -and (AppProcs) } 60
+Check 'I17' '置き場所に新しい版を置くと、自動で入れ替えて起動し直す' $ok ("版: " + (Ver $appExe) + "・前のプロセス終了: " + $p0.HasExited + "・動作中: " + [bool](AppProcs))
+$ok = WaitFor { (ULog) -match "`tUPDATE`t" -and (ULog) -match '新しい版（99.0.0.0）で起動し直しました' } 15
+Check 'I18' '更新をログに記録し、新しい版で動き続ける' $ok ''
+Check 'I19' '前の版を AutoCopy.exe.old として残す' (Test-Path "$appExe.old") ''
+AppProcs | Stop-Process -Force
+Start-Sleep -Seconds 2
+
+# 署名付きで動いているとき：同じ証明書で署名された、改ざんされていない新しい版だけを使う
+$certA = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=自動コピー テストA' -CertStoreLocation Cert:\CurrentUser\My
+$certB = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=別の発行元 テストB' -CertStoreLocation Cert:\CurrentUser\My
+Copy-Item 'dist\AutoCopy.exe' $appExe -Force
+Remove-Item "$appExe.old" -ErrorAction SilentlyContinue
+Set-AuthenticodeSignature -FilePath $appExe -Certificate $certA -HashAlgorithm SHA256 | Out-Null
+$sig = Get-AuthenticodeSignature $appExe
+Write-Host ("今の版の署名: " + $sig.Status + " " + $sig.SignerCertificate.Subject)
+Copy-Item $nextExe "$updSrc\AutoCopy.exe" -Force
+Set-AuthenticodeSignature -FilePath "$updSrc\AutoCopy.exe" -Certificate $certB -HashAlgorithm SHA256 | Out-Null
+$p1 = Start-Process -FilePath $appExe -ArgumentList '/startup' -PassThru
+Start-Sleep -Seconds 5
+Start-Process -FilePath $appExe -ArgumentList '/checkupdate' -Wait
+$ok = WaitFor { (ULog) -match '違う証明書で署名されています' } 30
+Check 'I20' '違う証明書で署名された版には更新しない' ($ok -and (Ver $appExe) -ne '99.0.0.0' -and -not $p1.HasExited) ("版: " + (Ver $appExe))
+
+# 改ざん：同じ証明書で署名した後に中身を1バイト変える
+Copy-Item $nextExe "$updSrc\AutoCopy.exe" -Force
+Set-AuthenticodeSignature -FilePath "$updSrc\AutoCopy.exe" -Certificate $certA -HashAlgorithm SHA256 | Out-Null
+$bytes = [IO.File]::ReadAllBytes("$updSrc\AutoCopy.exe")
+$pos = [int]($bytes.Length / 2); $bytes[$pos] = $bytes[$pos] -bxor 0xFF
+[IO.File]::WriteAllBytes("$updSrc\AutoCopy.exe", $bytes)
+Write-Host ("改ざんした版の署名: " + (Get-AuthenticodeSignature "$updSrc\AutoCopy.exe").Status)
+$before = ([regex]::Matches((ULog), '更新の確認')).Count
+Start-Process -FilePath $appExe -ArgumentList '/checkupdate' -Wait
+$ok = WaitFor { ([regex]::Matches((ULog), '更新の確認')).Count -gt $before } 30
+Check 'I21' '署名の後で中身が変えられた版には更新しない' ($ok -and (Ver $appExe) -ne '99.0.0.0' -and -not $p1.HasExited) ("版: " + (Ver $appExe) + "・" + ((ULog) -split "`n" | Select-String '更新の確認' | Select-Object -Last 1))
+
+# 同じ証明書で正しく署名された版には更新する
+Copy-Item $nextExe "$updSrc\AutoCopy.exe" -Force
+Set-AuthenticodeSignature -FilePath "$updSrc\AutoCopy.exe" -Certificate $certA -HashAlgorithm SHA256 | Out-Null
+Start-Process -FilePath $appExe -ArgumentList '/checkupdate' -Wait
+$ok = WaitFor { (Ver $appExe) -eq '99.0.0.0' -and $p1.HasExited -and (AppProcs) } 60
+Check 'I22' '同じ証明書で署名された新しい版には更新する' $ok ("版: " + (Ver $appExe))
+AppProcs | Stop-Process -Force
+
 $md = @('| No | テスト | 結果 | メモ |', '| --- | --- | --- | --- |') + $results
 $md | Out-File -Encoding utf8 integration-results.md
 "## Integration tests" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY

@@ -7,6 +7,27 @@ namespace AutoCopy
 {
     internal static class Native
     {
+        [StructLayout(LayoutKind.Sequential)]
+        private struct FLASHWINFO { public uint cbSize; public IntPtr hwnd; public uint dwFlags; public uint uCount; public uint dwTimeout; }
+
+        [DllImport("user32.dll")]
+        private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+
+        /// <summary>タスクバーのボタンを、画面を開くまで点滅させる</summary>
+        public static void Flash(IntPtr hwnd)
+        {
+            try
+            {
+                FLASHWINFO f = new FLASHWINFO();
+                f.cbSize = (uint)Marshal.SizeOf(typeof(FLASHWINFO));
+                f.hwnd = hwnd;
+                f.dwFlags = 3 | 12;   // FLASHW_ALL | FLASHW_TIMERNOFG
+                f.uCount = 0; f.dwTimeout = 0;
+                FlashWindowEx(ref f);
+            }
+            catch (Exception) { }
+        }
+
         // ---------- ファイルID（名前変更の検出用。読み取り属性のみで開く） ----------
         public const uint FILE_READ_ATTRIBUTES = 0x80;
         public const uint FILE_SHARE_ALL = 0x7;

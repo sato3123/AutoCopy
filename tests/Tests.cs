@@ -79,6 +79,8 @@ namespace AutoCopy.Tests
             Add("T50", "重複のテキスト：中身が変わったら普通にコピー・ミラーで1つ目が消えたら付け替え・重複チェックで孤立にしない", T50_DedupChanges);
             Add("T51", "複数PCの同期：双方向の取り込み・前の版の控え・削除は伝えない・持ち主の確認をしない", T51_Sync);
             Add("T52", "同期：両方で変えたら確認待ち・共有の方を使う・このPCの方を使う・コピー元の削除は今までどおり拒否", T52_SyncConflict);
+            Add("T53", "確認が必要なものの一覧（上書きの確認・ミラーの保留・未確認の重複チェック・エラー）", T53_Attention);
+            Add("T54", "自動更新：版の比較・置き場所の確認・署名のない版の扱い", T54_UpdaterBasics);
 
             int ng = 0;
             foreach (TestCase t in cases)
@@ -1541,6 +1543,65 @@ namespace AutoCopy.Tests
             SafeFs.SetSyncRoots(new string[] { p.A, p.B });
             Throws<SourceProtectedException>(delegate { SafeFs.CopyIntoSync(Path.Combine(p.S, "c.txt"), nb.S("y.txt"), "y.txt", DateTime.UtcNow, null, CancellationToken.None); }, "同期でないコピー元への取り込みは拒否");
             True(File.Exists(Path.Combine(p.A, "c.txt")), "PC1 の c は残っている");
+        }
+
+        private static void T53_Attention()
+        {
+            Box b = new Box("T53");
+            b.W("a.txt", "a");
+            b.Run();
+            Eq(0, AppCore.AttentionItems().Count, "最初は何もない");
+
+            ConflictItem c = new ConflictItem(); c.Rel = "a.txt"; c.Reason = "newer";
+            lock (b.State) { b.State.Conflicts.Add(c); }
+            PendingDelete p = new PendingDelete(); p.Rel = "x.txt"; p.Size = 1;
+            lock (b.State) { b.State.PendingDeletes.Add(p); }
+            List<AppCore.AttentionItem> items = AppCore.AttentionItems();
+            True(items.Exists(delegate(AppCore.AttentionItem x) { return x.Action == "conflicts" && x.Text.Contains("1件"); }), "上書きの確認");
+            True(items.Exists(delegate(AppCore.AttentionItem x) { return x.Action == "pending" && x.JobId == b.Job.Id; }), "ミラーの保留");
+
+            // 重複チェック：削除候補があり、まだ見ていない結果
+            Directory.CreateDirectory(b.D("空"));
+            DupChecker.Run(b.Job, b.App, b.State, CancellationToken.None);
+            items = AppCore.AttentionItems();
+            True(items.Exists(delegate(AppCore.AttentionItem x) { return x.Action == "dup" && x.JobId == b.Job.Id; }), "未確認の重複チェック結果");
+            // 結果の画面で見たら、確認が必要なものから外れる
+            DupResult r = DupChecker.LoadResult(b.Job.Id);
+            r.Seen = true;
+            Json.Save(DupChecker.ResultPath(b.Job.Id), r);
+            System.Threading.Thread.Sleep(20);
+            File.SetLastWriteTimeUtc(DupChecker.ResultPath(b.Job.Id), DateTime.UtcNow);
+            items = AppCore.AttentionItems();
+            True(!items.Exists(delegate(AppCore.AttentionItem x) { return x.Action == "dup"; }), "見た結果は外れる");
+
+            lock (b.State) { b.State.Conflicts.Clear(); b.State.PendingDeletes.Clear(); }
+            Eq(0, AppCore.AttentionItems().Count, "確認が済めば0件");
+        }
+
+        private static void T54_UpdaterBasics()
+        {
+            Box b = new Box("T54");
+            string self = System.Reflection.Assembly.GetExecutingAssembly().Location;
+            True(Updater.VersionOf(self) != null, "版を読める");
+            Eq(Updater.CurrentVersion, Updater.VersionOf(self), "今の版");
+            string sig; bool unsigned;
+            string err = Updater.CheckSignature(self, out sig, out unsigned);
+            True(err != null && unsigned, "署名のない exe は「署名なし」と判定: " + err);
+            Version v; string signer;
+            True(Updater.Acceptable(self, out v, out signer).StartsWith("新しい版ではありません"), "同じ版には更新しない");
+
+            string reason;
+            b.App.UpdateFolder = null;
+            True(Updater.Find(b.App, out reason) == null && reason.Contains("設定されていません"), "置き場所が未設定");
+            b.App.UpdateFolder = Path.Combine(b.Root, "upd");
+            Directory.CreateDirectory(b.App.UpdateFolder);
+            True(Updater.Find(b.App, out reason) == null && reason.Contains("AutoCopy.exe がありません"), "置き場所に exe がない: " + reason);
+            File.Copy(self, Path.Combine(b.App.UpdateFolder, "AutoCopy.exe"));
+            True(Updater.Find(b.App, out reason) == null && reason.StartsWith("新しい版ではありません"), "同じ版なら更新しない: " + reason);
+            // 中身が壊れたファイル（版を読めない）
+            File.WriteAllText(Path.Combine(b.App.UpdateFolder, "AutoCopy.exe"), "not an exe");
+            True(Updater.Find(b.App, out reason) == null, "壊れたファイルでは更新しない: " + reason);
+            Note = "今の版 " + Updater.CurrentVersion;
         }
 
         private static void T42_Performance()

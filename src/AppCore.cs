@@ -581,6 +581,50 @@ namespace AutoCopy
             return false;
         }
 
+        /// <summary>確認が必要なもの1件</summary>
+        public class AttentionItem
+        {
+            public string Text;      // 例：上書きの確認 2件
+            public string Action;    // conflicts / pending / dup / job
+            public string JobId;
+            public bool IsError;
+        }
+
+        /// <summary>今、あなたの確認が必要なもの（上書きの確認・ミラーの保留・未確認の重複チェック結果・エラー）</summary>
+        public static List<AttentionItem> AttentionItems()
+        {
+            List<AttentionItem> list = new List<AttentionItem>();
+            int c = TotalConflicts();
+            if (c > 0) list.Add(Item("上書きの確認が " + c + "件 あります", "conflicts", null, false));
+            foreach (JobConfig j in Settings.Jobs.ToArray())
+            {
+                JobState st = GetState(j.Id);
+                int p;
+                lock (st) { p = st.PendingDeletes.Count; }
+                if (p > 0) list.Add(Item(j.Name + "：ミラーの削除 " + p + "件 が保留中です", "pending", j.Id, false));
+            }
+            foreach (JobConfig j in Settings.Jobs.ToArray())
+            {
+                int n = DupChecker.UnseenCandidates(j.Id);
+                if (n > 0) list.Add(Item(j.Name + "：重複チェックで削除候補が " + n + "件 見つかりました", "dup", j.Id, false));
+            }
+            foreach (JobConfig j in Settings.Jobs.ToArray())
+            {
+                if (!j.Enabled) continue;
+                JobRuntime rt = GetRuntime(j.Id);
+                if (rt.LastResult == "error")
+                    list.Add(Item(j.Name + "：エラー　" + (rt.LastMessage ?? ""), "main", j.Id, true));
+            }
+            return list;
+        }
+
+        private static AttentionItem Item(string text, string action, string jobId, bool err)
+        {
+            AttentionItem i = new AttentionItem();
+            i.Text = text; i.Action = action; i.JobId = jobId; i.IsError = err;
+            return i;
+        }
+
         public static bool AnyError()
         {
             foreach (JobConfig j in Settings.Jobs.ToArray())

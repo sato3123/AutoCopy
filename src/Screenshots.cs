@@ -92,6 +92,13 @@ namespace AutoCopy
                 return bf;
             }, delegate(Form f) { ((BusyForm)f).ShowProgress(); });
             CaptureTrayMenu();
+            Capture("33_確認が必要です（お知らせ）", delegate()
+            {
+                AttentionForm af = new AttentionForm();
+                af.SetItems(AppCore.AttentionItems());
+                return af;
+            }, delegate(Form f) { ((AttentionForm)f).PlaceBottomRight(); });
+            SaveIcons();
 
             File.WriteAllText(Path.Combine(outDir, "errors.txt"), errors.Count == 0 ? "なし" : string.Join("\r\n\r\n", errors.ToArray()));
             string scale = (Ui.TextScale * 100).ToString("0") + "%";
@@ -351,6 +358,31 @@ namespace AutoCopy
             unlock.Invoke(f, new object[] { true });
         }
 
+        /// <summary>通知領域のアイコン（ふだん・確認が必要・点滅中）を並べた画像</summary>
+        private static IEnumerable<Form> EnumForms()
+        {
+            List<Form> l = new List<Form>();
+            foreach (Form f in Application.OpenForms) l.Add(f);
+            return l;
+        }
+
+        private static void SaveIcons()
+        {
+            try
+            {
+                Icon[] icons = { IconFactory.Get(IconFactory.Blue, null), IconFactory.Get(IconFactory.Blue, IconFactory.Orange),
+                                 IconFactory.Alert, IconFactory.Get(IconFactory.Blue, IconFactory.Red) };
+                using (Bitmap bmp = new Bitmap(40 * icons.Length + 8, 48))
+                using (Graphics g = Graphics.FromImage(bmp))
+                {
+                    g.Clear(Color.FromArgb(32, 32, 32));
+                    for (int i = 0; i < icons.Length; i++) g.DrawIcon(icons[i], new Rectangle(8 + i * 40, 8, 32, 32));
+                    bmp.Save(Path.Combine(outDir, "34_通知領域のアイコン.png"), ImageFormat.Png);
+                }
+            }
+            catch (Exception ex) { errors.Add("アイコン: " + ex); }
+        }
+
         private static void CaptureTrayMenu()
         {
             try
@@ -366,6 +398,8 @@ namespace AutoCopy
                     Save(menu, "18_トレイメニュー");
                     menu.Close();
                 }
+                // 確認が必要なときに出るお知らせ画面は、ここでは閉じる（別に撮る）
+                foreach (Form f in new List<Form>(EnumForms())) if (f is AttentionForm) f.Close();
             }
             catch (Exception ex) { errors.Add("トレイメニュー: " + ex); }
         }

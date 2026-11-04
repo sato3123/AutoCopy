@@ -14,6 +14,8 @@ namespace AutoCopy
         ///   /run              すべてのジョブを今すぐ実行
         ///   /run "ジョブ名"   指定したジョブだけ実行
         ///   /dupcheck         重複チェックを実行
+        ///   /checkupdate      更新版があるか確かめる（あれば更新する）
+        ///   /updated pid 版   自動更新で起動し直した（前の版が終わるのを待ってから動く）
         /// </summary>
         [STAThread]
         private static void Main(string[] args)
@@ -33,6 +35,12 @@ namespace AutoCopy
             }
 
             string command = BuildCommand(args);
+            if (args.Length >= 2 && args[0].Equals("/updated", StringComparison.OrdinalIgnoreCase))
+            {
+                int pid;
+                if (int.TryParse(args[1], out pid)) Updater.WaitForExit(pid, 60);
+                command = "updated|" + (args.Length > 2 ? args[2] : "");
+            }
             string setupNextToExe = Path.Combine(AppPaths.ExeDir, AppPaths.SetupFileName);
 
             if (!SingleInstance.TryAcquire())
@@ -102,7 +110,13 @@ namespace AutoCopy
                 return;
             }
 
-            Logger.Info(null, command == "startup" ? "サインインにより起動しました。自動コピーを開始します" : "起動しました");
+            Logger.Info(null, command == "startup" ? "サインインにより起動しました。自動コピーを開始します"
+                : command.StartsWith("updated|") ? "新しい版（" + Updater.CurrentVersion + "）で起動し直しました" : "起動しました");
+            if (!AppCore.Settings.ShortcutRenamed)
+            {
+                Shortcuts.RenameOld(AppCore.Settings);
+                try { AppCore.SaveSettings(); } catch (Exception) { }
+            }
             AppCore.Start();
             using (TrayApp app = new TrayApp())
             {
@@ -119,6 +133,7 @@ namespace AutoCopy
             string a = args[0].Trim().ToLowerInvariant().TrimStart('/', '-');
             if (a == "startup") return "startup";
             if (a == "dupcheck") return "dupcheck";
+            if (a == "checkupdate") return "checkupdate";
             if (a == "run") return args.Length > 1 ? "run|" + args[1] : "run";
             return "show";
         }

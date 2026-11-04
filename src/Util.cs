@@ -99,6 +99,9 @@ namespace AutoCopy
         public static string ExeDir { get { return Path.GetDirectoryName(ExePath); } }
         public const string SetupFileName = "AutoCopy.setup";
         public const string ManualFileName = "操作説明書.html";
+        /// <summary>デジタル署名の証明書（公開部分）と、それを PC に登録するバッチ</summary>
+        public const string CertFileName = "自動コピー_署名証明書.cer";
+        public const string CertInstallerName = "署名証明書を登録.bat";
     }
 
     public static class PathUtil
@@ -335,5 +338,32 @@ namespace AutoCopy
         }
 
         public static Icon App { get { return Get(Blue, null); } }
+
+        private static Icon alert;
+        /// <summary>確認が必要なときに点滅させるアイコン（オレンジの丸に白い「！」）</summary>
+        public static Icon Alert
+        {
+            get
+            {
+                if (alert != null) return alert;
+                using (Bitmap bmp = new Bitmap(32, 32))
+                {
+                    using (Graphics g = Graphics.FromImage(bmp))
+                    {
+                        g.SmoothingMode = SmoothingMode.AntiAlias;
+                        g.Clear(Color.Transparent);
+                        using (SolidBrush b = new SolidBrush(Orange)) g.FillEllipse(b, 1, 1, 30, 30);
+                        using (Pen w = new Pen(Color.White, 4.5f))
+                        {
+                            w.StartCap = LineCap.Round; w.EndCap = LineCap.Round;
+                            g.DrawLine(w, 16, 7, 16, 18);
+                        }
+                        g.FillEllipse(Brushes.White, 13, 21, 6, 6);
+                    }
+                    alert = Icon.FromHandle(bmp.GetHicon());
+                }
+                return alert;
+            }
+        }
     }
 }

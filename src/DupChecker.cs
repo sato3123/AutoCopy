@@ -16,6 +16,7 @@ namespace AutoCopy
         [DataMember] public string DestRoot;
         [DataMember] public List<DupGroup> Groups = new List<DupGroup>();
         [DataMember] public int OrphanCount;
+        [DataMember] public bool Seen;   // 結果の画面で一度見た（見るまでは「確認が必要」として目立たせる）
 
         public int DeleteCandidateCount()
         {
@@ -57,6 +58,25 @@ namespace AutoCopy
     public static class DupChecker
     {
         public static string ResultPath(string jobId) { return Path.Combine(AppPaths.DupDir, jobId + ".json"); }
+
+        private static readonly Dictionary<string, KeyValuePair<DateTime, int>> unseenCache = new Dictionary<string, KeyValuePair<DateTime, int>>();
+
+        /// <summary>まだ結果の画面で見ていない削除候補の数（ファイルが変わったときだけ読み直す）</summary>
+        public static int UnseenCandidates(string jobId)
+        {
+            string p = ResultPath(jobId);
+            DateTime t;
+            try { if (!File.Exists(p)) return 0; t = File.GetLastWriteTimeUtc(p); } catch (Exception) { return 0; }
+            lock (unseenCache)
+            {
+                KeyValuePair<DateTime, int> c;
+                if (unseenCache.TryGetValue(jobId, out c) && c.Key == t) return c.Value;
+            }
+            DupResult r = LoadResult(jobId);
+            int n = r == null || r.Seen ? 0 : r.DeleteCandidateCount();
+            lock (unseenCache) { unseenCache[jobId] = new KeyValuePair<DateTime, int>(t, n); }
+            return n;
+        }
 
         public static DupResult LoadResult(string jobId)
         {

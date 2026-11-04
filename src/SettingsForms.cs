@@ -11,9 +11,9 @@ namespace AutoCopy
     public class SettingsForm : Form
     {
         private readonly Label lFolder, lDist;
-        private readonly TextBox tLogRoot;
-        private readonly CheckBox cAuto, cErr, cConf, cDone;
-        private readonly NumericUpDown nLocal, nNet, nTrash;
+        private readonly TextBox tLogRoot, tUpdate;
+        private readonly CheckBox cAuto, cErr, cConf, cDone, cBlink, cPopup, cAutoUpdate;
+        private readonly NumericUpDown nLocal, nNet, nTrash, nRemind;
         private readonly ComboBox cbShortcut;
 
         public SettingsForm()
@@ -44,7 +44,22 @@ namespace AutoCopy
             cErr = Ui.C("エラーを通知する", s.NotifyErrors);
             cConf = Ui.C("上書き確認・重複チェック・ミラーの保留を通知する", s.NotifyConfirm);
             cDone = Ui.C("コピーが正常に終わったときも通知する", s.NotifyDone);
-            b.Controls.Add(Ui.Section("通知", cErr, cConf, cDone));
+            cBlink = Ui.C("アイコンを点滅させる（確認が済むまで）", s.AttentionBlink);
+            cPopup = Ui.C("画面右下に「確認が必要です」のメッセージを出す", s.AttentionPopup);
+            nRemind = Ui.N(5, 1440, s.AttentionRemindMinutes, 64);
+            b.Controls.Add(Ui.Section("通知", cErr, cConf, cDone,
+                Ui.L("確認が必要なとき（上書きの確認・ミラーの保留・重複チェックの結果・エラー）"),
+                cBlink, cPopup,
+                Ui.Row(Ui.L("　確認が済むまで", 140), nRemind, Ui.L("分ごとにメッセージを出し直す"))));
+
+            tUpdate = Ui.T(s.UpdateFolder, 300);
+            cAutoUpdate = Ui.C("新しい版があれば自動で更新する（1時間ごとに確認。コピー中・画面を開いている間は待ちます）", s.AutoUpdate);
+            b.Controls.Add(Ui.Section("自動更新",
+                Ui.Row(Ui.L("更新版の置き場所", 140), tUpdate,
+                    Ui.B("参照…", delegate { string f = Ui.BrowseFolder(this, tUpdate.Text, "新しい AutoCopy.exe を置くフォルダ（NAS の配布フォルダなど）を選んでください"); if (f != null) tUpdate.Text = NetAccess.ToUncIfMapped(f); })),
+                cAutoUpdate,
+                Ui.Hint("置き場所の AutoCopy.exe が今の版（" + Updater.CurrentVersion + "）より新しく、今と同じ証明書でデジタル署名されているときだけ更新します。"),
+                Ui.Row(Ui.B("今すぐ確認", delegate { if (Save() && TrayApp.Instance != null) TrayApp.Instance.CheckUpdate(true); }))));
 
             nLocal = Ui.N(1, 3650, s.LocalLogDays, 72);
             nNet = Ui.N(1, 3650, s.NetLogDays, 72);
@@ -54,7 +69,7 @@ namespace AutoCopy
                 Ui.Row(Ui.L("ログ（保管先）", 180), nNet, Ui.L("日")),
                 Ui.Row(Ui.L("削除済み・退避ファイル", 180), nTrash, Ui.L("日"))));
 
-            cbShortcut = Ui.Combo(320, "すべてのジョブを今すぐ実行");
+            cbShortcut = Ui.Combo(320, "強制データ送信（すべてのジョブを今すぐ実行）");
             foreach (JobConfig j in s.Jobs) cbShortcut.Items.Add(j.Name + " を今すぐ実行");
             cbShortcut.Items.Add("重複チェックを実行");
             b.Controls.Add(Ui.Section("デスクトップのショートカット",
@@ -108,8 +123,8 @@ namespace AutoCopy
             try
             {
                 string path;
-                if (i <= 0) path = Shortcuts.CreateOnDesktop("自動コピー（今すぐ実行）", "/run");
-                else if (i <= jobs.Count) path = Shortcuts.CreateOnDesktop("自動コピー（" + jobs[i - 1].Name + "）", "/run \"" + jobs[i - 1].Name + "\"");
+                if (i <= 0) path = Shortcuts.CreateOnDesktop(Shortcuts.ForceSendName, "/run");
+                else if (i <= jobs.Count) path = Shortcuts.CreateOnDesktop(Shortcuts.ForceSendName + "（" + jobs[i - 1].Name + "）", "/run \"" + jobs[i - 1].Name + "\"");
                 else path = Shortcuts.CreateOnDesktop("自動コピー（重複チェック）", "/dupcheck");
                 Ui.Info(this, "デスクトップにショートカットを作りました：\n" + Path.GetFileName(path));
             }
@@ -125,6 +140,12 @@ namespace AutoCopy
             s.NotifyErrors = cErr.Checked;
             s.NotifyConfirm = cConf.Checked;
             s.NotifyDone = cDone.Checked;
+            s.AttentionBlink = cBlink.Checked;
+            s.AttentionPopup = cPopup.Checked;
+            s.AttentionRemindMinutes = (int)nRemind.Value;
+            string up = tUpdate.Text.Trim();
+            s.UpdateFolder = up.Length == 0 ? null : NetAccess.ToUncIfMapped(up);
+            s.AutoUpdate = cAutoUpdate.Checked;
             s.LocalLogDays = (int)nLocal.Value;
             s.NetLogDays = (int)nNet.Value;
             s.TrashDays = (int)nTrash.Value;
@@ -381,6 +402,12 @@ namespace AutoCopy
             DistPayload payload = Distribution.BuildPayload(s, name, ver, creds);
             string folder = tOut.Text.Trim();
             string pass = tPass.Text;
+            // 更新版の置き場所が決まっていなければ、NAS に作る配布フォルダをそのまま使う
+            if (string.IsNullOrEmpty(payload.UpdateFolder))
+            {
+                string unc = NetAccess.ToUncIfMapped(folder);
+                if (PathUtil.IsUnc(unc)) payload.UpdateFolder = unc;
+            }
             try
             {
                 List<string> notes = Ui.Busy<List<string>>(this, "配布フォルダを作っています…", delegate() { return Distribution.CreateFolder(folder, payload, pass); });

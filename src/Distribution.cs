@@ -111,6 +111,7 @@ namespace AutoCopy
             p.Version = version;
             p.Created = DateTime.Now.ToString("yyyy-MM-dd HH:mm");
             p.LogRoot = s.LogRoot;
+            p.UpdateFolder = s.UpdateFolder;
             p.LocalLogDays = s.LocalLogDays;
             p.NetLogDays = s.NetLogDays;
             p.TrashDays = s.TrashDays;
@@ -132,6 +133,7 @@ namespace AutoCopy
                 paths.Add(NetAccess.ToUncIfMapped(j.Dest));
             }
             if (!string.IsNullOrEmpty(s.LogRoot)) paths.Add(s.LogRoot);
+            if (!string.IsNullOrEmpty(s.UpdateFolder)) paths.Add(s.UpdateFolder);
             foreach (string p in paths)
             {
                 string sv = PathUtil.UncServer(p);
@@ -147,6 +149,7 @@ namespace AutoCopy
         public static void Apply(AppSettings s, DistPayload p)
         {
             s.LogRoot = p.LogRoot;
+            if (!string.IsNullOrEmpty(p.UpdateFolder)) s.UpdateFolder = p.UpdateFolder;
             if (p.LocalLogDays > 0) s.LocalLogDays = p.LocalLogDays;
             if (p.NetLogDays > 0) s.NetLogDays = p.NetLogDays;
             if (p.TrashDays > 0) s.TrashDays = p.TrashDays;
@@ -187,6 +190,12 @@ namespace AutoCopy
             {
                 File.Copy(f, Path.Combine(folder, Path.GetFileName(f)), true);
                 net = true;
+            }
+            // 署名の証明書と、その登録用のバッチ（あれば一緒に配る）
+            foreach (string name in new string[] { AppPaths.CertFileName, AppPaths.CertInstallerName })
+            {
+                string f = Path.Combine(AppPaths.ExeDir, name);
+                if (File.Exists(f)) File.Copy(f, Path.Combine(folder, name), true);
             }
             if (!net) notes.Add(".NET Framework 4.8 のインストーラー（ndp48-x86-x64-allos-jpn.exe）が AutoCopy.exe と同じフォルダにないため同梱していません。Windows 7 のPCに配る場合は、配布フォルダに入れてください。");
             Write(Path.Combine(folder, AppPaths.SetupFileName), payload, password);

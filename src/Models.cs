@@ -19,6 +19,12 @@ namespace AutoCopy
         [DataMember] public bool NotifyErrors;
         [DataMember] public bool NotifyConfirm;
         [DataMember] public bool NotifyDone;
+        [DataMember] public string UpdateFolder;      // 更新版の AutoCopy.exe を置く場所（NAS の配布フォルダなど）
+        [DataMember] public bool AutoUpdate;          // 置き場所に新しい版があれば自動で更新する
+        [DataMember] public bool AttentionBlink;      // 確認が必要なときはアイコンを点滅させる
+        [DataMember] public bool AttentionPopup;      // 確認が必要なときはメッセージ画面を出す
+        [DataMember] public int AttentionRemindMinutes; // 確認が済むまで、メッセージ画面を出し直す間隔
+        [DataMember] public bool ShortcutRenamed;     // 旧名のショートカットを「強制データ送信」に変えた
         [DataMember] public int DistVersion;          // 取り込んだ配布設定の版
         [DataMember] public string DistName;
         [DataMember] public string DistCreated;
@@ -39,6 +45,10 @@ namespace AutoCopy
             NotifyErrors = true;
             NotifyConfirm = true;
             NotifyDone = false;
+            AutoUpdate = true;
+            AttentionBlink = true;
+            AttentionPopup = true;
+            AttentionRemindMinutes = 120;
             Jobs = new List<JobConfig>();
         }
 
@@ -46,6 +56,7 @@ namespace AutoCopy
         private void OnDeserialized(StreamingContext c)
         {
             if (Jobs == null) Jobs = new List<JobConfig>();
+            if (AttentionRemindMinutes <= 0) AttentionRemindMinutes = 120;
         }
     }
 
@@ -224,6 +235,7 @@ namespace AutoCopy
         [DataMember] public int Version;
         [DataMember] public string Created;
         [DataMember] public string LogRoot;
+        [DataMember] public string UpdateFolder;
         [DataMember] public int LocalLogDays;
         [DataMember] public int NetLogDays;
         [DataMember] public int TrashDays;

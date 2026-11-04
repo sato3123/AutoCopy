@@ -356,6 +356,12 @@ namespace AutoCopy
             if (i < 0 || i >= AppCore.Settings.Jobs.Count) return;
             currentJob = AppCore.Settings.Jobs[i];
             current = DupChecker.LoadResult(currentJob.Id);
+            if (current != null && !current.Seen)
+            {
+                current.Seen = true;
+                try { Json.Save(DupChecker.ResultPath(currentJob.Id), current); } catch (Exception) { }
+                AppCore.RaiseChanged();
+            }
             filling = true;
             lv.BeginUpdate();
             lv.Items.Clear();
