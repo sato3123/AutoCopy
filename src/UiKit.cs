@@ -230,6 +230,8 @@ namespace AutoCopy
             c.Items.AddRange(items);
             // 表示する前に、いちばん長い選択肢が入る幅にする（後から追加した選択肢も含む）
             c.HandleCreated += delegate { FitCombo(c); };
+            // 文字の大きさで高さが変わったら、入れ物の並びを直す
+            c.SizeChanged += delegate { for (Control p = c.Parent; p != null && !(p is Form); p = p.Parent) p.PerformLayout(); };
             if (items.Length > 0) c.SelectedIndex = 0;
             c.Margin = new Padding(3, 4, 3, 3);
             c.Font = Base;
