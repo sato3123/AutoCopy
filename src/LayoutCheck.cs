@@ -87,7 +87,7 @@ namespace AutoCopy
             ScrollableControl sp = parent as ScrollableControl;
             bool scrolls = sp != null && sp.AutoScroll;
             if (scrolls && sp.HorizontalScroll.Visible && !(parent is ListView))
-                issues.Add(Name(parent) + "：横スクロールが出る（幅が足りない）");
+                issues.Add(Name(parent) + "：横スクロールが出る（幅が足りない。いちばん右まであるのは " + Widest(parent) + "）");
 
             List<Control> placed = new List<Control>();
             foreach (Control c in parent.Controls)
@@ -110,6 +110,24 @@ namespace AutoCopy
                     a.Inflate(-1, -1); b.Inflate(-1, -1);
                     if (a.IntersectsWith(b)) issues.Add(Name(placed[i]) + " と " + Name(placed[k]) + "：重なっている");
                 }
+        }
+
+        /// <summary>中でいちばん右まで伸びている部品（横スクロールの原因）</summary>
+        private static string Widest(Control root)
+        {
+            Control best = null; int right = 0;
+            Stack<Control> st = new Stack<Control>();
+            foreach (Control c in root.Controls) st.Push(c);
+            while (st.Count > 0)
+            {
+                Control c = st.Pop();
+                if (!c.Visible) continue;
+                int r = root.RectangleToClient(c.RectangleToScreen(c.ClientRectangle)).Right;
+                bool leaf = c.Controls.Count == 0 || c is ListView || c is NumericUpDown || c is ComboBox;
+                if (leaf && r > right) { right = r; best = c; }
+                if (!leaf) foreach (Control ch in c.Controls) st.Push(ch);
+            }
+            return best == null ? "不明" : Name(best) + "（右端 " + right + "px／枠 " + root.ClientSize.Width + "px）";
         }
 
         private static void CheckOne(Control c, Control parent, bool parentScrolls, List<string> issues)

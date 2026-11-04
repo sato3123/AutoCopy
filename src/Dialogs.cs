@@ -86,7 +86,8 @@ namespace AutoCopy
             lv.Dock = DockStyle.Fill;
 
             backup = Ui.C("上書きする前に、コピー先の古いファイルを「_AutoCopy\\退避」に残す", true);
-            FlowLayoutPanel actions = Ui.Row(Ui.L("チェックしたファイルを"),
+            // 画面の幅が足りないときは折り返す
+            FlowLayoutPanel actions = Ui.WrapRow(Ui.L("チェックしたファイルを"),
                 Ui.B("上書きする（このPCの方を使う）", delegate { Apply(AppCore.ActOverwrite); }),
                 Ui.B("共有フォルダの方を使う（同期のみ）", delegate { Apply(AppCore.ActTakeShared); }),
                 Ui.B("今回はスキップ", delegate { Apply(AppCore.ActSkipOnce); }),
@@ -97,6 +98,8 @@ namespace AutoCopy
                 Ui.Hint("「今回はスキップ」：コピー元がまた変わるまで聞きません。「後で決める」場合は、このまま閉じてください（トレイに確認待ちとして残ります）。"));
             bottom.Dock = DockStyle.Bottom;
             bottom.Padding = new Padding(12, 6, 12, 6);
+            Resize += delegate { actions.MaximumSize = new Size(Math.Max(200, ClientSize.Width - 30), 0); };
+            actions.MaximumSize = new Size(Math.Max(200, ClientSize.Width - 30), 0);
 
             Controls.Add(lv);
             Controls.Add(top);

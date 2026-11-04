@@ -199,6 +199,8 @@ namespace AutoCopy
             c.HandleCreated += delegate { FitCombo(c); };
             if (items.Length > 0) c.SelectedIndex = 0;
             c.Margin = new Padding(3, 4, 3, 3);
+            c.Font = Base;
+            FitCombo(c);
             return c;
         }
 
@@ -207,7 +209,7 @@ namespace AutoCopy
             int need = 0;
             foreach (object o in c.Items) need = Math.Max(need, TextWidth(c.GetItemText(o), c.Font));
             need += SystemInformation.VerticalScrollBarWidth + 12;
-            if (need > c.Width) c.Width = Math.Min(need, S(600));
+            if (need > c.Width) { c.Width = Math.Min(need, S(600)); if (c.Parent != null) c.Parent.PerformLayout(); }
             if (c.DropDownWidth < need) c.DropDownWidth = need;
         }
 
@@ -220,6 +222,14 @@ namespace AutoCopy
             p.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             p.Margin = new Padding(0);
             p.Controls.AddRange(controls);
+            return p;
+        }
+
+        /// <summary>横に並べ、幅が足りなければ折り返す行（MaximumSize で幅を決める）</summary>
+        public static FlowLayoutPanel WrapRow(params Control[] controls)
+        {
+            FlowLayoutPanel p = Row(controls);
+            p.WrapContents = true;
             return p;
         }
 

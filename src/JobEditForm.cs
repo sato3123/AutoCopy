@@ -116,11 +116,11 @@ namespace AutoCopy
             nMirrorCount = Ui.N(1, 1000000, 100, 80);
             nMirrorPct = Ui.N(1, 100, 10, 56);
             b.Controls.Add(Ui.Row(Ui.L("", 130), Ui.Hint("ミラーで一度に"), nMirrorCount, Ui.Hint("件、またはコピー先の"), nMirrorPct, Ui.Hint("% を超える削除は確認する")));
-            rSync = Ui.R("複数PCで同期（例外：コピー先を共有フォルダにして、複数のPCで双方向に同期する）", false);
+            rSync = Ui.R("複数PCで同期（例外）", false);
             rSync.ForeColor = Ui.Warn;
             rSync.CheckedChanged += OnSyncChanged;
             b.Controls.Add(Ui.Row(Ui.L("", 130), rSync));
-            b.Controls.Add(Ui.Row(Ui.L("", 130), Ui.Wrap("同期では、他のPCが共有フォルダに入れた・更新したファイルを、このPCのコピー元フォルダにも取り込みます。削除はどちらにも伝えません。両方で変えたファイルは「上書きの確認」で選びます。取り込みで置き換えたこのPCの古い版は控えに残ります。", 600)));
+            b.Controls.Add(Ui.Row(Ui.L("", 130), Ui.Wrap("コピー先を共有フォルダにして、複数のPCで双方向に同期します。同期では、他のPCが共有フォルダに入れた・更新したファイルを、このPCのコピー元フォルダにも取り込みます。削除はどちらにも伝えません。両方で変えたファイルは「上書きの確認」で選びます。取り込みで置き換えたこのPCの古い版は控えに残ります。", 600)));
 
             nInterval = Ui.N(1, 1440, 30, 72);
             cbUnit = Ui.Combo(80, "分", "時間");
@@ -135,7 +135,7 @@ namespace AutoCopy
             nDelay = Ui.N(0, 120, 1, 56);
             b.Controls.Add(Ui.Row(Ui.L("起動後の初回", 130), cDelay, nDelay, Ui.L("分待ってから実行する")));
 
-            cFollow = Ui.C("コピー元で名前やフォルダ名を変えたら、コピー先も同じ名前に変える（再コピーしない・確認なし）", true);
+            cFollow = Ui.C("名前やフォルダ名を変えたら、コピー先も同じ名前に変える（再コピーしない）", true);
             rAsk = Ui.R("毎回確認する（推奨）", true);
             rSkip = Ui.R("上書きしない", false);
             rOver = Ui.R("常に上書き", false);
@@ -148,12 +148,12 @@ namespace AutoCopy
                 Ui.Row(Ui.L("同じとみなす日時の差", 160), nTol, Ui.L("秒以内")),
                 cBackup));
 
-            cDedup = Ui.C("コピー元の中で中身が同じ大きいファイルは、1つだけコピーし、2つ目以降は保管場所を書いたテキスト（〇〇" + AppPaths.PlaceholderSuffix + "）を置く", true);
+            cDedup = Ui.C("中身が同じ大きいファイルは1つだけコピーする", true);
             nDedup = Ui.N(1, 1000000, 10, 72);
             b.Controls.Add(Ui.Section("大きいファイルの重複",
                 cDedup,
                 Ui.Row(Ui.L("対象の大きさ", 160), nDedup, Ui.L("MB 以上")),
-                Ui.Wrap("中身はファイル全体で比べます（同じ大きさのものだけ読みます）。すでに普通にコピー済みのファイルはそのまま残します。同期のジョブでは使いません。", 600)));
+                Ui.Wrap("コピー元の中で中身が同じファイルは、2つ目以降をコピーせず、1つ目の保管場所を書いたテキスト（〇〇" + AppPaths.PlaceholderSuffix + "）を置きます。中身はファイル全体で比べます（同じ大きさのものだけ読みます）。すでに普通にコピー済みのファイルはそのまま残します。同期のジョブでは使いません。", 600)));
 
             nPar = Ui.N(0, 8, 0, 56);
             b.Controls.Add(Ui.Row(Ui.L("同時にコピーする数", 130), nPar, Ui.Hint("0 = 自動（ネットワークは 2、PC内は 4）")));

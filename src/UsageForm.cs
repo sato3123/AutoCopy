@@ -28,13 +28,24 @@ namespace AutoCopy
             host = new ChartHost(chart);
             up = Ui.B("↑ 上のフォルダへ", delegate { if (node != null && node.Parent != null) Show(node.Parent); });
             up.Enabled = false;
-            where = Ui.L("");
+            // 場所は長くなるので、入りきらないときは「…」で省略する（全体はツールチップで見られる）
+            where = new Label();
             where.Font = Ui.Bold;
-            where.Margin = new Padding(8, 8, 8, 0);
-            FlowLayoutPanel bar = Ui.Row(up, where);
+            where.AutoSize = false;
+            where.AutoEllipsis = true;
+            where.TextAlign = ContentAlignment.MiddleLeft;
+            where.Dock = DockStyle.Fill;
+            where.Padding = new Padding(8, 0, 0, 0);
+            up.Dock = DockStyle.Left;
+            Panel bar = new Panel();
             bar.Dock = DockStyle.Top;
-            bar.Padding = new Padding(8, 6, 8, 0);
+            bar.Height = up.PreferredSize.Height + Ui.S(12);
+            bar.Padding = new Padding(8, 6, 8, 6);
             bar.BackColor = ChartBase.Surface;
+            bar.Controls.Add(where);
+            bar.Controls.Add(up);
+            ToolTip whereTip = new ToolTip();
+            where.TextChanged += delegate { whereTip.SetToolTip(where, where.Text); };
             chart.ItemClicked += delegate(object o) { UsageNode n = o as UsageNode; if (n != null) Show(n); };
             Controls.Add(host);
             Controls.Add(bar);
