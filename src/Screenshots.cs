@@ -144,8 +144,8 @@ namespace AutoCopy
             AppCore.SaveSettings();
 
             // 大きいファイルの重複の見本（中身が同じ12MB）：毎回選ぶ（初期値）なので、2つ目は選ぶまで待つ
-            Sized(Path.Combine(src1, "会議録画\\定例会_10月.mp4"), 12 * 1024 * 1024, 20);
-            Sized(Path.Combine(src1, "共有用\\定例会_10月_コピー.mp4"), 12 * 1024 * 1024, 20);
+            Sized(Path.Combine(src1, "資料\\提案資料一式.zip"), 12 * 1024 * 1024, 20);
+            Sized(Path.Combine(src1, "共有用\\提案資料一式_コピー.zip"), 12 * 1024 * 1024, 20);
             // 1回目のコピー → 名前変更（追従オフで取りこぼし）→ 重複チェック → 上書き確認
             JobState st = AppCore.GetState(a.Id);
             new CopyEngine(a, s, st, false, false, CancellationToken.None).Run();
