@@ -38,7 +38,7 @@ namespace AutoCopy
 
             kinds = Ui.List("種類|200", "件数|70", "容量|90");
             kinds.Dock = DockStyle.Left;
-            kinds.Width = Ui.S(380);
+            kinds.Width = Math.Min(Ui.S(380), ClientSize.Width / 3);   // 画面が狭いときは一覧を広く
             kinds.Columns[1].TextAlign = HorizontalAlignment.Right;
             kinds.Columns[2].TextAlign = HorizontalAlignment.Right;
             kinds.SelectedIndexChanged += delegate
@@ -47,7 +47,7 @@ namespace AutoCopy
                 Fill();
             };
 
-            tSearch = Ui.T("", 220);
+            tSearch = Ui.T("", 180);
             tSearch.TextChanged += delegate { Fill(); };
             FlowLayoutPanel bar = Ui.Column(Ui.Row(Ui.L("ファイル名で絞り込み"), tSearch), Ui.Hint("左の種類をクリックすると、その種類だけを表示します。"));
             bar.Dock = DockStyle.Top;

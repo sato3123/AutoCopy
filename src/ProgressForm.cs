@@ -33,7 +33,7 @@ namespace AutoCopy
             lPhase.Font = Ui.Bold;
             bar = new ProgressBar();
             bar.Maximum = 1000;
-            bar.Width = Ui.S(520);
+            bar.Width = Math.Min(Ui.S(520), Ui.MaxWidth(520));   // 画面が狭いときは縮める
             bar.Height = Ui.S(20);
             bar.Margin = new Padding(3, 6, 3, 6);
             lFiles = Ui.L("");
