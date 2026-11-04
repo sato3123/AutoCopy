@@ -31,7 +31,9 @@ jobs:
           if ($signtool) { Line ((& $signtool.FullName verify /pa /all /v $exe 2>&1 | Select-String 'Hash of file|Signing Certificate Chain|Issued to|Number of signatures|Signature Index|SignTool Error|Successfully|Expires' | ForEach-Object { $_.Line.Trim() }) -join ' | ') }
           # 配布用の登録バッチを、そのまま管理者で実行する
           Push-Location release
-          cmd /c "署名証明書を登録.bat < nul" | Out-String | Write-Host
+          $batOut = (cmd /c "chcp 932 >nul & 署名証明書を登録.bat < nul" 2>&1 | Out-String)
+          Write-Host $batOut
+          Line ("登録バッチ: " + (($batOut -split "`r?`n" | Where-Object { $_ -match 'certutil|CertUtil|Root|TrustedPublisher|登録' }) -join ' / '))
           Pop-Location
           $s2 = Get-AuthenticodeSignature $exe
           Line ("登録後: " + $s2.Status + " / " + $s2.StatusMessage)

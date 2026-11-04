@@ -11,14 +11,17 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-if not exist "自動コピー_署名証明書.cer" (
-  echo 自動コピー_署名証明書.cer が同じフォルダにありません。
+set CER=
+for %%f in (*署名証明書.cer) do set "CER=%%f"
+if "%CER%"=="" for %%f in (*.cer) do set "CER=%%f"
+if "%CER%"=="" (
+  echo 証明書（自動コピー_署名証明書.cer）が同じフォルダにありません。
   pause
   exit /b 1
 )
-certutil -addstore -f Root "自動コピー_署名証明書.cer"
+certutil -addstore -f Root "%CER%"
 if errorlevel 1 goto fail
-certutil -addstore -f TrustedPublisher "自動コピー_署名証明書.cer"
+certutil -addstore -f TrustedPublisher "%CER%"
 if errorlevel 1 goto fail
 echo.
 echo 登録しました。
