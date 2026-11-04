@@ -1713,7 +1713,9 @@ namespace AutoCopy.Tests
             JobConfig on = Json.Deserialize<JobConfig>("{\"Name\":\"新\",\"DedupEnabled\":true,\"DedupMinMB\":20}");
             Eq(true, on.DedupLarge, "使うと選んだ設定は保存・読み込みできる");
             Eq(20, on.DedupMinMB, "大きさ");
-            True(Json.Serialize(on).Contains("\"DedupEnabled\":true"), "保存の名前");
+            string saved = Json.Serialize(on);
+            True(saved.Contains("DedupEnabled") && !saved.Contains("\"DedupLarge\""), "保存の名前");
+            Eq(true, Json.Deserialize<JobConfig>(saved).DedupLarge, "保存して読み直しても使う");
             // 使わないジョブでは重複しても普通にコピー
             Box b = new Box("T57");
             WriteBig(b.S("a.bin"), 11, 2, 300);

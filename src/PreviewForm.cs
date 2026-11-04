@@ -49,7 +49,7 @@ namespace AutoCopy
 
             tSearch = Ui.T("", 220);
             tSearch.TextChanged += delegate { Fill(); };
-            FlowLayoutPanel bar = Ui.Row(Ui.L("ファイル名で絞り込み"), tSearch, Ui.Hint("左の種類をクリックすると、その種類だけを表示します。"));
+            FlowLayoutPanel bar = Ui.Column(Ui.Row(Ui.L("ファイル名で絞り込み"), tSearch), Ui.Hint("左の種類をクリックすると、その種類だけを表示します。"));
             bar.Dock = DockStyle.Top;
             bar.Padding = new Padding(Ui.S(8), Ui.S(4), Ui.S(8), Ui.S(2));
 

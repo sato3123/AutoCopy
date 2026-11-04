@@ -33,7 +33,7 @@ namespace AutoCopy
             lPhase.Font = Ui.Bold;
             bar = new ProgressBar();
             bar.Maximum = 1000;
-            bar.Width = Ui.S(600);
+            bar.Width = Ui.S(520);
             bar.Height = Ui.S(20);
             bar.Margin = new Padding(3, 6, 3, 6);
             lFiles = Ui.L("");
@@ -42,7 +42,10 @@ namespace AutoCopy
             lLast = Ui.Hint("");
             Ui.FitToForm(lLast, 800);
             stop = Ui.B("このジョブを中止", delegate { if (selectedId != null) AppCore.CancelJob(selectedId); });
-            FlowLayoutPanel detail = Ui.Column(lPhase, Ui.Row(bar, stop), lFiles, lBytes, lSpeed, lLast,
+            FlowLayoutPanel barRow = Ui.WrapRow(bar, stop);
+            Ui.FitToForm(barRow, 860);
+            foreach (Label l in new Label[] { lFiles, lBytes, lSpeed }) Ui.FitToForm(l, 860);
+            FlowLayoutPanel detail = Ui.Column(lPhase, barRow, lFiles, lBytes, lSpeed, lLast,
                 Ui.L("今コピーしているファイル"));
             detail.Dock = DockStyle.Top;
             detail.Padding = new Padding(Ui.S(12), Ui.S(8), Ui.S(12), 0);
