@@ -92,6 +92,8 @@ namespace AutoCopy
                 return bf;
             }, delegate(Form f) { ((BusyForm)f).ShowProgress(); });
             CaptureTrayMenu();
+            CaptureProgressAndPreview(j0);
+            CheckEnabled(j0, AppCore.Settings.Jobs[3]);
             Capture("33_確認が必要です（お知らせ）", delegate()
             {
                 AttentionForm af = new AttentionForm();
@@ -241,6 +243,73 @@ namespace AutoCopy
             DistCredential cr = new DistCredential(); cr.Server = "nas01"; cr.User = "nas01\\yamada"; cr.Password = "x";
             pl.Credentials.Add(cr);
             Distribution.Write(Path.Combine(root, AppPaths.SetupFileName), pl, "secret");
+        }
+
+        /// <summary>作業状況（コピー中の様子を作って撮る）と、実行結果の予測</summary>
+        private static void CaptureProgressAndPreview(JobConfig j0)
+        {
+            JobRuntime rt = AppCore.GetRuntime(j0.Id);
+            JobProgress p = new JobProgress();
+            p.Started = DateTime.Now.AddSeconds(-95);
+            p.Scanned = 12840;
+            p.SetPlan(1260, 3800L * 1024 * 1024);
+            p.CopyStarted = DateTime.Now.AddSeconds(-80);
+            p.SetPhase("コピー中");
+            for (int i = 0; i < 470; i++) { ActiveFile x = p.Begin("請求書\\2026\\請求_" + i.ToString("000") + ".pdf", 2400000, "コピー"); p.End(x, true); }
+            ActiveFile a1 = p.Begin("会議録画\\2026-10_全体会議.mp4", 1880000000, "コピー"); p.Bytes(a1, 712000000);
+            ActiveFile a2 = p.Begin("決算\\2025年度\\試算表.xlsx", 2400000, "上書き"); p.Bytes(a2, 1600000);
+            bool wasRunning = rt.Running;
+            rt.Running = true; rt.Progress = p;
+            try
+            {
+                Capture("35_作業状況", delegate() { return new ProgressForm(j0.Id); }, null);
+                Capture("36_メイン画面_コピー中", delegate() { return new MainForm(); }, null);
+            }
+            finally { rt.Running = wasRunning; }
+
+            Capture("37_実行結果の予測", delegate()
+            {
+                PreviewForm f = new PreviewForm(j0, true);
+                f.SetResult(AppCore.DryRun(j0, false));
+                return f;
+            }, null);
+        }
+
+        /// <summary>設定画面：上の設定で、下の項目が操作できる・できないが正しく変わるか</summary>
+        private static void CheckEnabled(JobConfig j0, JobConfig sync)
+        {
+            List<string> lines = new List<string>();
+            lines.Add("| 画面 | 結果 | 内容 |");
+            lines.Add("| --- | --- | --- |");
+            int ng = 0;
+            foreach (JobConfig j in new JobConfig[] { j0, sync })
+            {
+                JobEditForm f = null;
+                try
+                {
+                    f = new JobEditForm(j.Clone(), false);
+                    f.StartPosition = FormStartPosition.Manual; f.Location = new Point(20, 20);
+                    f.Show(); Pump(800);
+                    List<string> bad = f.SelfTestEnabled();
+                    if (bad.Count == 0) lines.Add("| ジョブ設定（" + j.Name + "） | OK | 22項目 |");
+                    foreach (string x in bad) { lines.Add("| ジョブ設定（" + j.Name + "） | NG | " + x + " |"); ng++; }
+                }
+                catch (Exception ex) { errors.Add("操作できる項目の確認: " + ex); }
+                finally { if (f != null) { f.Close(); f.Dispose(); } Pump(200); }
+            }
+            SettingsForm sf = null;
+            try
+            {
+                sf = new SettingsForm();
+                sf.Show(); Pump(800);
+                List<string> bad = sf.SelfTestEnabled();
+                if (bad.Count == 0) lines.Add("| アプリ設定 | OK | 6項目 |");
+                foreach (string x in bad) { lines.Add("| アプリ設定 | NG | " + x + " |"); ng++; }
+            }
+            catch (Exception ex) { errors.Add("操作できる項目の確認（アプリ設定）: " + ex); }
+            finally { if (sf != null) { sf.Close(); sf.Dispose(); } Pump(200); }
+            File.WriteAllText(Path.Combine(outDir, "enable-check.md"), string.Join("\r\n", lines.ToArray()), new System.Text.UTF8Encoding(false));
+            if (ng > 0) errors.Add("操作できる項目の確認で NG " + ng + "件（enable-check.md）");
         }
 
         /// <summary>タブの中をいちばん下までスクロールする</summary>

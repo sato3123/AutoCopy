@@ -22,6 +22,7 @@ namespace AutoCopy
         private ConflictForm conflictForm;
         private DupForm dupForm;
         private SettingsForm settingsForm;
+        private ProgressForm progressForm;
 
         // 確認が必要なときの目立つ表示
         private readonly System.Windows.Forms.Timer blink;
@@ -287,7 +288,7 @@ namespace AutoCopy
             if (problem) badge = AppCore.AnyError() ? IconFactory.Red : IconFactory.Orange;
             else if (AppCore.AnyRunning()) badge = IconFactory.Green;
             if (AppCore.GlobalPaused) status = "一時停止中";
-            else if (AppCore.AnyRunning()) status = "コピー中";
+            else if (AppCore.AnyRunning()) status = RunningText();
             else status = "動作中";
             if (problem) status = "確認が必要です（" + items.Count + "件）";
             normalIcon = IconFactory.Get(main, badge);
@@ -295,6 +296,21 @@ namespace AutoCopy
             CheckAttention(items);
             string t = "自動コピー：" + status;
             icon.Text = t.Length > 63 ? t.Substring(0, 63) : t;
+        }
+
+        /// <summary>実行中のジョブの進み具合（アイコンに出す）</summary>
+        private static string RunningText()
+        {
+            foreach (JobConfig j in AppCore.Settings.Jobs.ToArray())
+            {
+                JobRuntime rt = AppCore.GetRuntime(j.Id);
+                if (!rt.Running) continue;
+                if (rt.Progress == null) return "コピー中";
+                JobProgress p = rt.Progress.Snapshot();
+                if (p.TotalFiles > 0) return "コピー中 " + p.Percent.ToString("0") + "%（" + Fmt.Count(p.DoneFiles) + "/" + Fmt.Count(p.TotalFiles) + "件）";
+                return p.Phase;
+            }
+            return "重複チェック中";
         }
 
         private void BuildMenu()
@@ -344,6 +360,7 @@ namespace AutoCopy
 
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("メイン画面を開く", null, delegate { ShowMain(); });
+            menu.Items.Add("作業状況（進み具合）", null, delegate { ShowProgress(null); });
             menu.Items.Add("上書きの確認（" + AppCore.TotalConflicts() + "件）", null, delegate { ShowConflicts(); });
             int pend = AppCore.TotalPendingDeletes();
             if (pend > 0) menu.Items.Add("ミラーの保留中の削除（" + pend + "件）", null, delegate { ShowPending(null); });
@@ -381,6 +398,22 @@ namespace AutoCopy
         {
             if (mainForm == null || mainForm.IsDisposed) mainForm = new MainForm();
             Bring(mainForm);
+        }
+
+        public void ShowProgress(string jobId)
+        {
+            if (progressForm == null || progressForm.IsDisposed) progressForm = new ProgressForm(jobId);
+            else progressForm.SelectJob(jobId);
+            Bring(progressForm);
+        }
+
+        public void ShowPreview(string jobId)
+        {
+            JobConfig j = jobId != null ? AppCore.FindJob(jobId) : null;
+            if (j == null && AppCore.Settings.Jobs.Count > 0) j = AppCore.Settings.Jobs[0];
+            if (j == null) return;
+            PreviewForm f = new PreviewForm(j, true);
+            f.Show();
         }
 
         public void ShowLog()

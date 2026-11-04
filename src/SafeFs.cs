@@ -79,6 +79,12 @@ namespace AutoCopy
         /// </summary>
         public static byte[] CopyIntoSync(string from, string toLocal, string rel, DateTime mtimeUtc, string backupRoot, CancellationToken ct)
         {
+            return CopyIntoSync(from, toLocal, rel, mtimeUtc, backupRoot, ct, null);
+        }
+
+        public static byte[] CopyIntoSync(string from, string toLocal, string rel, DateTime mtimeUtc, string backupRoot, CancellationToken ct, Action<long> onBytes)
+        {
+            long copied = 0;
             if (!IsInSyncRoot(toLocal))
             {
                 if (Blocked != null) Blocked(PathUtil.Normalize(toLocal));
@@ -111,6 +117,8 @@ namespace AutoCopy
                             ct.ThrowIfCancellationRequested();
                             fout.Write(buf, 0, n);
                             md5.TransformBlock(buf, 0, n, null, 0);
+                            copied += n;
+                            if (onBytes != null) onBytes(copied);
                         }
                         md5.TransformFinalBlock(buf, 0, 0);
                     }
@@ -263,6 +271,13 @@ namespace AutoCopy
         /// </summary>
         public static byte[] CopyFile(string src, string dst, DateTime srcMtimeUtc, Throttle throttle, CancellationToken ct)
         {
+            return CopyFile(src, dst, srcMtimeUtc, throttle, ct, null);
+        }
+
+        /// <summary>onBytes：コピーできたバイト数（進み具合の表示用）</summary>
+        public static byte[] CopyFile(string src, string dst, DateTime srcMtimeUtc, Throttle throttle, CancellationToken ct, Action<long> onBytes)
+        {
+            long copied = 0;
             Guard(dst);
             string ls = PathUtil.Long(src), ld = PathUtil.Long(dst);
             string tmp = dst + ".ckpart";
@@ -288,6 +303,8 @@ namespace AutoCopy
                             fout.Write(buf, 0, n);
                             md5.TransformBlock(buf, 0, n, null, 0);
                             if (throttle != null) throttle.Consume(n, ct);
+                            copied += n;
+                            if (onBytes != null) onBytes(copied);
                         }
                         md5.TransformFinalBlock(buf, 0, 0);
                     }

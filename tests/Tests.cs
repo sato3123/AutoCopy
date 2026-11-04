@@ -81,6 +81,9 @@ namespace AutoCopy.Tests
             Add("T52", "同期：両方で変えたら確認待ち・共有の方を使う・このPCの方を使う・コピー元の削除は今までどおり拒否", T52_SyncConflict);
             Add("T53", "確認が必要なものの一覧（上書きの確認・ミラーの保留・未確認の重複チェック・エラー）", T53_Attention);
             Add("T54", "自動更新：版の比較・置き場所の確認・署名のない版の扱い", T54_UpdaterBasics);
+            Add("T55", "実行結果の予測：コピー・上書き・確認待ち・名前変更・除外・ミラー削除を一覧にし、何も変えない", T55_Preview);
+            Add("T56", "作業状況：件数・容量・進み具合・コピー中のファイル", T56_Progress);
+            Add("T57", "大きいファイルの重複は「使う・使わない」を選ぶ（初期値：使わない。前の版の設定は引き継がない）", T57_DedupChoice);
 
             int ng = 0;
             foreach (TestCase t in cases)
@@ -1322,6 +1325,7 @@ namespace AutoCopy.Tests
         private static void T49_Dedup()
         {
             Box b = new Box("T49");
+            b.Job.DedupLarge = true;   // 使うと選んだジョブ
             WriteBig(b.S("a\\動画.mp4"), 12, 1, 300);
             WriteBig(b.S("z\\コピー\\動画_コピー.mp4"), 12, 1, 200);   // 中身が同じ
             WriteBig(b.S("m\\別の動画.mp4"), 12, 9, 300);              // 大きさは同じで中身が違う
@@ -1358,6 +1362,7 @@ namespace AutoCopy.Tests
         {
             // 中身が変わったら普通にコピーし、テキストを片付ける
             Box b = new Box("T50");
+            b.Job.DedupLarge = true;
             WriteBig(b.S("a.bin"), 11, 3, 300);
             WriteBig(b.S("b.bin"), 11, 3, 300);
             WriteBig(b.S("c.bin"), 11, 3, 300);
@@ -1379,7 +1384,7 @@ namespace AutoCopy.Tests
 
             // ミラー：1つ目（a）をコピー元で消すと、c を普通にコピーし、a はコピー先から削除済みへ
             Box m = new Box("T50m");
-            m.Job.Mirror = true;
+            m.Job.Mirror = true; m.Job.DedupLarge = true;
             WriteBig(m.S("a.bin"), 11, 4, 300);
             WriteBig(m.S("c.bin"), 11, 4, 300);
             m.Run();
@@ -1393,7 +1398,7 @@ namespace AutoCopy.Tests
 
             // ミラー：テキストを置いたファイルをコピー元で消すと、テキストを削除済みへ
             Box m2 = new Box("T50n");
-            m2.Job.Mirror = true;
+            m2.Job.Mirror = true; m2.Job.DedupLarge = true;
             WriteBig(m2.S("a.bin"), 11, 6, 300);
             WriteBig(m2.S("c.bin"), 11, 6, 300);
             m2.Run();
@@ -1602,6 +1607,120 @@ namespace AutoCopy.Tests
             File.WriteAllText(Path.Combine(b.App.UpdateFolder, "AutoCopy.exe"), "not an exe");
             True(Updater.Find(b.App, out reason) == null, "壊れたファイルでは更新しない: " + reason);
             Note = "今の版 " + Updater.CurrentVersion;
+        }
+
+        private static void T55_Preview()
+        {
+            Box b = new Box("T55");
+            b.Job.Mirror = true;
+            b.W("keep.txt", "keep");
+            b.W("old\\a.txt", "aaa");
+            b.W("upd.txt", "v1", 600);
+            b.W("conf.txt", "v1", 600);
+            b.W("gone.txt", "gone");
+            b.Run();
+            // 変更：新規・上書き（コピー先が古い）・確認待ち（コピー先が新しい）・名前変更・除外・コピー元で削除
+            b.W("new.txt", "new");
+            b.W("upd.txt", "v2", 100);
+            WriteFile(b.D("conf.txt"), "dest edited", 10);
+            b.W("conf.txt", "v2", 200);
+            Directory.Move(b.S("old"), b.S("renamed"));
+            b.W("x.tmp", "temp");
+            b.Job.Exclude.Extensions.Add(".tmp");
+            File.Delete(b.S("gone.txt"));
+
+            Dictionary<string, string> srcBefore = Snapshot(b.Src), dstBefore = Snapshot(b.Dst);
+            int recBefore; lock (b.State) recBefore = b.State.Files.Count;
+            JobProgress pr = new JobProgress();
+            RunResult r = AppCore.DryRun(b.Job, false, CancellationToken.None, pr);
+            CompareSnapshots(srcBefore, Snapshot(b.Src));
+            CompareSnapshots(dstBefore, Snapshot(b.Dst));     // コピー先も変えない
+            lock (b.State) { Eq(recBefore, b.State.Files.Count, "記録も変えない"); True(b.State.Files.ContainsKey("old\\a.txt"), "名前変更前の記録のまま"); }
+
+            Func<string, string, bool> has = delegate(string kind, string rel)
+            {
+                return r.Plan.Exists(delegate(PlanItem p) { return p.Kind == kind && p.Rel == rel; });
+            };
+            True(has(PlanKind.Copy, "new.txt"), "新規コピー");
+            True(has(PlanKind.Overwrite, "upd.txt"), "上書き（コピー先が古い）");
+            True(has(PlanKind.Conflict, "conf.txt"), "確認待ち（コピー先が新しい）");
+            True(r.Plan.Exists(delegate(PlanItem p) { return p.Kind == PlanKind.Rename && p.Note.Contains("old"); }), "名前変更");
+            True(has(PlanKind.Excluded, "x.tmp"), "除外");
+            True(has(PlanKind.Delete, "gone.txt"), "ミラー削除");
+            True(!r.Plan.Exists(delegate(PlanItem p) { return p.Rel == "keep.txt"; }), "変わっていないものは出さない");
+            True(r.Unchanged >= 1, "変更なしの件数");
+            PlanItem c = r.Plan.Find(delegate(PlanItem p) { return p.Kind == PlanKind.Conflict; });
+            True(c.DstSize > 0 && c.DstMtime > 0 && c.Note.Length > 0, "コピー先のサイズ・日時・説明");
+            True(pr.Scanned >= 5, "調べた件数を作業状況に出す");
+
+            // 予測どおりに実行される
+            RunResult real = b.Run();
+            Eq(1, real.Copied, "実行：新規");
+            Eq(1, real.Overwritten, "実行：上書き");
+            Eq(1, real.Conflicts, "実行：確認待ち");
+            Eq(1, real.Deleted, "実行：削除");
+            Eq(0, real.Plan.Count, "実際の実行では一覧を作らない（メモリ節約）");
+            Note = "予測 " + r.Plan.Count + "件";
+        }
+
+        private static void T56_Progress()
+        {
+            Box b = new Box("T56");
+            for (int i = 0; i < 4; i++) WriteBig(b.S("f" + i + ".bin"), 2, (byte)i, 300);
+            b.W("small.txt", "s");
+            b.Job.BandwidthKBps = 4096;    // ゆっくりコピーして途中の様子を見る
+            b.Job.Parallel = 2;
+            b.Apply();
+            CopyEngine e = new CopyEngine(b.Job, b.App, b.State, false, false, CancellationToken.None);
+            JobProgress p = e.Progress;
+            int maxActive = 0; long maxDone = 0; bool sawPercent = false; string sawFile = null;
+            System.Threading.Thread t = new System.Threading.Thread(delegate()
+            {
+                Stopwatch lim = Stopwatch.StartNew();
+                while (p.Finished == DateTime.MinValue && lim.ElapsedMilliseconds < 120000)
+                {
+                    JobProgress s2 = p.Snapshot();
+                    maxActive = Math.Max(maxActive, s2.ActiveList.Count);
+                    if (s2.ActiveList.Count > 0 && sawFile == null) sawFile = s2.ActiveList[0].Rel + " " + s2.ActiveList[0].Size;
+                    if (s2.Percent > 0 && s2.Percent < 100) sawPercent = true;
+                    maxDone = Math.Max(maxDone, s2.DoneBytes);
+                    System.Threading.Thread.Sleep(50);
+                }
+            });
+            t.Start();
+            RunResult r = e.Run();
+            t.Join();
+            JobProgress f = p.Snapshot();
+            Eq(5, f.TotalFiles, "全体の件数");
+            Eq(5, f.DoneFiles, "終わった件数");
+            Eq(8L * 1024 * 1024 + 1, f.TotalBytes, "全体の容量");
+            Eq(f.TotalBytes, f.DoneBytes, "終わった容量");
+            Eq(100.0, f.Percent, "100%");
+            Eq("完了", f.Phase, "最後は完了");
+            Eq(0, f.ActiveList.Count, "コピー中のファイルは残らない");
+            True(maxActive >= 1 && sawFile != null, "コピー中のファイル名とサイズが見える: " + sawFile);
+            True(sawPercent, "途中の進み具合（0〜100%）が見える");
+            True(f.Speed > 0, "速さ");
+            Eq(5, r.Copied, "コピー件数");
+            Note = "同時に最大 " + maxActive + "件・" + sawFile;
+        }
+
+        private static void T57_DedupChoice()
+        {
+            Eq(false, new JobConfig().DedupLarge, "新しいジョブは使わない");
+            JobConfig old = Json.Deserialize<JobConfig>("{\"Name\":\"旧\",\"DedupLarge\":true,\"DedupMinMB\":10}");
+            Eq(false, old.DedupLarge, "前の版の設定（初期値オン）は引き継がない");
+            JobConfig on = Json.Deserialize<JobConfig>("{\"Name\":\"新\",\"DedupEnabled\":true,\"DedupMinMB\":20}");
+            Eq(true, on.DedupLarge, "使うと選んだ設定は保存・読み込みできる");
+            Eq(20, on.DedupMinMB, "大きさ");
+            True(Json.Serialize(on).Contains("\"DedupEnabled\":true"), "保存の名前");
+            // 使わないジョブでは重複しても普通にコピー
+            Box b = new Box("T57");
+            WriteBig(b.S("a.bin"), 11, 2, 300);
+            WriteBig(b.S("b.bin"), 11, 2, 300);
+            RunResult r = b.Run();
+            Eq(0, r.Deduped, "省略しない");
+            Eq(2, r.Copied, "両方コピー");
         }
 
         private static void T42_Performance()

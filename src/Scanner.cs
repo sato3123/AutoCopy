@@ -31,6 +31,13 @@ namespace AutoCopy
     {
         public static ScanResult Scan(string root, bool includeSubdirs, ExcludeMatcher matcher, bool skipMeta, CancellationToken ct)
         {
+            return Scan(root, includeSubdirs, matcher, skipMeta, ct, null);
+        }
+
+        /// <summary>onCount：調べたファイル数（500件ごと）</summary>
+        public static ScanResult Scan(string root, bool includeSubdirs, ExcludeMatcher matcher, bool skipMeta, CancellationToken ct, Action<int> onCount)
+        {
+            int seen = 0;
             ScanResult res = new ScanResult();
             string lroot = PathUtil.Long(root);
             long recentLimit = DateTime.UtcNow.AddSeconds(-5).Ticks;
@@ -72,6 +79,7 @@ namespace AutoCopy
                         else
                         {
                             FileInfo fi = (FileInfo)fsi;
+                            if (onCount != null && (++seen % 500) == 0) onCount(seen);
                             long size = fi.Length;
                             DateTime mt = fi.LastWriteTimeUtc;
                             if (name.EndsWith(".ckpart", StringComparison.OrdinalIgnoreCase)) continue;

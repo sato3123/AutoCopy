@@ -10,6 +10,9 @@ namespace AutoCopy
         private readonly ListView jobs;
         private readonly ListView notices;
         private readonly Label statusLabel;
+        private readonly ProgressBar runBar;
+        private readonly Label runLabel;
+        private readonly Button runDetail;
         private readonly Label confirmLabel;
         private readonly Button confirmButton;
         private readonly Button pendingButton;
@@ -56,6 +59,8 @@ namespace AutoCopy
                 Sep(),
                 Ui.B("重複チェック", delegate { TrayApp.Instance.ShowDup(FirstSelected()); }),
                 Ui.B("上書きの確認", delegate { TrayApp.Instance.ShowConflicts(); }),
+                Ui.B("作業状況", delegate { TrayApp.Instance.ShowProgress(FirstSelected()); }),
+                Ui.B("結果の予測", delegate { string id = FirstSelected(); if (id == null && AppCore.Settings.Jobs.Count > 0) id = AppCore.Settings.Jobs[0].Id; if (id != null) TrayApp.Instance.ShowPreview(id); }),
                 Ui.B("ログ", delegate { TrayApp.Instance.ShowLog(); }),
                 Ui.B("容量の内訳", delegate { ShowUsage(); }),
                 Ui.B("設定", delegate { TrayApp.Instance.ShowSettings(); }),
@@ -75,7 +80,16 @@ namespace AutoCopy
             band.AutoSize = true;
             band.Padding = new Padding(10, 4, 10, 4);
             band.BackColor = Ui.InfoBack;
-            band.Controls.AddRange(new Control[] { statusLabel, confirmLabel, confirmButton, pendingButton });
+            // 実行中の進み具合（実行中だけ表示）
+            runBar = new ProgressBar();
+            runBar.Maximum = 1000;
+            runBar.Width = Ui.S(160);
+            runBar.Height = Ui.S(16);
+            runBar.Margin = new Padding(Ui.S(12), Ui.S(9), 3, 3);
+            runLabel = Ui.L("");
+            runLabel.ForeColor = Ui.Accent;
+            runDetail = Ui.B("作業状況を見る", delegate { TrayApp.Instance.ShowProgress(null); });
+            band.Controls.AddRange(new Control[] { statusLabel, runBar, runLabel, runDetail, confirmLabel, confirmButton, pendingButton });
 
             // ---- ジョブ一覧 ----
             jobs = Ui.List("ジョブ名|160", "方式|104", "コピー元 → コピー先|300", "間隔|56", "前回|70", "結果|240", "次回|70");
@@ -131,7 +145,7 @@ namespace AutoCopy
                 if (WindowState == FormWindowState.Minimized && TrayApp.Instance != null) ToTray();
             };
             timer = new System.Windows.Forms.Timer();
-            timer.Interval = 2000;
+            timer.Interval = 1000;
             timer.Tick += delegate { RefreshView(); };
             timer.Start();
             RefreshView();
@@ -165,6 +179,8 @@ namespace AutoCopy
             ContextMenuStrip m = new ContextMenuStrip();
             m.Font = Ui.Base;
             m.Items.Add("今すぐ実行", null, delegate { RunSelected(false); });
+            m.Items.Add("コピーせずに結果を確認（実行結果の予測）…", null, delegate { string id = FirstSelected(); if (id != null) TrayApp.Instance.ShowPreview(id); });
+            m.Items.Add("作業状況を見る", null, delegate { TrayApp.Instance.ShowProgress(FirstSelected()); });
             m.Items.Add("全体を再確認して実行（コピー先で消えたファイルも戻す）", null, delegate { RunSelected(true); });
             m.Items.Add("編集", null, delegate { string id = FirstSelected(); if (id != null) EditJob(id); });
             m.Items.Add(new ToolStripSeparator());
@@ -258,7 +274,8 @@ namespace AutoCopy
 
                     string result;
                     Color color = SystemColors.WindowText;
-                    if (rt.Running || rt.DupRunning) { result = rt.Phase + "…"; color = Ui.Accent; }
+                    if (rt.Running && rt.Progress != null) { result = rt.Progress.Snapshot().Short(); color = Ui.Accent; }
+                    else if (rt.Running || rt.DupRunning) { result = rt.Phase + "…"; color = Ui.Accent; }
                     else if (rt.LastResult == "error") { result = "エラー　" + rt.LastMessage; color = Ui.Err; }
                     else if (rt.LastResult == "ok") { result = "正常　" + rt.LastMessage; color = Ui.Ok; }
                     else result = "未実行";
@@ -307,6 +324,21 @@ namespace AutoCopy
             {
                 statusLabel.Text = "● 自動コピー：" + (AppCore.AnyRunning() ? "コピー中" : "動作中");
                 statusLabel.ForeColor = Ui.Ok;
+            }
+            // 実行中のジョブの進み具合
+            JobProgress rp = null; string rname = null;
+            foreach (JobConfig j in s.Jobs.ToArray())
+            {
+                JobRuntime r = AppCore.GetRuntime(j.Id);
+                if (r.Running && r.Progress != null) { rp = r.Progress.Snapshot(); rname = j.Name; break; }
+            }
+            runBar.Visible = runLabel.Visible = runDetail.Visible = rp != null;
+            if (rp != null)
+            {
+                runBar.Value = (int)Math.Round(Math.Max(0, Math.Min(100, rp.Percent)) * 10);
+                List<ActiveFile> act = rp.ActiveList;
+                runLabel.Text = rname + "：" + rp.Short()
+                    + (act.Count > 0 ? "　" + PathUtil.FileName(act[0].Rel) + "（" + Fmt.Size(act[0].Size) + "）" + (act.Count > 1 ? " ほか" + (act.Count - 1) + "件" : "") : "");
             }
             int tc = AppCore.TotalConflicts(), tp = AppCore.TotalPendingDeletes();
             confirmLabel.Text = tc > 0 ? "　上書き確認待ち " + tc + "件" : "";

@@ -15,6 +15,7 @@ namespace AutoCopy
         private readonly CheckBox cAuto, cErr, cConf, cDone, cBlink, cPopup, cAutoUpdate;
         private readonly NumericUpDown nLocal, nNet, nTrash, nRemind;
         private readonly ComboBox cbShortcut;
+        private Button bLogCred, bCheckUpdate;
 
         public SettingsForm()
         {
@@ -30,7 +31,7 @@ namespace AutoCopy
                 Ui.Row(Ui.L("このPCのフォルダ名", 140), lFolder, Ui.B("変更…", delegate { ChangeFolderName(); })),
                 Ui.Row(Ui.L("ログ保管先", 140), tLogRoot,
                     Ui.B("参照…", delegate { string f = Ui.BrowseFolder(this, tLogRoot.Text, "ログ保管先（ネットワークドライブ）を選んでください"); if (f != null) tLogRoot.Text = NetAccess.ToUncIfMapped(f); }),
-                    Ui.B("ID・パスワード…", delegate { string sv = PathUtil.UncServer(tLogRoot.Text); if (sv == null) { Ui.Info(this, "ネットワークのフォルダ（\\\\サーバー\\共有\\…）を指定してください。"); return; } using (CredDialog d = new CredDialog(sv, tLogRoot.Text)) d.ShowDialog(this); })),
+                    bLogCred = Ui.B("ID・パスワード…", delegate { string sv = PathUtil.UncServer(tLogRoot.Text); if (sv == null) { Ui.Info(this, "ネットワークのフォルダ（\\\\サーバー\\共有\\…）を指定してください。"); return; } using (CredDialog d = new CredDialog(sv, tLogRoot.Text)) d.ShowDialog(this); })),
                 Ui.Hint("各PCは「ログ保管先\\フォルダ名」にログを書きます。空欄ならこのPCの中だけに残します。"),
                 lDist,
                 Ui.Row(Ui.B("配布フォルダを作成…", delegate { using (DistCreateForm f = new DistCreateForm()) f.ShowDialog(this); UpdateDist(); }),
@@ -59,7 +60,7 @@ namespace AutoCopy
                     Ui.B("参照…", delegate { string f = Ui.BrowseFolder(this, tUpdate.Text, "新しい AutoCopy.exe を置くフォルダ（NAS の配布フォルダなど）を選んでください"); if (f != null) tUpdate.Text = NetAccess.ToUncIfMapped(f); })),
                 cAutoUpdate,
                 Ui.Hint("置き場所の AutoCopy.exe が今の版（" + Updater.CurrentVersion + "）より新しく、今と同じ証明書でデジタル署名されているときだけ更新します。"),
-                Ui.Row(Ui.B("今すぐ確認", delegate { if (Save() && TrayApp.Instance != null) TrayApp.Instance.CheckUpdate(true); }))));
+                Ui.Row(bCheckUpdate = Ui.B("今すぐ確認", delegate { if (Save() && TrayApp.Instance != null) TrayApp.Instance.CheckUpdate(true); }))));
 
             nLocal = Ui.N(1, 3650, s.LocalLogDays, 72);
             nNet = Ui.N(1, 3650, s.NetLogDays, 72);
@@ -80,6 +81,11 @@ namespace AutoCopy
             ok.MinimumSize = new Size(Ui.S(88), Ui.S(28));
             Controls.Add(b);
             Controls.Add(Ui.Footer(Ui.B("キャンセル", delegate { Close(); }), ok, Ui.B("操作説明書を開く", delegate { Ui.OpenManual(); })));
+            EventHandler h = delegate { UpdateEnabled(); };
+            cPopup.CheckedChanged += h;
+            tUpdate.TextChanged += h;
+            tLogRoot.TextChanged += h;
+            UpdateEnabled();
             UpdateDist();
         }
 
@@ -129,6 +135,30 @@ namespace AutoCopy
                 Ui.Info(this, "デスクトップにショートカットを作りました：\n" + Path.GetFileName(path));
             }
             catch (Exception ex) { Ui.Error(this, "作れませんでした：" + ex.Message); }
+        }
+
+        /// <summary>上の設定で決まる「変えられない項目」を操作できないようにする</summary>
+        public void UpdateEnabled()
+        {
+            nRemind.Enabled = cPopup.Checked;
+            bool up = tUpdate.Text.Trim().Length > 0;
+            cAutoUpdate.Enabled = bCheckUpdate.Enabled = up;
+            bLogCred.Enabled = PathUtil.IsUnc(NetAccess.ToUncIfMapped(tLogRoot.Text.Trim()));
+        }
+
+        /// <summary>確認用：上の設定を切り替えたときの、下の項目の操作できる・できない</summary>
+        public List<string> SelfTestEnabled()
+        {
+            List<string> bad = new List<string>();
+            string u = tUpdate.Text, l = tLogRoot.Text; bool pop = cPopup.Checked;
+            cPopup.Checked = false; if (nRemind.Enabled) bad.Add("メッセージを出さないのに間隔を変えられる");
+            cPopup.Checked = true; if (!nRemind.Enabled) bad.Add("メッセージを出すのに間隔を変えられない");
+            tUpdate.Text = ""; if (cAutoUpdate.Enabled || bCheckUpdate.Enabled) bad.Add("置き場所がないのに自動更新を選べる");
+            tUpdate.Text = "\\\\nas01\\配布"; if (!cAutoUpdate.Enabled) bad.Add("置き場所があるのに自動更新を選べない");
+            tLogRoot.Text = "C:\\logs"; if (bLogCred.Enabled) bad.Add("ネットワークでないログ保管先なのに ID・パスワードを押せる");
+            tLogRoot.Text = "\\\\nas01\\logs"; if (!bLogCred.Enabled) bad.Add("ネットワークのログ保管先なのに ID・パスワードを押せない");
+            tUpdate.Text = u; tLogRoot.Text = l; cPopup.Checked = pop;
+            return bad;
         }
 
         private bool Save()

@@ -109,7 +109,9 @@ namespace AutoCopy
         [DataMember] public bool DupShowOrphans;
         [DataMember] public bool DupShowEmptyFolders;
         [DataMember] public bool Sync;                // 複数PCで同期（双方向・削除は伝えない）
-        [DataMember] public bool DedupLarge;          // 大きいファイルの重複は1つだけコピーし、残りは場所を書いたテキストにする
+        // 大きいファイルの重複は1つだけコピーし、残りは場所を書いたテキストにする（使うかどうかはジョブごとに選ぶ。初期値：使わない）
+        // v1.5 の「DedupLarge」（初期値オン）は引き継がず、改めて選んでもらう
+        [DataMember(Name = "DedupEnabled")] public bool DedupLarge;
         [DataMember] public int DedupMinMB;
 
         public JobConfig() { SetDefaults(); }
@@ -170,7 +172,7 @@ namespace AutoCopy
             DupShowOrphans = false;
             DupShowEmptyFolders = true;
             Sync = false;
-            DedupLarge = true;
+            DedupLarge = false;
             DedupMinMB = 10;
         }
 

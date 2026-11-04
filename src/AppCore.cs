@@ -29,6 +29,7 @@ namespace AutoCopy
         public DateTime LastRun;
         public string LastResult = "";     // ok / error / ""
         public string LastMessage = "";
+        public JobProgress Progress;       // 実行中・最後に実行したときの作業状況
     }
 
     /// <summary>アプリの中心。スケジュール、ジョブの実行、通知を受け持つ。</summary>
@@ -308,6 +309,8 @@ namespace AutoCopy
                 {
                     CopyEngine eng = new CopyEngine(job, Settings, st, false, false, ct);
                     eng.FullVerify = fullVerify;
+                    rt.Progress = eng.Progress;
+                    eng.Progress.SetPhase("接続しています");
                     res = eng.Run();
                     if (res.Failed) error = res.Message;
                 }
@@ -317,6 +320,12 @@ namespace AutoCopy
                 catch (SourceProtectedException ex) { error = ex.Message + "（このジョブを停止しました）"; job.Enabled = false; }
                 catch (Exception ex) { error = ex.Message; }
 
+                if (rt.Progress != null)
+                    lock (rt.Progress)
+                    {
+                        if (rt.Progress.Finished == DateTime.MinValue) rt.Progress.Finished = DateTime.Now;
+                        if (error != null) rt.Progress.Phase = error == "中止しました" ? "中止しました" : "エラー";
+                    }
                 rt.LastRun = startedAt;
                 rt.LastResult = error == null ? "ok" : "error";
                 rt.LastMessage = error ?? (res != null ? res.Summary() : "");
@@ -377,10 +386,23 @@ namespace AutoCopy
         /// <summary>コピーせずに件数を数える（テスト・ミラーの注意画面用）</summary>
         public static RunResult DryRun(JobConfig job, bool forceMirror)
         {
+            return DryRun(job, forceMirror, CancellationToken.None, null);
+        }
+
+        /// <summary>コピーせずに、実行したらどうなるかを調べる（コピー先・コピー元・記録は一切変えない）</summary>
+        public static RunResult DryRun(JobConfig job, bool forceMirror, CancellationToken ct, JobProgress progress)
+        {
             JobState st = job.Id != null ? GetState(job.Id) : new JobState();
+            JobState copy = new JobState();
+            lock (st)
+            {
+                foreach (KeyValuePair<string, FileRecord> kv in st.Files) copy.Files[kv.Key] = kv.Value.Clone();
+                foreach (string s in st.SkipForever) copy.SkipForever.Add(s);
+            }
             JobConfig quick = job.Clone();
             quick.RetryCount = 0; // 画面で待たせないよう、数えるだけのときは再試行しない
-            CopyEngine eng = new CopyEngine(quick, Settings, st, true, forceMirror, CancellationToken.None);
+            CopyEngine eng = new CopyEngine(quick, Settings, copy, true, forceMirror, ct);
+            if (progress != null) eng.Progress = progress;
             return eng.Run();
         }
 

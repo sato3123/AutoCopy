@@ -16,6 +16,9 @@ namespace AutoCopy
         public int Downloaded, PlannedDownloads;   // 同期：共有フォルダからこのPCへ取り込んだ件数
         public long DownloadBytes;
         public List<string> PlannedDownloadList = new List<string>();
+        /// <summary>実行したらどうなるか（コピーせずに確かめたときだけ記録する）</summary>
+        public List<PlanItem> Plan = new List<PlanItem>();
+        public int Unchanged;     // 変わっていないため何もしないファイル
         public long Bytes;
         public long DeleteBytes;
         public bool Failed;
@@ -34,6 +37,35 @@ namespace AutoCopy
                 + (Deduped > 0 ? "・重複で省略 " + Deduped + "件（" + Fmt.Size(DedupBytes) + "）" : "")
                 + (Downloaded > 0 ? "・取り込み " + Downloaded + "件" : "");
         }
+    }
+
+    /// <summary>「実行したらどうなるか」の1件</summary>
+    public class PlanItem
+    {
+        public string Kind;          // PlanKind のどれか
+        public string Rel;
+        public long Size = -1;       // コピー元（同期の取り込みは共有フォルダ）のサイズ
+        public long SrcMtime;        // UTC ticks（0 = なし）
+        public long DstSize = -1;    // コピー先のサイズ（-1 = なし）
+        public long DstMtime;
+        public string Note = "";
+    }
+
+    public static class PlanKind
+    {
+        public const string Copy = "コピー（新規）";
+        public const string Overwrite = "上書き";
+        public const string Conflict = "確認待ちになる";
+        public const string Skip = "上書きしない";
+        public const string Rename = "名前変更";
+        public const string Delete = "削除（ミラー）";
+        public const string Hold = "削除の保留（ミラー）";
+        public const string Dedup = "重複で省略";
+        public const string SyncIn = "取り込み（同期）";
+        public const string Same = "同じファイル（記録だけ）";
+        public const string Deferred = "次回に回す";
+        public const string Excluded = "除外";
+        public static readonly string[] All = { Copy, Overwrite, Conflict, Skip, Rename, Delete, Hold, Dedup, SyncIn, Same, Deferred, Excluded };
     }
 
     public class FolderConflictException : Exception
@@ -60,6 +92,21 @@ namespace AutoCopy
 
         /// <summary>true なら変更のないファイルもコピー先と照合する（コピー先で消えたファイルの復旧用）</summary>
         public bool FullVerify;
+
+        /// <summary>作業状況（画面に出す）</summary>
+        public JobProgress Progress = new JobProgress();
+        private RunResult current;
+
+        /// <summary>コピーせずに確かめるときだけ、「実行したらどうなるか」を記録する</summary>
+        private void Plan(string kind, string rel, ScanItem it, long dstSize, long dstMtime, string note)
+        {
+            if (!dryRun || current == null || current.Plan.Count >= 500000) return;
+            PlanItem p = new PlanItem();
+            p.Kind = kind; p.Rel = rel; p.Note = note ?? "";
+            if (it != null) { p.Size = it.Size; p.SrcMtime = it.Mtime; }
+            p.DstSize = dstSize; p.DstMtime = dstMtime;
+            current.Plan.Add(p);
+        }
 
         public CopyEngine(JobConfig job, AppSettings app, JobState state, bool dryRun, bool forceMirror, CancellationToken ct)
         {
@@ -132,7 +179,11 @@ namespace AutoCopy
 
             // --- 走査 ---
             matcher = new ExcludeMatcher(job.Exclude);
-            ScanResult scan = Scanner.Scan(src, job.IncludeSubdirs, matcher, false, ct);
+            Progress.SetPhase(job.Sync ? "このPCのフォルダを調べています" : "コピー元を調べています");
+            ScanResult scan = Scanner.Scan(src, job.IncludeSubdirs, matcher, false, ct, delegate(int n) { lock (Progress) Progress.Scanned = n; });
+            lock (Progress) Progress.Scanned = scan.Files.Count;
+            current = res;
+            if (dryRun) foreach (string x in scan.ExcludedSamples) Plan(PlanKind.Excluded, x, null, -1, 0, "除外ルールに当てはまる");
             res.Scanned = scan.Files.Count;
             res.Excluded = scan.ExcludedCount;
             res.ExcludedBytes = scan.ExcludedBytes;
@@ -168,7 +219,9 @@ namespace AutoCopy
             if (job.Sync)
             {
                 // 同期：共有フォルダも調べて、両方向の変更を判定する
+                Progress.SetPhase("共有フォルダを調べています");
                 remote = Directory.Exists(PathUtil.Long(dst)) ? Scanner.Scan(dst, job.IncludeSubdirs, matcher, true, ct) : new ScanResult();
+                Progress.SetPhase("変更を判定しています");
                 PlanSync(scan, remote, files, skipForever, tasks, downloads, conflicts, res);
             }
             else if (job.DedupOn) dedup = PlanDedup(scan, files, skipForever);
@@ -190,15 +243,16 @@ namespace AutoCopy
                     if (target == null)
                     {
                         // 重複でなくなった（中身が変わった・相手が消えた）→ 普通にコピーしてテキストを片付ける
-                        if (it.Recent) { res.Deferred++; continue; }
+                        if (it.Recent) { res.Deferred++; Plan(PlanKind.Deferred, rel, it, -1, 0, "更新されたばかり（保存中の可能性）"); continue; }
                         CopyTask t0 = new CopyTask(rel, it, false);
                         t0.RemovePlaceholder = true;
+                        t0.Note = "重複でなくなったため普通にコピー（重複のテキストは片付け）";
                         tasks.Add(t0);
                         continue;
                     }
                     if (!FullVerify && string.Equals(target, rec.PlaceholderOf, StringComparison.OrdinalIgnoreCase)
                         && rec.Size == it.Size && rec.Mtime == it.Mtime
-                        && File.Exists(PathUtil.Long(PathUtil.Combine(dst, rel + AppPaths.PlaceholderSuffix)))) continue;
+                        && File.Exists(PathUtil.Long(PathUtil.Combine(dst, rel + AppPaths.PlaceholderSuffix)))) { res.Unchanged++; continue; }
                     placeholders.Add(new PlaceholderTask(rel, it, target));
                     continue;
                 }
@@ -208,8 +262,8 @@ namespace AutoCopy
                     continue;
                 }
 
-                if (!FullVerify && rec != null && rec.Size == it.Size && rec.Mtime == it.Mtime) continue; // 変更なし（読まない）
-                if (it.Recent) { res.Deferred++; continue; }
+                if (!FullVerify && rec != null && rec.Size == it.Size && rec.Mtime == it.Mtime) { res.Unchanged++; continue; } // 変更なし（読まない）
+                if (it.Recent) { res.Deferred++; Plan(PlanKind.Deferred, rel, it, -1, 0, "更新されたばかり（保存中の可能性）"); continue; }
 
                 string dpath = PathUtil.Combine(dst, rel);
                 FileInfo dfi = new FileInfo(PathUtil.Long(dpath));
@@ -219,6 +273,7 @@ namespace AutoCopy
                     continue;
                 }
                 long dm = dfi.LastWriteTimeUtc.Ticks, ds = dfi.Length;
+                CopyTask ow;
                 long diff = dm - it.Mtime;
                 if (Math.Abs(diff) <= tol)
                 {
@@ -226,21 +281,24 @@ namespace AutoCopy
                     {
                         // 同じファイル：記録だけ更新
                         res.SameAdopted++;
+                        Plan(PlanKind.Same, rel, it, ds, dm, "コピー先に同じファイルがある");
                         if (!dryRun) UpdateRecord(rel, it, dm, rec != null ? rec.Hash : null, rec == null || rec.CopiedByApp, rec);
                     }
-                    else if (job.NewerDestPolicy == NewerPolicy.Overwrite) tasks.Add(new CopyTask(rel, it, true));
+                    else if (job.NewerDestPolicy == NewerPolicy.Overwrite) { ow = new CopyTask(rel, it, true); ow.Note = "日時が同じでサイズが違う（設定：常に上書き）"; ow.DstSize = ds; ow.DstMtime = dm; tasks.Add(ow); }
                     else conflicts.Add(MakeConflict(rel, it, ds, dm, "sizediff"));
                 }
                 else if (diff < 0)
                 {
-                    tasks.Add(new CopyTask(rel, it, true)); // コピー先が古い
+                    ow = new CopyTask(rel, it, true); ow.Note = "コピー先が古い"; ow.DstSize = ds; ow.DstMtime = dm;
+                    tasks.Add(ow);
                 }
                 else
                 {
                     // コピー先が新しい
-                    if (job.NewerDestPolicy == NewerPolicy.Overwrite) tasks.Add(new CopyTask(rel, it, true));
+                    if (job.NewerDestPolicy == NewerPolicy.Overwrite) { ow = new CopyTask(rel, it, true); ow.Note = "コピー先が新しい（設定：常に上書き）"; ow.DstSize = ds; ow.DstMtime = dm; tasks.Add(ow); }
                     else if (job.NewerDestPolicy == NewerPolicy.Skip)
                     {
+                        Plan(PlanKind.Skip, rel, it, ds, dm, "コピー先が新しい（設定：上書きしない）");
                         if (!dryRun)
                         {
                             Logger.Write(job.Name, "SKIP", rel + "　コピー先が新しいため上書きしません（設定）", it.Size, -1);
@@ -252,6 +310,32 @@ namespace AutoCopy
             }
             res.Conflicts = conflicts.Count;
             res.PlannedCopyCount = tasks.Count;
+            if (dryRun)
+            {
+                foreach (CopyTask t in tasks)
+                {
+                    string note = t.Note;
+                    if (job.Sync) note = (t.Overwrite ? "このPCで変更 → 共有フォルダを更新" : "このPCで追加 → 共有フォルダへ");
+                    Plan(t.Overwrite ? PlanKind.Overwrite : PlanKind.Copy, t.Rel, t.Item, t.DstSize, t.DstMtime, note);
+                }
+                foreach (ConflictItem c in conflicts)
+                {
+                    PlanItem p = new PlanItem();
+                    p.Kind = PlanKind.Conflict; p.Rel = c.Rel; p.Size = c.SrcSize; p.SrcMtime = c.SrcMtime; p.DstSize = c.DstSize; p.DstMtime = c.DstMtime;
+                    p.Note = c.Reason == "newer" ? "コピー先の方が新しい（上書きの確認で選ぶ）" : c.Reason == "both" ? "このPCと共有フォルダの両方で変更（上書きの確認で選ぶ）"
+                        : c.Reason == "first" ? "初めての同期で、同じ名前で中身が違う（上書きの確認で選ぶ）" : "日時が同じでサイズが違う（上書きの確認で選ぶ）";
+                    if (current.Plan.Count < 500000) current.Plan.Add(p);
+                }
+                foreach (PlaceholderTask p in placeholders)
+                    Plan(PlanKind.Dedup, p.Rel, p.Item, -1, 0, "中身が「" + p.Target + "」と同じ → コピーせず " + PathUtil.FileName(p.Rel) + AppPaths.PlaceholderSuffix + " を置く");
+                foreach (SyncDown d in downloads)
+                {
+                    PlanItem p = new PlanItem();
+                    p.Kind = PlanKind.SyncIn; p.Rel = d.Rel; p.Size = d.Item.Size; p.SrcMtime = d.Item.Mtime;
+                    p.Note = d.Overwrite ? "他のPCで更新 → このPCのファイルを更新（前の版は控えに）" : "他のPCで追加 → このPCに取り込む";
+                    if (current.Plan.Count < 500000) current.Plan.Add(p);
+                }
+            }
             res.PlannedDedup = placeholders.Count;
             foreach (PlaceholderTask p in placeholders) res.DedupBytes += dryRun ? p.Item.Size : 0;
             res.PlannedDownloads = downloads.Count;
@@ -268,9 +352,14 @@ namespace AutoCopy
                 lock (state) { state.Conflicts = conflicts; }
                 foreach (ConflictItem c in conflicts)
                     Logger.Write(job.Name, "CONFLICT", c.Rel + "　" + (c.Reason == "newer" ? "コピー先が新しい" : "日時同じ・サイズ違い"), c.SrcSize, -1);
+                long planBytes = 0;
+                foreach (CopyTask t in tasks) planBytes += t.Item.Size;
+                foreach (SyncDown d in downloads) planBytes += d.Item.Size;
+                Progress.SetPlan(tasks.Count + downloads.Count, planBytes);
+                Progress.SetPhase("コピー中");
                 ExecuteCopies(tasks, res);
-                if (downloads.Count > 0) ExecuteDownloads(downloads, res);
-                if (placeholders.Count > 0) WritePlaceholders(placeholders, res);
+                if (downloads.Count > 0) { Progress.SetPhase("共有フォルダから取り込み中"); ExecuteDownloads(downloads, res); }
+                if (placeholders.Count > 0) { Progress.SetPhase("重複のテキストを置いています"); WritePlaceholders(placeholders, res); }
             }
 
             // --- ミラー：コピー元で削除されたもの ---
@@ -279,13 +368,18 @@ namespace AutoCopy
                 // 同期：削除は伝えない。共有フォルダにまだあるものは記録を残す（このPCで消したものを取り込み直さないため）
                 if (!dryRun) lock (state) { foreach (string m in missing) if (!remote.Files.ContainsKey(m)) state.Files.Remove(m); }
             }
-            else HandleMissing(files, scan, missing, res);
+            else
+            {
+                if (MirrorOn && missing.Count > 0) Progress.SetPhase("ミラーの削除");
+                HandleMissing(files, scan, missing, res);
+            }
 
             // --- 削除済み・退避の古いものを片付け（1日1回） ---
             if (!dryRun) { PurgeTrash(); if (job.Sync) PurgeSyncBackup(); }
 
             sw.Stop();
             res.Seconds = sw.Elapsed.TotalSeconds;
+            lock (Progress) { Progress.Phase = "完了"; Progress.Finished = DateTime.Now; }
             return res;
         }
 
@@ -388,7 +482,15 @@ namespace AutoCopy
                     && !Directory.Exists(PathUtil.Long(PathUtil.Combine(dst, pn)))
                     && !PathUtil.IsSameOrInsideRel(pn, po);
                 if (!dirMove) { single.AddRange(g.Value); continue; }
-                if (dryRun) { res.Renamed += g.Value.Count; MarkRenamed(g.Value, missing, added, files); continue; }
+                if (dryRun)
+                {
+                    res.Renamed += g.Value.Count;
+                    PlanItem pi = new PlanItem();
+                    pi.Kind = PlanKind.Rename; pi.Rel = pn; pi.Note = "フォルダ名の変更：「" + po + "」→「" + pn + "」（" + g.Value.Count + "ファイル。コピーし直さない）";
+                    if (current != null) current.Plan.Add(pi);
+                    MarkRenamed(g.Value, missing, added, files);
+                    continue;
+                }
                 try
                 {
                     SafeFs.Move(PathUtil.Combine(dst, po), PathUtil.Combine(dst, pn));
@@ -413,7 +515,13 @@ namespace AutoCopy
                 if (!fo.Exists || File.Exists(PathUtil.Long(dNew))) continue;
                 if (fo.Length != rec.Size) continue;
                 if (rec.DestMtime > 0 && Math.Abs(fo.LastWriteTimeUtc.Ticks - rec.DestMtime) > tol) continue;
-                if (dryRun) { res.Renamed++; MarkRenamed(new KeyValuePair<string, string>[] { p }, missing, added, files); continue; }
+                if (dryRun)
+                {
+                    res.Renamed++;
+                    Plan(PlanKind.Rename, n, scan.Files.ContainsKey(n) ? scan.Files[n] : null, -1, 0, "「" + o + "」から名前変更・移動（コピーし直さない）");
+                    MarkRenamed(new KeyValuePair<string, string>[] { p }, missing, added, files);
+                    continue;
+                }
                 try
                 {
                     SafeFs.Move(dOld, dNew);
@@ -522,6 +630,8 @@ namespace AutoCopy
         {
             public string Rel; public ScanItem Item; public bool Overwrite;
             public bool RemovePlaceholder;   // コピーできたら、前に置いた「重複」テキストを片付ける
+            public string Note = "";
+            public long DstSize = -1, DstMtime;
             public CopyTask(string rel, ScanItem it, bool ow) { Rel = rel; Item = it; Overwrite = ow; }
         }
 
@@ -689,7 +799,7 @@ namespace AutoCopy
                 remote.Files.TryGetValue(rel, out S);
                 FileRecord rec;
                 files.TryGetValue(rel, out rec);
-                if ((L != null && L.Recent) || (S != null && S.Recent)) { res.Deferred++; continue; }
+                if ((L != null && L.Recent) || (S != null && S.Recent)) { res.Deferred++; Plan(PlanKind.Deferred, rel, L ?? S, -1, 0, "更新されたばかり（保存中の可能性）"); continue; }
                 bool lChanged = L != null && (rec == null || rec.Size != L.Size || rec.Mtime != L.Mtime);
                 bool sChanged = S != null && (rec == null || Math.Abs(S.Mtime - (rec.DestMtime != 0 ? rec.DestMtime : rec.Mtime)) > tol);
                 if (FullVerify && L != null && S == null) lChanged = true;
@@ -712,6 +822,7 @@ namespace AutoCopy
                 if (L.Size == S.Size && (Math.Abs(L.Mtime - S.Mtime) <= tol || SameContent(PathUtil.Combine(src, rel), PathUtil.Combine(dst, rel))))
                 {
                     res.SameAdopted++;
+                    Plan(PlanKind.Same, rel, L, S.Size, S.Mtime, "このPCと共有フォルダで同じ");
                     if (!dryRun) UpdateRecord(rel, L, S.Mtime, null, true, rec);
                     continue;
                 }
@@ -738,7 +849,16 @@ namespace AutoCopy
                 string from = PathUtil.Combine(dst, d.Rel), to = PathUtil.Combine(src, d.Rel);
                 try
                 {
-                    byte[] hash = SafeFs.CopyIntoSync(from, to, d.Rel, new DateTime(d.Item.Mtime, DateTimeKind.Utc), backupRoot, ct);
+                    ActiveFile af = Progress.Begin(d.Rel, d.Item.Size, "取り込み");
+                    byte[] hash;
+                    bool okIn = false;
+                    try
+                    {
+                        hash = SafeFs.CopyIntoSync(from, to, d.Rel, new DateTime(d.Item.Mtime, DateTimeKind.Utc), backupRoot, ct,
+                            delegate(long done) { Progress.Bytes(af, done); });
+                        okIn = true;
+                    }
+                    finally { Progress.End(af, okIn); }
                     FileRecord rec = new FileRecord();
                     rec.Size = d.Item.Size;
                     try { rec.Mtime = File.GetLastWriteTimeUtc(PathUtil.Long(to)).Ticks; } catch (Exception) { rec.Mtime = d.Item.Mtime; }
@@ -807,11 +927,15 @@ namespace AutoCopy
                 {
                     Stopwatch w = Stopwatch.StartNew();
                     string s = PathUtil.Combine(src, t.Rel), d = PathUtil.Combine(dst, t.Rel);
+                    ActiveFile af = Progress.Begin(t.Rel, t.Item.Size, t.Overwrite ? "上書き" : "コピー");
+                    bool fileOk = false;
                     try
                     {
                         if (t.Overwrite && job.BackupBeforeOverwrite && File.Exists(PathUtil.Long(d)))
                             SafeFs.MoveToTrash(dst, t.Rel, "退避", batch);
-                        byte[] hash = SafeFs.CopyFile(s, d, new DateTime(t.Item.Mtime, DateTimeKind.Utc), throttle, stopAll.Token);
+                        byte[] hash = SafeFs.CopyFile(s, d, new DateTime(t.Item.Mtime, DateTimeKind.Utc), throttle, stopAll.Token,
+                            delegate(long done) { Progress.Bytes(af, done); });
+                        fileOk = true;
                         FileRecord rec = new FileRecord();
                         rec.Size = t.Item.Size;
                         rec.Mtime = t.Item.Mtime;
@@ -855,6 +979,7 @@ namespace AutoCopy
                         Logger.Write(job.Name, "ERROR", t.Rel + "　" + ex.Message, t.Item.Size, -1);
                         lock (resLock) { res.Errors++; }
                     }
+                    finally { Progress.End(af, fileOk); }
                 });
             }
             catch (OperationCanceledException)
@@ -928,7 +1053,21 @@ namespace AutoCopy
                 res.DeleteBytes += r.Size;
                 if (res.PlannedDeletes.Count < 5000) res.PlannedDeletes.Add(m);
             }
-            if (dryRun) { res.Deleted = candidates.Count; return; }
+            if (dryRun)
+            {
+                res.Deleted = candidates.Count;
+                int tot = Math.Max(1, files.Count);
+                bool many = candidates.Count > job.MirrorMaxCount
+                    || (candidates.Count > 10 && candidates.Count * 100 > tot * Math.Max(1, job.MirrorMaxPercent));
+                foreach (string c in candidates)
+                {
+                    PlanItem pi = new PlanItem();
+                    pi.Kind = many ? PlanKind.Hold : PlanKind.Delete; pi.Rel = c; pi.DstSize = files[c].Size;
+                    pi.Note = many ? "コピー元で削除。件数が多いため、削除する前に確認を求める" : "コピー元で削除 → コピー先から「削除済み」へ移す";
+                    if (current != null && current.Plan.Count < 500000) current.Plan.Add(pi);
+                }
+                return;
+            }
 
             // 削除対象にならないもの（人が置いた・除外）は記録だけ消す
             HashSet<string> candSet = new HashSet<string>(candidates, StringComparer.OrdinalIgnoreCase);
