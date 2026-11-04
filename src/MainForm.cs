@@ -19,7 +19,7 @@ namespace AutoCopy
 
         public MainForm()
         {
-            Ui.SetupForm(this, "自動コピー", 1120, 640);
+            Ui.SetupForm(this, "自動コピー", 1210, 640);
             MinimumSize = new Size(760, 480);
 
             // ---- ツールバー ----
@@ -78,7 +78,7 @@ namespace AutoCopy
             band.Controls.AddRange(new Control[] { statusLabel, confirmLabel, confirmButton, pendingButton });
 
             // ---- ジョブ一覧 ----
-            jobs = Ui.List("ジョブ名|160", "方式|70", "コピー元 → コピー先|300", "間隔|56", "前回|70", "結果|240", "次回|70");
+            jobs = Ui.List("ジョブ名|160", "方式|104", "コピー元 → コピー先|300", "間隔|56", "前回|70", "結果|240", "次回|70");
             jobs.CheckBoxes = true;
             jobs.Dock = DockStyle.Fill;
             jobs.ItemChecked += OnItemChecked;
