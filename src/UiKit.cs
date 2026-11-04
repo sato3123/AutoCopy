@@ -277,6 +277,8 @@ namespace AutoCopy
             p.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             p.Margin = new Padding(0);
             p.Controls.AddRange(controls);
+            // 選択欄は文字が大きいと表示後に少し高くなることがあるため、下に少し余白を取る
+            foreach (Control c in controls) if (c is ComboBox) { p.Padding = new Padding(0, 0, 0, S(3)); break; }
             return p;
         }
 
