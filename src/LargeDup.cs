@@ -182,11 +182,8 @@ namespace AutoCopy
                 foreach (KeyValuePair<string, List<string>> same in byHash)
                 {
                     if (same.Value.Count < 2) continue;
+                    string first = ChooseFirst(dst, same.Value, scan, files);
                     same.Value.Sort(StringComparer.OrdinalIgnoreCase);
-                    string first = null;
-                    foreach (string rel in same.Value)
-                        if (IsNormalCopy(dst, rel, scan.Files[rel], files)) { first = rel; break; }
-                    if (first == null) first = same.Value[0];
                     LargeDupGroup grp = new LargeDupGroup();
                     grp.First = first; grp.Hash = same.Key; grp.Size = g.Key;
                     foreach (string rel in same.Value) if (!string.Equals(rel, first, StringComparison.OrdinalIgnoreCase)) grp.Others.Add(rel);
@@ -194,6 +191,36 @@ namespace AutoCopy
                 }
             }
             return result;
+        }
+
+        /// <summary>
+        /// 1つ目（コピーして残すもの）を決める。優先順位：
+        /// ① 先にコピーしたもの（コピー先に普通にコピー済みで、初めてコピーした日時が早いもの。日時が不明なものはその次）
+        /// ② パス名が短いもの　③ ファイル名が短いもの　④ それでも同じならパスの文字の順
+        /// </summary>
+        public static string ChooseFirst(string dst, List<string> same, ScanResult scan, Dictionary<string, FileRecord> files)
+        {
+            string best = null;
+            int bestCopied = 0; long bestAt = 0;
+            foreach (string rel in same)
+            {
+                int copied = 0; long at = long.MaxValue;
+                if (IsNormalCopy(dst, rel, scan.Files[rel], files))
+                {
+                    copied = 1;
+                    FileRecord rec = files[rel];
+                    if (rec.CopiedAt > 0) at = rec.CopiedAt;
+                }
+                if (best == null) { best = rel; bestCopied = copied; bestAt = at; continue; }
+                // c > 0 なら rel の方が1つ目にふさわしい
+                int c = copied.CompareTo(bestCopied);                    // コピー済みが先
+                if (c == 0 && copied == 1) c = bestAt.CompareTo(at);     // 先にコピーしたもの
+                if (c == 0) c = best.Length.CompareTo(rel.Length);       // パス名が短いもの
+                if (c == 0) c = PathUtil.FileName(best).Length.CompareTo(PathUtil.FileName(rel).Length);   // ファイル名が短いもの
+                if (c == 0) c = string.Compare(best, rel, StringComparison.OrdinalIgnoreCase) > 0 ? 1 : 0;
+                if (c > 0) { best = rel; bestCopied = copied; bestAt = at; }
+            }
+            return best;
         }
 
         /// <summary>コピー先に、変わっていないファイルが普通にコピーしてあるか</summary>
@@ -267,6 +294,7 @@ namespace AutoCopy
                 {
                     byte[] hash = SafeFs.CopyFile(s, d, fi.LastWriteTimeUtc, null, CancellationToken.None);
                     FileRecord rec = new FileRecord();
+                    rec.CopiedAt = DateTime.UtcNow.Ticks;
                     rec.Size = fi.Length; rec.Mtime = fi.LastWriteTimeUtc.Ticks; rec.Hash = hash; rec.CopiedByApp = true;
                     rec.DestMtime = File.GetLastWriteTimeUtc(PathUtil.Long(d)).Ticks;
                     lock (state) state.Files[item.Rel] = rec;

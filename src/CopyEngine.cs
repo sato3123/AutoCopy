@@ -913,7 +913,10 @@ namespace AutoCopy
                         byte[] hash = SafeFs.CopyFile(s, d, new DateTime(t.Item.Mtime, DateTimeKind.Utc), throttle, stopAll.Token,
                             delegate(long done) { Progress.Bytes(af, done); });
                         fileOk = true;
+                        FileRecord old;
+                        lock (state) state.Files.TryGetValue(t.Rel, out old);
                         FileRecord rec = new FileRecord();
+                        rec.CopiedAt = old != null && old.PlaceholderOf == null ? FileRecord.FirstCopied(old) : DateTime.UtcNow.Ticks;
                         rec.Size = t.Item.Size;
                         rec.Mtime = t.Item.Mtime;
                         rec.Hash = hash;
@@ -981,7 +984,7 @@ namespace AutoCopy
             rec.DestMtime = destMtime;
             rec.Hash = hash;
             rec.CopiedByApp = managed;
-            if (old != null) { rec.Volume = old.Volume; rec.FileIndex = old.FileIndex; }
+            if (old != null) { rec.Volume = old.Volume; rec.FileIndex = old.FileIndex; rec.CopiedAt = old.CopiedAt; }
             lock (state) { state.Files[rel] = rec; }
         }
 

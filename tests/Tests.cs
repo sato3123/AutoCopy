@@ -85,6 +85,7 @@ namespace AutoCopy.Tests
             Add("T56", "作業状況：件数・容量・進み具合・コピー中のファイル", T56_Progress);
             Add("T57", "大きいファイルの重複の扱い（使わない・毎回選ぶ・自動）と前の版の設定の引き継ぎ", T57_DedupChoice);
             Add("T58", "大きいファイルの重複：見つけたら毎回選ぶ（コピー時・重複チェック）・テキストにする・普通にコピー", T58_DedupAsk);
+            Add("T59", "大きいファイルの重複：1つ目は「先にコピーしたもの → パス名が短いもの → ファイル名が短いもの」の順で決める", T59_DedupFirst);
 
             int ng = 0;
             foreach (TestCase t in cases)
@@ -1791,6 +1792,68 @@ namespace AutoCopy.Tests
             Eq(0, rc.Copied + rc.DedupAsked, "次のコピーでも戻さない");
             DupResult d2 = DupChecker.Run(c.Job, c.App, c.State, CancellationToken.None);
             Eq(0, d2.LargePending, "選んだものは出さない");
+        }
+
+        private static string FirstOf(Box b)
+        {
+            DupChecker.Run(b.Job, b.App, b.State, CancellationToken.None);
+            DedupBook book = DedupStore.Get(b.Job.Id);
+            lock (book) return book.Pending.Count > 0 ? book.Pending[0].Target : null;
+        }
+
+        private static void T59_DedupFirst()
+        {
+            // ② パス名が短いもの（まだどれもコピーしていない）
+            Box a = new Box("T59a");
+            a.Job.Dedup = DedupMode.Ask;
+            WriteBig(a.S("とても長いフォルダ名\\x.bin"), 11, 1, 300);
+            WriteBig(a.S("短\\長いファイル名です.bin"), 11, 1, 300);
+            WriteBig(a.S("aa\\b.bin"), 11, 1, 300);
+            RunResult ra = a.Run();
+            True(File.Exists(a.D("aa\\b.bin")), "パス名がいちばん短いものをコピー");
+            Eq(1, ra.Copied, "1つだけコピー");
+            Eq("aa\\b.bin", FirstOf(a), "1つ目はパス名が短いもの");
+
+            // ③ パス名の長さが同じなら、ファイル名が短いもの
+            Box n = new Box("T59n");
+            WriteBig(n.S("xy\\ab.bin"), 11, 2, 300);    // パス 9文字・ファイル名 6文字
+            WriteBig(n.S("x\\abc.bin"), 11, 2, 300);    // パス 9文字・ファイル名 7文字
+            n.Run();
+            True(File.Exists(n.D("xy\\ab.bin")) && !File.Exists(n.D("x\\abc.bin")), "ファイル名が短いものをコピー");
+
+            // ① 先にコピーしたもの（パス名が長くても）
+            Box c = new Box("T59c");
+            WriteBig(c.S("とても長いフォルダ名\\先にあった.bin"), 11, 3, 300);
+            c.Run();                                         // 1つしかないので普通にコピー
+            System.Threading.Thread.Sleep(30);
+            WriteBig(c.S("z.bin"), 11, 3, 300);              // 後から同じ中身・短いパス
+            RunResult rc = c.Run();
+            Eq(0, rc.Copied, "後から来た短いパスはコピーしない");
+            Eq(1, rc.DedupAsked, "扱いを選ぶ");
+            Eq("とても長いフォルダ名\\先にあった.bin", FirstOf(c), "1つ目は先にコピーしたもの");
+
+            // ① 両方コピー済みなら、初めてコピーした日時が早いもの（パス名が長くても）
+            Box d = new Box("T59d");
+            d.Job.Dedup = DedupMode.Off;
+            WriteBig(d.S("長い長いフォルダ\\最初.bin"), 11, 4, 300);
+            d.Run();
+            System.Threading.Thread.Sleep(30);
+            WriteBig(d.S("q.bin"), 11, 4, 300);
+            d.Run();                                         // 使わない設定なので両方コピー
+            True(File.Exists(d.D("q.bin")) && File.Exists(d.D("長い長いフォルダ\\最初.bin")), "両方コピー済み");
+            // 上書きしても「初めてコピーした日時」は変わらない
+            long first; lock (d.State) first = d.State.Files["長い長いフォルダ\\最初.bin"].CopiedAt;
+            True(first > 0, "初めてコピーした日時を記録");
+            d.Job.Dedup = DedupMode.Ask;
+            Eq("長い長いフォルダ\\最初.bin", FirstOf(d), "1つ目は先にコピーしたもの");
+            DedupPendingItem p = DedupStore.Get(d.Job.Id).Pending[0];
+            Eq("q.bin", p.Rel, "選ぶのは後からコピーした方");
+            True(p.Copied, "コピー済み");
+
+            // 記録が保存・読み直しで消えない
+            AppCore.SaveState(d.Job.Id);
+            JobState re = JobState.Load(d.Job.Id);
+            Eq(first, re.Files["長い長いフォルダ\\最初.bin"].CopiedAt, "保存して読み直しても同じ");
         }
 
         private static void T42_Performance()

@@ -16,6 +16,13 @@ namespace AutoCopy
         public bool CopiedByApp;  // このジョブがコピーした（ミラーで削除してよい）
         public byte[] Hash;       // MD5（null = 不明）
         public string PlaceholderOf; // 重複のためコピーせず、場所を書いたテキストを置いた：中身が同じコピー元ファイル（null = 普通にコピー）
+        public long CopiedAt;        // 初めてコピー先にコピーした日時（UTC ticks。0 = 不明）。上書きしても変えない
+
+        /// <summary>前の記録から「初めてコピーした日時」を引き継ぐ（なければ今）</summary>
+        public static long FirstCopied(FileRecord old)
+        {
+            return old != null && old.CopiedAt > 0 ? old.CopiedAt : DateTime.UtcNow.Ticks;
+        }
 
         public FileRecord Clone()
         {
@@ -78,6 +85,7 @@ namespace AutoCopy
                         f.CopiedByApp = (flags & 1) != 0;
                         if ((flags & 2) != 0) f.Hash = r.ReadBytes(16);
                         if ((flags & 4) != 0) f.PlaceholderOf = r.ReadString();
+                        if ((flags & 8) != 0) f.CopiedAt = r.ReadInt64();
                         s.Files[rel] = f;
                     }
                     n = r.ReadInt32();
@@ -121,7 +129,7 @@ namespace AutoCopy
             using (BinaryWriter w = new BinaryWriter(File.Create(tmp), Encoding.UTF8))
             {
                 w.Write(Magic);
-                w.Write(2);
+                w.Write(3);
                 w.Write(LastRunTicks);
                 w.Write(LastDupCheckTicks);
                 w.Write(LastTrashPurgeTicks);
@@ -137,10 +145,11 @@ namespace AutoCopy
                     w.Write(f.Volume);
                     w.Write(f.FileIndex);
                     w.Write(f.DestMtime);
-                    byte flags = (byte)((f.CopiedByApp ? 1 : 0) | (f.Hash != null && f.Hash.Length == 16 ? 2 : 0) | (f.PlaceholderOf != null ? 4 : 0));
+                    byte flags = (byte)((f.CopiedByApp ? 1 : 0) | (f.Hash != null && f.Hash.Length == 16 ? 2 : 0) | (f.PlaceholderOf != null ? 4 : 0) | (f.CopiedAt > 0 ? 8 : 0));
                     w.Write(flags);
                     if ((flags & 2) != 0) w.Write(f.Hash);
                     if ((flags & 4) != 0) w.Write(f.PlaceholderOf);
+                    if ((flags & 8) != 0) w.Write(f.CopiedAt);
                 }
                 w.Write(SkipForever.Count);
                 foreach (string s in SkipForever) w.Write(s);

@@ -493,7 +493,10 @@ namespace AutoCopy
                     if (backup && File.Exists(PathUtil.Long(d)))
                         SafeFs.MoveToTrash(dst, c.Rel, "退避", DateTime.Now.ToString("yyyyMMdd-HHmmss"));
                     byte[] hash = SafeFs.CopyFile(s, d, fi.LastWriteTimeUtc, null, CancellationToken.None);
+                    FileRecord old;
+                    lock (st) st.Files.TryGetValue(c.Rel, out old);
                     FileRecord rec = new FileRecord();
+                    rec.CopiedAt = FileRecord.FirstCopied(old);
                     rec.Size = fi.Length; rec.Mtime = fi.LastWriteTimeUtc.Ticks; rec.Hash = hash; rec.CopiedByApp = true;
                     rec.DestMtime = File.GetLastWriteTimeUtc(PathUtil.Long(d)).Ticks;
                     lock (st) { st.Files[c.Rel] = rec; }
