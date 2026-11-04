@@ -2,6 +2,7 @@ name: build-and-test
 
 on:
   push:
+    branches-ignore: [release]
   workflow_dispatch:
 
 permissions:
