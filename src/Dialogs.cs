@@ -431,6 +431,8 @@ namespace AutoCopy
             {
                 summary.Text = current.Checked + " にチェック・グループ " + current.Groups.Count + "件" + (largeCount > 0 ? "・大きいファイルの重複 " + largeCount + "件" : "");
                 int rows = lv.Items.Count, allRows = rows, hiddenGroups = 0;
+                // 行は最後にまとめて入れる（1行ずつ入れると、まとまり表示の一覧では件数が多いと極端に遅くなる）
+                List<ListViewItem> buf = new List<ListViewItem>();
                 foreach (DupGroup g in current.Groups) allRows += g.Entries.Count;
                 foreach (DupGroup g in current.Groups)
                 {
@@ -442,7 +444,7 @@ namespace AutoCopy
                     lv.Groups.Add(lg);
                     foreach (DupEntry e in g.Entries)
                     {
-                        if (lv.Items.Count >= MaxRows + 2000) { hiddenGroups++; break; }   // 1つのまとまりがとても大きいとき
+                        if (buf.Count >= MaxRows + 2000) { hiddenGroups++; break; }   // 1つのまとまりがとても大きいとき
                         ListViewItem it = new ListViewItem(e.CanDelete ? "削除" : "残す", lg);
                         bool empty = e.Status == "empty";
                         it.SubItems.Add(e.Rel + (empty ? "\\（空のフォルダ）" : e.IsFolder ? "\\（フォルダごと）" : ""));
@@ -455,9 +457,10 @@ namespace AutoCopy
                         it.Checked = e.CanDelete && e.Recommended;
                         it.ForeColor = e.Status == "old" ? Ui.Warn : e.Status == "current" ? Ui.Ok : Ui.Quiet;
                         it.Tag = e;
-                        lv.Items.Add(it);
+                        buf.Add(it);
                     }
                 }
+                lv.Items.AddRange(buf.ToArray());
                 if (hiddenGroups > 0)
                     summary.Text += "　※件数が多いため、最初の約 " + Fmt.Count(lv.Items.Count) + "行だけ表示しています（全 " + Fmt.Count(allRows) + "行・残り " + hiddenGroups + "グループ）。表示したものを処理してから「今すぐ再チェック」を押すと続きが出ます。";
             }

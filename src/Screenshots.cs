@@ -520,19 +520,29 @@ namespace AutoCopy
 
         private static readonly List<string> timing = new List<string>();
 
+        /// <summary>どこで時間がかかっているか（止まっているか）を残す</summary>
+        private static void Mark(string what)
+        {
+            try { File.WriteAllText(Path.Combine(outDir, "progress.txt"), DateTime.Now.ToString("HH:mm:ss") + " " + what); } catch (Exception) { }
+        }
+
         private static void Capture(string name, Func<Form> make, Action<Form> after)
         {
             Form f = null;
             System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
+                Mark(name + "：作成");
                 f = make();
+                Mark(name + "：表示");
                 f.StartPosition = FormStartPosition.Manual;
                 f.Location = new Point(20, 20);
                 f.Show();
                 Pump(1500);
-                if (after != null) { after(f); Pump(1200); }
+                if (after != null) { Mark(name + "：操作"); after(f); Pump(1200); }
+                Mark(name + "：保存");
                 Save(f, name);
+                Mark(name + "：確認");
                 // 表示切れの確認（画像を保存してから。タブを切り替えるため）
                 try
                 {
