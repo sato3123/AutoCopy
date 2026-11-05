@@ -90,7 +90,7 @@ namespace AutoCopy
         /// <summary>画面右下（タスクバーのすぐ上）に置く</summary>
         public void PlaceBottomRight()
         {
-            Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+            Rectangle wa = Ui.WorkArea;
             PerformLayout();
             Location = new Point(wa.Right - Width - Ui.S(12), wa.Bottom - Height - Ui.S(12));
         }

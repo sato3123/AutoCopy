@@ -18,9 +18,22 @@ namespace AutoCopy
         private readonly TextBox tSearch;
         private readonly Label summary;
         private readonly Button runNow;
-        private RunResult result;
+        private RunResult result;          // 終わった結果（途中は null）
+        private RunResult live;            // 調べている途中の結果（予測の一覧が増えていく）
+        private readonly List<PlanItem> items = new List<PlanItem>();   // 画面に取り込んだ予測
         private List<PlanItem> shown = new List<PlanItem>();
         private string kindFilter;   // null = すべて
+        private readonly Dictionary<string, int> kindCount = new Dictionary<string, int>();
+        private readonly Dictionary<string, long> kindBytes = new Dictionary<string, long>();
+        private System.Threading.CancellationTokenSource cts;
+        private JobProgress progress;
+        private readonly System.Windows.Forms.Timer tick = new System.Windows.Forms.Timer();
+        private readonly ProgressBar bar2;
+        private readonly Label liveLabel;
+        private readonly Button stopBtn, againBtn;
+        private readonly Panel liveBand;
+        private DateTime started, lastSort = DateTime.MinValue;
+        private bool fillingKinds;
 
         public PreviewForm(JobConfig job, bool allowRun)
         {
@@ -41,8 +54,10 @@ namespace AutoCopy
             kinds.Width = Math.Min(Ui.S(380), ClientSize.Width / 3);   // 画面が狭いときは一覧を広く
             kinds.Columns[1].TextAlign = HorizontalAlignment.Right;
             kinds.Columns[2].TextAlign = HorizontalAlignment.Right;
+            ((AcListView)kinds).Sortable = false;
             kinds.SelectedIndexChanged += delegate
             {
+                if (fillingKinds) return;
                 kindFilter = kinds.SelectedItems.Count > 0 ? kinds.SelectedItems[0].Tag as string : null;
                 Fill();
             };
@@ -59,6 +74,27 @@ namespace AutoCopy
             lv.RetrieveVirtualItem += OnRetrieve;
             lv.Columns[2].TextAlign = HorizontalAlignment.Right;
             lv.Columns[4].TextAlign = HorizontalAlignment.Right;
+            ((AcListView)lv).SortRequested += delegate(int col, bool asc) { SortShown(); lv.Invalidate(); };
+
+            // 調べている途中の表示（進み具合・中止）
+            bar2 = new ProgressBar();
+            bar2.Style = ProgressBarStyle.Marquee;
+            bar2.Width = Ui.S(160); bar2.Height = Ui.S(16);
+            bar2.Margin = new Padding(Ui.S(4), Ui.S(8), Ui.S(8), 3);
+            liveLabel = Ui.L("");
+            liveLabel.ForeColor = Ui.Accent;
+            liveLabel.Margin = new Padding(3, Ui.S(8), 3, 3);
+            stopBtn = Ui.B("中止", delegate { StopAnalyze(); });
+            FlowLayoutPanel lb = Ui.Row(bar2, liveLabel, stopBtn);
+            liveBand = new Panel();
+            liveBand.Dock = DockStyle.Top;
+            liveBand.BackColor = Ui.InfoBack;
+            liveBand.Height = lb.PreferredSize.Height + Ui.S(4);
+            lb.Dock = DockStyle.Fill;
+            liveBand.Controls.Add(lb);
+            liveBand.Visible = false;
+            tick.Interval = 500;
+            tick.Tick += delegate { Pull(false); };
 
             Panel right = new Panel();
             right.Dock = DockStyle.Fill;
@@ -69,92 +105,198 @@ namespace AutoCopy
 
             runNow = Ui.B("この内容で今すぐ実行", delegate { RunNow(); });
             runNow.Visible = allowRun;
+            againBtn = Ui.B("もう一度調べる", delegate { Analyze(); });
             Controls.Add(right);
             Controls.Add(sp);
             Controls.Add(kinds);
+            Controls.Add(liveBand);
             Controls.Add(top);
             Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), runNow,
                 Ui.B("一覧をCSVに書き出す", delegate { Export(); }),
-                Ui.B("もう一度調べる", delegate { Analyze(); })));
-            Shown += delegate { if (result == null) Analyze(); };
+                againBtn));
+            Shown += delegate { if (result == null && live == null) Analyze(); };
+            FormClosed += delegate { tick.Stop(); if (cts != null) cts.Cancel(); };
         }
 
         /// <summary>調べた結果を直接渡す（画面の確認用）</summary>
-        public void SetResult(RunResult r) { result = r; ShowResult(); }
+        public void SetResult(RunResult r) { Reset(); result = r; live = r; Pull(true); }
 
-        private void Analyze()
+        /// <summary>調べている途中の状態を作る（画面の確認用）：partial の予測を途中経過として表示する</summary>
+        public void SetPartial(RunResult partial, JobProgress p)
         {
-            bool stopped;
-            RunResult r;
-            JobConfig j = job;
-            try
-            {
-                r = Ui.BusyCancel<RunResult>(this, "実行したらどうなるかを調べています（コピーはしません）…", delegate(System.Threading.CancellationToken ct, BusyProgress bp)
-                {
-                    JobProgress p = new JobProgress();
-                    System.Threading.Timer t = new System.Threading.Timer(delegate(object o)
-                    {
-                        JobProgress s = p.Snapshot();
-                        bp.Text = s.Phase + (s.Scanned > 0 ? "（" + Fmt.Count(s.Scanned) + "件）" : "");
-                    }, null, 200, 300);
-                    try { return AppCore.DryRun(j, false, ct, p); }
-                    finally { t.Dispose(); }
-                }, out stopped);
-            }
-            catch (Exception ex) { Ui.Error(this, "調べられませんでした：" + ex.Message); return; }
-            if (stopped) { summary.Text = "中止しました。"; return; }
-            result = r;
-            ShowResult();
+            Reset();
+            live = partial; progress = p; started = DateTime.Now.AddSeconds(-12);
+            liveBand.Visible = true;
+            againBtn.Enabled = false; runNow.Enabled = false;
+            Pull(false);
         }
 
-        private void ShowResult()
+        private void Reset()
         {
-            RunResult r = result;
-            Dictionary<string, int> count = new Dictionary<string, int>();
-            Dictionary<string, long> bytes = new Dictionary<string, long>();
-            foreach (PlanItem p in r.Plan)
-            {
-                int c; count.TryGetValue(p.Kind, out c); count[p.Kind] = c + 1;
-                long b; bytes.TryGetValue(p.Kind, out b);
-                bytes[p.Kind] = b + Math.Max(0, p.Size >= 0 ? p.Size : p.DstSize);
-            }
-            kinds.BeginUpdate();
-            kinds.Items.Clear();
-            ListViewItem all = new ListViewItem("すべて");
-            all.SubItems.Add(Fmt.Count(r.Plan.Count)); all.SubItems.Add("");
-            all.Font = Ui.Bold;
-            kinds.Items.Add(all);
-            foreach (string k in PlanKind.All)
-            {
-                int c;
-                if (!count.TryGetValue(k, out c)) continue;
-                ListViewItem it = new ListViewItem(k);
-                it.SubItems.Add(Fmt.Count(c));
-                it.SubItems.Add(Fmt.Size(bytes[k]));
-                it.Tag = k;
-                it.ForeColor = KindColor(k);
-                kinds.Items.Add(it);
-            }
-            ListViewItem un = new ListViewItem("変更なし（何もしない）");
-            un.SubItems.Add(Fmt.Count(r.Unchanged)); un.SubItems.Add("");
-            un.ForeColor = Ui.Quiet;
-            un.Tag = "__none";
-            kinds.Items.Add(un);
-            kinds.EndUpdate();
+            items.Clear(); shown.Clear(); kindCount.Clear(); kindBytes.Clear();
+            result = null; live = null;
+            lv.VirtualListSize = 0;
+        }
 
+        /// <summary>
+        /// 裏で調べ始め、見つかったものから順に一覧に出す（調べ終わるのを待たずに見られる）。
+        /// </summary>
+        private void Analyze()
+        {
+            if (cts != null) return;
+            Reset();
+            RunResult r = new RunResult();
+            live = r;
+            progress = new JobProgress();
+            cts = new System.Threading.CancellationTokenSource();
+            System.Threading.CancellationToken ct = cts.Token;
+            JobConfig j = job;
+            JobProgress p = progress;
+            started = DateTime.Now;
+            liveBand.Visible = true;
+            stopBtn.Enabled = true; stopBtn.Text = "中止";
+            againBtn.Enabled = false;
+            runNow.Enabled = false;
+            summary.Text = "実行したらどうなるかを調べています（コピーはしません）。見つかったものから順に表示します…";
+            summary.ForeColor = SystemColors.WindowText;
+            tick.Start();
+            System.Threading.Tasks.Task.Factory.StartNew(delegate()
+            {
+                Exception error = null;
+                bool canceled = false;
+                try { AppCore.DryRun(j, false, ct, p, r); }
+                catch (OperationCanceledException) { canceled = true; }
+                catch (Exception ex) { error = ex; }
+                try { BeginInvoke(new Action(delegate() { Finished(r, error, canceled); })); } catch (Exception) { }
+            }, System.Threading.Tasks.TaskCreationOptions.LongRunning);
+        }
+
+        private void StopAnalyze()
+        {
+            if (cts == null) return;
+            cts.Cancel();
+            stopBtn.Enabled = false;
+            stopBtn.Text = "中止しています…";
+        }
+
+        private void Finished(RunResult r, Exception error, bool canceled)
+        {
+            if (IsDisposed) return;
+            tick.Stop();
+            if (cts != null) { cts.Dispose(); cts = null; }
+            liveBand.Visible = false;
+            againBtn.Enabled = true;
+            runNow.Enabled = true;
+            if (r != live) return;
+            if (error != null)
+            {
+                Pull(false);
+                summary.Text = "調べられませんでした：" + error.Message + (items.Count > 0 ? "（途中までの " + Fmt.Count(items.Count) + "件を表示しています）" : "");
+                summary.ForeColor = Ui.Err;
+                return;
+            }
+            if (canceled)
+            {
+                Pull(false);
+                summary.Text = "中止しました。途中までに見つかった " + Fmt.Count(items.Count) + "件を表示しています（全部ではありません）。";
+                summary.ForeColor = Ui.Warn;
+                return;
+            }
+            result = r;
+            Pull(true);
+        }
+
+        /// <summary>途中経過（または結果）を取り込んで表示を更新する</summary>
+        private void Pull(bool final)
+        {
+            RunResult r = live;
+            if (r == null) return;
+            List<PlanItem> fresh;
+            lock (r.Plan)
+            {
+                int n = r.Plan.Count - items.Count;
+                fresh = n > 0 ? r.Plan.GetRange(items.Count, n) : new List<PlanItem>();
+            }
+            foreach (PlanItem p in fresh)
+            {
+                int c; kindCount.TryGetValue(p.Kind, out c); kindCount[p.Kind] = c + 1;
+                long b; kindBytes.TryGetValue(p.Kind, out b);
+                kindBytes[p.Kind] = b + Math.Max(0, p.Size >= 0 ? p.Size : p.DstSize);
+            }
+            items.AddRange(fresh);
+            FillKinds(r);
+            if (final || result != null) ShowSummary(r);
+            else if (progress != null)
+            {
+                JobProgress s = progress.Snapshot();
+                int sec = (int)(DateTime.Now - started).TotalSeconds;
+                liveLabel.Text = (s.Phase ?? "") + (s.Scanned > 0 ? "（調べたファイル " + Fmt.Count(s.Scanned) + "件）" : "")
+                    + "　見つかったもの " + Fmt.Count(items.Count) + "件　経過 " + (sec >= 60 ? (sec / 60) + "分" + (sec % 60) + "秒" : sec + "秒");
+            }
+            // 一覧：並べ替えをしていなければ、増えた分を後ろに足す（スクロール位置はそのまま）
+            AcListView alv = (AcListView)lv;
+            if (fresh.Count == 0 && !final) return;
+            if (!final && alv.SortColumn < 0 && shown.Count + fresh.Count <= items.Count)
+            {
+                string q = tSearch.Text.Trim();
+                foreach (PlanItem p in fresh) if (Match(p, q)) shown.Add(p);
+                lv.VirtualListSize = shown.Count;
+                Text = "実行結果の予測 - " + job.Name + "（" + Fmt.Count(shown.Count) + "件を表示・調べています）";
+                return;
+            }
+            if (!final && (DateTime.Now - lastSort).TotalSeconds < 2) return;   // 並べ替え中は2秒ごと
+            Fill();
+        }
+
+        private void FillKinds(RunResult r)
+        {
+            fillingKinds = true;
+            kinds.BeginUpdate();
+            try
+            {
+                kinds.Items.Clear();
+                ListViewItem all = new ListViewItem("すべて");
+                all.SubItems.Add(Fmt.Count(items.Count)); all.SubItems.Add("");
+                all.Font = Ui.Bold;
+                kinds.Items.Add(all);
+                if (kindFilter == null) all.Selected = true;
+                foreach (string k in PlanKind.All)
+                {
+                    int c;
+                    if (!kindCount.TryGetValue(k, out c)) continue;
+                    ListViewItem it = new ListViewItem(k);
+                    it.SubItems.Add(Fmt.Count(c));
+                    it.SubItems.Add(Fmt.Size(kindBytes[k]));
+                    it.Tag = k;
+                    it.ForeColor = KindColor(k);
+                    kinds.Items.Add(it);
+                    if (k == kindFilter) it.Selected = true;
+                }
+                ListViewItem un = new ListViewItem("変更なし（何もしない）");
+                un.SubItems.Add(Fmt.Count(r.Unchanged)); un.SubItems.Add("");
+                un.ForeColor = Ui.Quiet;
+                un.Tag = "__none";
+                kinds.Items.Add(un);
+                if (kindFilter == "__none") un.Selected = true;
+            }
+            finally { kinds.EndUpdate(); fillingKinds = false; }
+        }
+
+        private void ShowSummary(RunResult r)
+        {
             int copies = 0, ow = 0;
-            count.TryGetValue(PlanKind.Copy, out copies);
-            count.TryGetValue(PlanKind.Overwrite, out ow);
+            kindCount.TryGetValue(PlanKind.Copy, out copies);
+            kindCount.TryGetValue(PlanKind.Overwrite, out ow);
             summary.Text = "調べたファイル " + Fmt.Count(r.Scanned) + "件 → コピー " + Fmt.Count(copies) + "件・上書き " + Fmt.Count(ow) + "件（合わせて " + Fmt.Size(r.CopyBytesPlanned) + "）"
                 + "・確認待ち " + Fmt.Count(r.Conflicts) + "件・名前変更 " + Fmt.Count(r.Renamed) + "件"
                 + (job.Mirror ? "・ミラー削除 " + Fmt.Count(r.Deleted) + "件" : "")
                 + (r.PlannedDedup > 0 ? "・重複で省略 " + Fmt.Count(r.PlannedDedup) + "件" : "")
                 + (r.PlannedDownloads > 0 ? "・取り込み " + Fmt.Count(r.PlannedDownloads) + "件" : "")
+                + (r.SyncDeleteCandidates > 0 ? "・削除の確認 " + Fmt.Count(r.SyncDeleteCandidates) + "件" : "")
                 + "・除外 " + Fmt.Count(r.Excluded) + "件"
                 + (r.Excluded > 5000 ? "（一覧は最初の5,000件）" : "")
                 + "　" + DateTime.Now.ToString("HH:mm") + " 時点";
             summary.ForeColor = r.Conflicts > 0 || r.Deleted > 0 ? Ui.Warn : SystemColors.WindowText;
-            Fill();
         }
 
         private static Color KindColor(string k)
@@ -166,21 +308,53 @@ namespace AutoCopy
             return SystemColors.WindowText;
         }
 
+        private bool Match(PlanItem p, string q)
+        {
+            if (kindFilter == "__none") return false;
+            if (kindFilter != null && p.Kind != kindFilter) return false;
+            if (q.Length > 0 && (p.Rel ?? "").IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0 && (p.Note ?? "").IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0) return false;
+            return true;
+        }
+
         private void Fill()
         {
-            if (result == null) return;
             string q = tSearch.Text.Trim();
-            shown = result.Plan.FindAll(delegate(PlanItem p)
-            {
-                if (kindFilter == "__none") return false;
-                if (kindFilter != null && p.Kind != kindFilter) return false;
-                if (q.Length > 0 && (p.Rel ?? "").IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0 && (p.Note ?? "").IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0) return false;
-                return true;
-            });
+            shown = items.FindAll(delegate(PlanItem p) { return Match(p, q); });
+            SortShown();
             lv.VirtualListSize = 0;
             lv.VirtualListSize = shown.Count;
             lv.Invalidate();
-            Text = "実行結果の予測 - " + job.Name + "（" + Fmt.Count(shown.Count) + "件を表示）";
+            Text = "実行結果の予測 - " + job.Name + "（" + Fmt.Count(shown.Count) + "件を表示" + (result == null && cts != null ? "・調べています" : "") + "）";
+        }
+
+        /// <summary>見出しのクリックでの並べ替え（仮想表示なので、元の一覧を並べ替える）</summary>
+        private void SortShown()
+        {
+            AcListView alv = (AcListView)lv;
+            int col = alv.SortColumn;
+            bool asc = alv.SortAscending;
+            lastSort = DateTime.Now;
+            if (col < 0) return;
+            Comparison<PlanItem> cmp;
+            switch (col)
+            {
+                case 0: cmp = delegate(PlanItem a, PlanItem b) { return Array.IndexOf(PlanKind.All, a.Kind).CompareTo(Array.IndexOf(PlanKind.All, b.Kind)); }; break;
+                case 2: cmp = delegate(PlanItem a, PlanItem b) { return a.Size.CompareTo(b.Size); }; break;
+                case 3: cmp = delegate(PlanItem a, PlanItem b) { return a.SrcMtime.CompareTo(b.SrcMtime); }; break;
+                case 4: cmp = delegate(PlanItem a, PlanItem b) { return a.DstSize.CompareTo(b.DstSize); }; break;
+                case 5: cmp = delegate(PlanItem a, PlanItem b) { return a.DstMtime.CompareTo(b.DstMtime); }; break;
+                case 6: cmp = delegate(PlanItem a, PlanItem b) { return string.Compare(a.Note, b.Note, StringComparison.CurrentCultureIgnoreCase); }; break;
+                default: cmp = delegate(PlanItem a, PlanItem b) { return string.Compare(a.Rel, b.Rel, StringComparison.CurrentCultureIgnoreCase); }; break;
+            }
+            List<KeyValuePair<int, PlanItem>> idx = new List<KeyValuePair<int, PlanItem>>(shown.Count);
+            for (int i = 0; i < shown.Count; i++) idx.Add(new KeyValuePair<int, PlanItem>(i, shown[i]));
+            idx.Sort(delegate(KeyValuePair<int, PlanItem> a, KeyValuePair<int, PlanItem> b)
+            {
+                int r = cmp(a.Value, b.Value);
+                if (r == 0) r = a.Key.CompareTo(b.Key);
+                return asc ? r : -r;
+            });
+            for (int i = 0; i < idx.Count; i++) shown[i] = idx[i].Value;
         }
 
         private static string T(long ticks) { return ticks <= 0 ? "" : new DateTime(ticks, DateTimeKind.Utc).ToLocalTime().ToString("yyyy/MM/dd HH:mm"); }
@@ -202,7 +376,7 @@ namespace AutoCopy
 
         private void Export()
         {
-            if (result == null) return;
+            if (items.Count == 0) return;
             using (SaveFileDialog d = new SaveFileDialog())
             {
                 d.Filter = "CSV（Excel で開けます）|*.csv";

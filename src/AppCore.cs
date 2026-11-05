@@ -8,14 +8,55 @@ namespace AutoCopy
 {
     public enum NoticeLevel { Ok, Info, Warning, Error }
 
+    /// <summary>
+    /// お知らせ1件。確認が必要なもの（上書きの確認・エラーなど）は「未対応」で始まり、
+    /// 確認が済むと自動で（または手で）「対応済み」になる。ただのお知らせは最初から「対応不要」。
+    /// </summary>
+    [System.Runtime.Serialization.DataContract]
     public class Notice
     {
-        public DateTime Time;
-        public NoticeLevel Level;
-        public string Title;
-        public string Text;
-        public string Action;   // conflicts / dup / pending / job / log / retry
-        public string JobId;
+        [System.Runtime.Serialization.DataMember] public string Id = Guid.NewGuid().ToString("N");
+        [System.Runtime.Serialization.DataMember] public DateTime Time;
+        [System.Runtime.Serialization.DataMember] public DateTime First;      // 同じお知らせが続いたときの最初の時刻
+        [System.Runtime.Serialization.DataMember] public int Count = 1;       // 同じお知らせが続いた回数
+        [System.Runtime.Serialization.DataMember] public NoticeLevel Level;
+        [System.Runtime.Serialization.DataMember] public string Title;
+        [System.Runtime.Serialization.DataMember] public string Text;
+        [System.Runtime.Serialization.DataMember] public string Action;   // conflicts / dup / pending / synccand / job / log / retry
+        [System.Runtime.Serialization.DataMember] public string JobId;
+        [System.Runtime.Serialization.DataMember] public bool Handled;
+        [System.Runtime.Serialization.DataMember] public string HandledNote;   // 対応不要 / 確認しました / 手で対応済みにしました など
+        [System.Runtime.Serialization.DataMember] public DateTime HandledAt;
+        [System.Runtime.Serialization.DataMember] public bool ManualOpen;      // 手で「未対応に戻す」にしたもの（自動では対応済みにしない）
+
+        /// <summary>確認・対応が必要な種類か</summary>
+        public bool NeedsAction { get { return Level == NoticeLevel.Error || Level == NoticeLevel.Warning; } }
+
+        public string StateText
+        {
+            get
+            {
+                if (!Handled) return "未対応";
+                if (HandledNote == NoticeNotes.NotNeeded) return "対応不要";
+                return "対応済み";
+            }
+        }
+    }
+
+    public static class NoticeNotes
+    {
+        public const string NotNeeded = "対応不要（お知らせのみ）";
+        public const string Seen = "確認しました";
+        public const string Manual = "手で対応済みにしました";
+        public const string Recovered = "その後、正常に実行できました";
+        public const string Disabled = "ジョブを無効にしました";
+        public const string JobGone = "ジョブが削除されました";
+    }
+
+    [System.Runtime.Serialization.DataContract]
+    public class NoticeBook
+    {
+        [System.Runtime.Serialization.DataMember] public List<Notice> Items = new List<Notice>();
     }
 
     public class JobRuntime
@@ -153,6 +194,7 @@ namespace AutoCopy
                 if (states.TryGetValue(id, out s)) { s.Delete(); states.Remove(id); }
             }
             DedupStore.Forget(id);
+            SyncDeleteStore.Forget(id);
         }
 
         // ---------------- スケジュール ----------------
@@ -354,6 +396,9 @@ namespace AutoCopy
                     if (res.DedupNew && res.DedupAsked > 0)
                         Notify(NoticeLevel.Warning, "大きいファイルの重複 " + res.DedupAsked + "件：扱いを選んでください",
                             job.Name + "：中身が同じ大きいファイルを見つけました。選ぶまでコピーせずに待っています（1つ目はコピー済み）。", "dup", job.Id);
+                    if (res.SyncDeleteNew > 0)
+                        Notify(NoticeLevel.Warning, "同期：削除されたファイル " + res.SyncDeleteCandidates + "件 の扱いを選んでください",
+                            job.Name + "：一方で削除されたファイルがあります。もう一方からも消すか、残す（戻す）かを選ぶまで、そのままにしています。", "synccand", job.Id);
                     if (res.Renamed > 0)
                         AddNoticeOnly(NoticeLevel.Ok, job.Name + "：名前の変更 " + res.Renamed + "件 をコピー先にも反映しました（再コピーなし）", "log", job.Id);
                     if (res.Locked > 0)
@@ -379,7 +424,9 @@ namespace AutoCopy
                 DateTime t;
                 if (lastErrorNotice.TryGetValue(key, out t) && (DateTime.Now - t).TotalHours < 1)
                 {
-                    AddNoticeOnly(NoticeLevel.Error, job.Name + "：" + error, credError ? "job" : "retry", job.Id);
+                    // 吹き出しは出さず、同じお知らせにまとめる（回数が増える）
+                    AddNotice(NoticeLevel.Error, job.Name + "：エラー", error, credError ? "job" : "retry", job.Id);
+                    RaiseChanged();
                     return;
                 }
                 lastErrorNotice[key] = DateTime.Now;
@@ -396,6 +443,12 @@ namespace AutoCopy
         /// <summary>コピーせずに、実行したらどうなるかを調べる（コピー先・コピー元・記録は一切変えない）</summary>
         public static RunResult DryRun(JobConfig job, bool forceMirror, CancellationToken ct, JobProgress progress)
         {
+            return DryRun(job, forceMirror, ct, progress, null);
+        }
+
+        /// <summary>live を渡すと、調べている途中から live.Plan に予測が増えていく（lock (live.Plan) して読む）</summary>
+        public static RunResult DryRun(JobConfig job, bool forceMirror, CancellationToken ct, JobProgress progress, RunResult live)
+        {
             JobState st = job.Id != null ? GetState(job.Id) : new JobState();
             JobState copy = new JobState();
             lock (st)
@@ -407,6 +460,7 @@ namespace AutoCopy
             quick.RetryCount = 0; // 画面で待たせないよう、数えるだけのときは再試行しない
             CopyEngine eng = new CopyEngine(quick, Settings, copy, true, forceMirror, ct);
             if (progress != null) eng.Progress = progress;
+            eng.Live = live;
             return eng.Run();
         }
 
@@ -541,6 +595,93 @@ namespace AutoCopy
             }
         }
 
+        /// <summary>
+        /// 同期：削除の確認に答える。approve = 削除する（このPCの分は控えへ、共有フォルダの分は「削除済み」へ移す）。
+        /// 削除しない場合は記録を消し、次回の実行で消えた側へ戻す。できなかったものを返す。
+        /// </summary>
+        public static List<string> ResolveSyncDeletes(JobConfig job, List<SyncDeleteItem> items, bool approve)
+        {
+            List<string> errs = new List<string>();
+            if (!job.Sync) { errs.Add("同期のジョブではありません"); return errs; }
+            JobState st = GetState(job.Id);
+            string local = CopyEngine.ResolvedSource(job, Settings), shared = CopyEngine.ResolvedDest(job, Settings);
+            string batch = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            string backupRoot = Path.Combine(Path.Combine(AppPaths.SyncBackupDir, job.Id), batch);
+            List<SyncDeleteItem> done = new List<SyncDeleteItem>();
+            if (approve)
+            {
+                try { NetAccess.Ensure(shared, job.RetryCount, job.RetryIntervalSeconds, CancellationToken.None, null); }
+                catch (Exception ex) { errs.Add("共有フォルダに接続できません：" + ex.Message); return errs; }
+            }
+            foreach (SyncDeleteItem i in items)
+            {
+                try
+                {
+                    string lp = PathUtil.Combine(local, i.Rel), sp = PathUtil.Combine(shared, i.Rel);
+                    bool lEx = File.Exists(PathUtil.Long(lp)), sEx = File.Exists(PathUtil.Long(sp));
+                    if (approve)
+                    {
+                        // 見つけたときから変わっていないことを確かめてから移す（変わっていたら次回の判定に任せる）
+                        if (i.Side == SyncDeleteItem.SideLocal)
+                        {
+                            if (sEx) { errs.Add(i.Rel + "：共有フォルダに戻っているため、消しませんでした"); done.Add(i); continue; }
+                            if (lEx)
+                            {
+                                FileInfo fi = new FileInfo(PathUtil.Long(lp));
+                                if (fi.Length != i.Size || fi.LastWriteTimeUtc.Ticks != i.Mtime) { errs.Add(i.Rel + "：このPCで変更されたため、消しませんでした（次回、共有フォルダへコピーします）"); done.Add(i); continue; }
+                                SafeFs.MoveOutOfSync(lp, i.Rel, backupRoot);
+                            }
+                            Logger.Write(job.Name, "SYNCDEL", i.Rel + "　（共有フォルダで削除されたため、確認してこのPCからも外しました。控え：" + backupRoot + "）", i.Size, -1);
+                        }
+                        else
+                        {
+                            if (lEx) { errs.Add(i.Rel + "：このPCに戻っているため、消しませんでした"); done.Add(i); continue; }
+                            if (sEx)
+                            {
+                                FileInfo fi = new FileInfo(PathUtil.Long(sp));
+                                if (fi.Length != i.Size || Math.Abs(fi.LastWriteTimeUtc.Ticks - i.Mtime) > TimeSpan.TicksPerSecond * 2) { errs.Add(i.Rel + "：共有フォルダで変更されたため、消しませんでした（次回、このPCへ取り込みます）"); done.Add(i); continue; }
+                                SafeFs.MoveToTrash(shared, i.Rel, "削除済み", batch);
+                            }
+                            Logger.Write(job.Name, "SYNCDEL", i.Rel + "　（このPCで削除したため、確認して共有フォルダからも「_AutoCopy\\削除済み」へ移しました）", i.Size, -1);
+                        }
+                        lock (st) { st.Files.Remove(i.Rel); }
+                    }
+                    else
+                    {
+                        // 残す：記録を消すと、次回の実行で消えた側へコピーし直す
+                        lock (st) { st.Files.Remove(i.Rel); }
+                        Logger.Write(job.Name, "SYNCIN", i.Rel + "　（削除せずに残すことにしました。次回の実行で" + (i.Side == SyncDeleteItem.SideLocal ? "共有フォルダへ戻します" : "このPCへ戻します") + "）", i.Size, -1);
+                    }
+                    done.Add(i);
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error(job.Name, i.Rel + "　" + ex.Message);
+                    errs.Add(i.Rel + "：" + ex.Message);
+                }
+            }
+            SyncDeleteStore.Remove(job.Id, done);
+            SaveState(job.Id);
+            RaiseChanged();
+            return errs;
+        }
+
+        public static int TotalSyncDeletes()
+        {
+            int n = 0;
+            foreach (JobConfig j in Settings.Jobs.ToArray()) if (j.Sync) n += SyncDeleteStore.Count(j.Id);
+            return n;
+        }
+
+        /// <summary>「今後も上書きしない」にしたファイルを、また確認するように戻す</summary>
+        public static void ForgetSkipForever(JobConfig job, IEnumerable<string> rels)
+        {
+            JobState st = GetState(job.Id);
+            int n = 0;
+            lock (st) { foreach (string r in rels) if (st.SkipForever.Remove(r)) { n++; Logger.Write(job.Name, "INFO", r + "　（「今後も上書きしない」を取り消しました。次回からまた確認します）", -1, -1); } }
+            if (n > 0) { SaveState(job.Id); RaiseChanged(); }
+        }
+
         public static string ResolvePendingDeletes(JobConfig job, bool approve)
         {
             JobState st = GetState(job.Id);
@@ -573,6 +714,8 @@ namespace AutoCopy
         public static void Notify(NoticeLevel level, string title, string text, string action, string jobId)
         {
             Notice n = AddNotice(level, title, text, action, jobId);
+            // 確認済みのお知らせと同じ内容が続いたときは、吹き出しを出さない（点滅もしない）
+            if (n.NeedsAction && n.Handled && n.Count > 1) { RaiseChanged(); return; }
             bool show = level == NoticeLevel.Error ? Settings.NotifyErrors
                 : level == NoticeLevel.Warning || level == NoticeLevel.Info ? Settings.NotifyConfirm : Settings.NotifyDone;
             if (show && NoticeAdded != null) { try { NoticeAdded(n); } catch (Exception) { } }
@@ -584,21 +727,189 @@ namespace AutoCopy
             RaiseChanged();
         }
 
-        private static Notice AddNotice(NoticeLevel level, string title, string text, string action, string jobId)
+        public const int MaxNotices = 300;
+        private static bool noticesLoaded;
+
+        public static string NoticePath { get { return Path.Combine(AppPaths.StateDir, "notices.json"); } }
+
+        private static void EnsureNotices()
         {
-            Notice n = new Notice();
-            n.Time = DateTime.Now; n.Level = level; n.Title = title; n.Text = text; n.Action = action; n.JobId = jobId;
             lock (notices)
             {
-                notices.Insert(0, n);
-                if (notices.Count > 50) notices.RemoveAt(notices.Count - 1);
+                if (noticesLoaded) return;
+                noticesLoaded = true;
+                try
+                {
+                    NoticeBook b = Json.Load<NoticeBook>(NoticePath);
+                    if (b != null && b.Items != null)
+                        foreach (Notice n in b.Items) if (n != null) { if (string.IsNullOrEmpty(n.Id)) n.Id = Guid.NewGuid().ToString("N"); if (n.Count < 1) n.Count = 1; notices.Add(n); }
+                }
+                catch (Exception) { }
             }
+        }
+
+        private static void SaveNotices()
+        {
+            NoticeBook b = new NoticeBook();
+            lock (notices) { b.Items = new List<Notice>(notices); }
+            try { Directory.CreateDirectory(AppPaths.StateDir); Json.Save(NoticePath, b); } catch (Exception) { }
+        }
+
+        private static Notice AddNotice(NoticeLevel level, string title, string text, string action, string jobId)
+        {
+            EnsureNotices();
+            Notice n;
+            lock (notices)
+            {
+                // 同じお知らせが続くとき（同じエラーが毎回出るなど）は、1件にまとめて回数を数える
+                n = notices.Find(delegate(Notice x)
+                {
+                    return x.Level == level && x.Title == title && x.Text == text && x.Action == action && x.JobId == jobId
+                        && (!x.Handled || x.HandledNote == NoticeNotes.Seen || x.HandledNote == NoticeNotes.Manual || x.HandledNote == NoticeNotes.NotNeeded);
+                });
+                if (n != null && level != NoticeLevel.Ok)
+                {
+                    notices.Remove(n);
+                    n.Time = DateTime.Now;
+                    n.Count++;
+                    notices.Insert(0, n);
+                }
+                else
+                {
+                    n = new Notice();
+                    n.Time = n.First = DateTime.Now; n.Level = level; n.Title = title; n.Text = text; n.Action = action; n.JobId = jobId;
+                    if (!n.NeedsAction) { n.Handled = true; n.HandledNote = NoticeNotes.NotNeeded; n.HandledAt = n.Time; }
+                    notices.Insert(0, n);
+                    // 古いものから消す（未対応のものはなるべく残す）
+                    while (notices.Count > MaxNotices)
+                    {
+                        int idx = notices.FindLastIndex(delegate(Notice x) { return x.Handled; });
+                        notices.RemoveAt(idx >= 0 ? idx : notices.Count - 1);
+                    }
+                }
+            }
+            SaveNotices();
             return n;
         }
 
         public static List<Notice> RecentNotices()
         {
+            EnsureNotices();
             lock (notices) { return new List<Notice>(notices); }
+        }
+
+        public static int OpenNoticeCount()
+        {
+            EnsureNotices();
+            int c = 0;
+            lock (notices) { foreach (Notice n in notices) if (!n.Handled) c++; }
+            return c;
+        }
+
+        /// <summary>手で「対応済み」「未対応に戻す」</summary>
+        public static void SetNoticeHandled(IEnumerable<Notice> list, bool handled)
+        {
+            EnsureNotices();
+            lock (notices)
+            {
+                foreach (Notice n in list)
+                {
+                    if (n == null) continue;
+                    n.Handled = handled;
+                    n.ManualOpen = !handled;
+                    n.HandledNote = handled ? (n.NeedsAction ? NoticeNotes.Manual : NoticeNotes.NotNeeded) : null;
+                    n.HandledAt = handled ? DateTime.Now : DateTime.MinValue;
+                }
+            }
+            SaveNotices();
+            RaiseChanged();
+        }
+
+        /// <summary>対応済み・対応不要のお知らせを一覧から消す</summary>
+        public static int ClearHandledNotices()
+        {
+            EnsureNotices();
+            int n;
+            lock (notices) { n = notices.RemoveAll(delegate(Notice x) { return x.Handled; }); }
+            SaveNotices();
+            RaiseChanged();
+            return n;
+        }
+
+        /// <summary>エラーを「確認した」：そのジョブの未対応のエラーのお知らせを対応済みにする（点滅も止まる）</summary>
+        public static void AckErrors(string jobId)
+        {
+            EnsureNotices();
+            bool any = false;
+            lock (notices)
+            {
+                foreach (Notice n in notices)
+                    if (!n.Handled && n.Level == NoticeLevel.Error && (jobId == null || n.JobId == jobId))
+                    { n.Handled = true; n.HandledNote = NoticeNotes.Seen; n.HandledAt = DateTime.Now; n.ManualOpen = false; any = true; }
+            }
+            if (any) { SaveNotices(); RaiseChanged(); }
+        }
+
+        /// <summary>
+        /// 未対応のお知らせのうち、確認が済んだもの（上書きの確認が0件になった・その後正常に実行できた など）を対応済みにする。
+        /// 画面の更新のたびに呼ぶ。変わったら true。
+        /// </summary>
+        public static bool RefreshNoticeStates()
+        {
+            EnsureNotices();
+            List<Notice> open;
+            lock (notices) { open = notices.FindAll(delegate(Notice x) { return !x.Handled && !x.ManualOpen; }); }
+            if (open.Count == 0) return false;
+            bool changed = false;
+            foreach (Notice n in open)
+            {
+                string why = null;
+                try { why = AutoResolved(n); } catch (Exception) { }
+                if (why == null) continue;
+                lock (notices) { n.Handled = true; n.HandledNote = why; n.HandledAt = DateTime.Now; }
+                changed = true;
+            }
+            if (changed) SaveNotices();
+            return changed;
+        }
+
+        private static string AutoResolved(Notice n)
+        {
+            JobConfig j = n.JobId != null ? FindJob(n.JobId) : null;
+            if (n.JobId != null && j == null) return NoticeNotes.JobGone;
+            switch (n.Action)
+            {
+                case "conflicts":
+                    {
+                        int c = 0;
+                        if (j != null) { JobState st = GetState(j.Id); lock (st) c = st.Conflicts.Count; }
+                        else c = TotalConflicts();
+                        return c == 0 ? NoticeNotes.Seen : null;
+                    }
+                case "pending":
+                    {
+                        if (j == null) return TotalPendingDeletes() == 0 ? NoticeNotes.Seen : null;
+                        JobState st = GetState(j.Id);
+                        int c; lock (st) c = st.PendingDeletes.Count;
+                        return c == 0 ? NoticeNotes.Seen : null;
+                    }
+                case "dup":
+                    if (j == null) return null;
+                    return (!j.DedupOn || DedupStore.PendingCount(j.Id) == 0) && DupChecker.UnseenCandidates(j.Id) == 0 ? NoticeNotes.Seen : null;
+                case "synccand":
+                    if (j == null) return null;
+                    return !j.Sync || SyncDeleteStore.Count(j.Id) == 0 ? NoticeNotes.Seen : null;
+                case "retry":
+                case "job":
+                    {
+                        if (j == null) return null;
+                        if (!j.Enabled) return NoticeNotes.Disabled;
+                        JobRuntime rt = GetRuntime(j.Id);
+                        if (!rt.Running && rt.LastResult == "ok" && rt.LastRun >= n.Time.AddSeconds(-1)) return NoticeNotes.Recovered;
+                        return null;
+                    }
+            }
+            return null;
         }
 
         public static void RaiseChanged()
@@ -644,10 +955,19 @@ namespace AutoCopy
             }
             foreach (JobConfig j in Settings.Jobs.ToArray())
             {
-                if (!j.Enabled) continue;
+                int sc = j.Sync ? SyncDeleteStore.Count(j.Id) : 0;
+                if (sc > 0) list.Add(Item(j.Name + "：同期で削除されたファイル " + sc + "件 の扱いを選んでください", "synccand", j.Id, false));
+            }
+            // エラー：未対応のエラーのお知らせがあるもの（開いて確認するか、その後正常に実行できれば消える）
+            RefreshNoticeStates();
+            HashSet<string> errJobs = new HashSet<string>();
+            foreach (Notice n in RecentNotices()) if (!n.Handled && n.Level == NoticeLevel.Error && n.JobId != null) errJobs.Add(n.JobId);
+            foreach (JobConfig j in Settings.Jobs.ToArray())
+            {
+                if (!j.Enabled || !errJobs.Contains(j.Id)) continue;
                 JobRuntime rt = GetRuntime(j.Id);
                 if (rt.LastResult == "error")
-                    list.Add(Item(j.Name + "：エラー　" + (rt.LastMessage ?? ""), "main", j.Id, true));
+                    list.Add(Item(j.Name + "：エラー　" + (rt.LastMessage ?? ""), "error", j.Id, true));
             }
             return list;
         }
@@ -659,10 +979,10 @@ namespace AutoCopy
             return i;
         }
 
+        /// <summary>確認が済んでいないエラーがあるか（アイコンを赤にする）</summary>
         public static bool AnyError()
         {
-            foreach (JobConfig j in Settings.Jobs.ToArray())
-                if (j.Enabled && GetRuntime(j.Id).LastResult == "error") return true;
+            foreach (AttentionItem i in AttentionItems()) if (i.IsError) return true;
             return false;
         }
 

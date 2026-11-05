@@ -19,6 +19,10 @@ namespace AutoCopy
         private readonly ToolStripStatusLabel st1, st2, st3;
         private readonly System.Windows.Forms.Timer timer;
         private bool filling;
+        private CheckAllButton jobsAll;
+        private CheckBox showOpen, showDone;
+        private Label noticeCount;
+        private string noticeSig;
 
         public MainForm()
         {
@@ -98,24 +102,48 @@ namespace AutoCopy
             jobs.ItemChecked += OnItemChecked;
             jobs.DoubleClick += delegate { string id = FirstSelected(); if (id != null) EditJob(id); };
             jobs.ContextMenuStrip = BuildJobMenu();
+            // チェック欄の真上：すべてのジョブの有効/無効をまとめて切り替える
+            Panel jobBar = Ui.CheckAllBar(jobs, "すべてのジョブを有効／無効にする", delegate(bool on) { SetAllEnabled(on); },
+                Ui.Hint("（チェック＝有効。ダブルクリックでジョブの編集。見出しをクリックすると並べ替え）"));
+            jobBar.BackColor = Color.White;
+            jobsAll = (CheckAllButton)jobBar.Controls[0];
 
             // ---- お知らせ ----
-            notices = Ui.List("時刻|70", "お知らせ|780");
+            notices = Ui.List("状態|76", "時刻|96", "お知らせ|700", "回数|50");
             notices.Dock = DockStyle.Fill;
-            notices.DoubleClick += delegate
+            notices.MultiSelect = true;
+            ((AcListView)notices).SetSort(1, false);
+            // 行の上でダブルクリックしたものを開く（選択が外れていても開けるように、位置から探す）
+            notices.MouseDoubleClick += delegate(object sender, MouseEventArgs e)
             {
-                if (notices.SelectedItems.Count == 0) return;
-                Notice n = notices.SelectedItems[0].Tag as Notice;
-                if (n != null) TrayApp.Instance.DoAction(n.Action, n.JobId);
+                ListViewItem it = notices.GetItemAt(e.X, e.Y);
+                if (it == null && notices.SelectedItems.Count > 0) it = notices.SelectedItems[0];
+                OpenNotice(it);
             };
+            notices.KeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                if (e.KeyCode == Keys.Enter && notices.SelectedItems.Count > 0) { OpenNotice(notices.SelectedItems[0]); e.Handled = true; }
+            };
+            notices.ContextMenuStrip = BuildNoticeMenu();
             Panel noticePanel = new Panel();
             noticePanel.Dock = DockStyle.Bottom;
-            noticePanel.Height = Ui.S(170);
-            Label nh = Ui.L("最近のお知らせ（ダブルクリックで該当の画面を開きます）");
+            noticePanel.Height = Ui.S(190);
+            Label nh = Ui.L("最近のお知らせ");
             nh.Font = Ui.Bold;
-            nh.Dock = DockStyle.Top;
+            nh.Margin = new Padding(3, Ui.S(5), Ui.S(10), 0);
+            showOpen = Ui.C("未対応", true);
+            showDone = Ui.C("対応済み・対応不要", false);
+            showOpen.CheckedChanged += delegate { noticeSig = null; RefreshView(); };
+            showDone.CheckedChanged += delegate { noticeSig = null; RefreshView(); };
+            noticeCount = Ui.Hint("");
+            noticeCount.Margin = new Padding(Ui.S(6), Ui.S(6), 3, 0);
+            FlowLayoutPanel nhRow = Ui.WrapRow(nh, Ui.L("表示："), showOpen, showDone, noticeCount,
+                Ui.Hint("（ダブルクリックで該当の画面を開きます。右クリックで「対応済みにする」）"));
+            nhRow.Dock = DockStyle.Top;
+            nhRow.AutoSize = true;
+            Resize += delegate { nhRow.MaximumSize = new Size(Math.Max(Ui.S(300), ClientSize.Width - Ui.S(10)), 0); };
             noticePanel.Controls.Add(notices);
-            noticePanel.Controls.Add(nh);
+            noticePanel.Controls.Add(nhRow);
 
             StatusStrip ss = new StatusStrip();
             st1 = new ToolStripStatusLabel();
@@ -126,6 +154,7 @@ namespace AutoCopy
             ss.Items.AddRange(new ToolStripItem[] { st1, st2, st3 });
 
             Controls.Add(jobs);
+            Controls.Add(jobBar);
             Controls.Add(noticePanel);
             Controls.Add(band);
             Controls.Add(bar);
@@ -163,8 +192,9 @@ namespace AutoCopy
 
         private void ToTray()
         {
+            // 最小化のまま隠す（開くときに TrayApp.Bring が元の大きさに戻す）。
+            // 隠した状態で WindowState だけを変えると、Windows の内部の状態とずれて開かなくなることがあるため変えない。
             Hide();
-            if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
             TrayApp.Instance.NotifyInTray();
         }
 
@@ -212,6 +242,119 @@ namespace AutoCopy
             return m;
         }
 
+        private void OpenNotice(ListViewItem it)
+        {
+            Notice n = it != null ? it.Tag as Notice : null;
+            if (n == null || TrayApp.Instance == null) return;
+            TrayApp.Instance.OpenNotice(n);
+            noticeSig = null;
+            RefreshView();
+        }
+
+        private List<Notice> SelectedNotices()
+        {
+            List<Notice> l = new List<Notice>();
+            foreach (ListViewItem it in notices.SelectedItems) { Notice n = it.Tag as Notice; if (n != null) l.Add(n); }
+            return l;
+        }
+
+        private ContextMenuStrip BuildNoticeMenu()
+        {
+            ContextMenuStrip m = new ContextMenuStrip();
+            m.Font = Ui.Base;
+            ToolStripMenuItem open = new ToolStripMenuItem("開く（該当の画面）", null, delegate { if (notices.SelectedItems.Count > 0) OpenNotice(notices.SelectedItems[0]); });
+            ToolStripMenuItem done = new ToolStripMenuItem("対応済みにする", null, delegate { AppCore.SetNoticeHandled(SelectedNotices(), true); noticeSig = null; RefreshView(); });
+            ToolStripMenuItem undo = new ToolStripMenuItem("未対応に戻す", null, delegate { AppCore.SetNoticeHandled(SelectedNotices(), false); noticeSig = null; RefreshView(); });
+            ToolStripMenuItem retry = new ToolStripMenuItem("このジョブをもう一度実行", null, delegate
+            {
+                foreach (Notice n in SelectedNotices()) if (n.JobId != null && AppCore.FindJob(n.JobId) != null) { AppCore.RunJob(n.JobId, true, false); break; }
+            });
+            ToolStripMenuItem allDone = new ToolStripMenuItem("表示中の未対応をすべて対応済みにする", null, delegate
+            {
+                List<Notice> l = new List<Notice>();
+                foreach (ListViewItem it in notices.Items) { Notice n = it.Tag as Notice; if (n != null && !n.Handled) l.Add(n); }
+                if (l.Count == 0) return;
+                if (!Ui.Confirm(this, l.Count + "件のお知らせを対応済みにします。よろしいですか？\n（上書きの確認などが残っている場合は、それぞれの画面からいつでも確認できます）")) return;
+                AppCore.SetNoticeHandled(l, true); noticeSig = null; RefreshView();
+            });
+            ToolStripMenuItem clear = new ToolStripMenuItem("対応済み・対応不要のお知らせを消す", null, delegate
+            {
+                if (!Ui.Confirm(this, "対応済み・対応不要のお知らせを一覧から消します（ログには残ります）。よろしいですか？")) return;
+                AppCore.ClearHandledNotices(); noticeSig = null; RefreshView();
+            });
+            m.Items.AddRange(new ToolStripItem[] { open, new ToolStripSeparator(), done, undo, retry, new ToolStripSeparator(), allDone, clear });
+            m.Opening += delegate
+            {
+                List<Notice> sel = SelectedNotices();
+                bool anyOpen = false, anyDone = false, anyJob = false;
+                foreach (Notice n in sel) { if (n.Handled) anyDone = true; else anyOpen = true; if (n.JobId != null) anyJob = true; }
+                open.Enabled = sel.Count > 0;
+                done.Enabled = anyOpen;
+                undo.Enabled = anyDone;
+                retry.Enabled = anyJob;
+            };
+            return m;
+        }
+
+        /// <summary>お知らせの一覧を更新する（並べ替え・選択を保ったまま）</summary>
+        private void RefreshNotices()
+        {
+            AppCore.RefreshNoticeStates();
+            List<Notice> all = AppCore.RecentNotices();
+            List<Notice> list = new List<Notice>();
+            int open = 0;
+            foreach (Notice n in all)
+            {
+                if (!n.Handled) open++;
+                if (n.Handled ? showDone.Checked : showOpen.Checked) list.Add(n);
+            }
+            noticeCount.Text = "未対応 " + open + "件・全 " + all.Count + "件";
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            foreach (Notice n in list) sb.Append(n.Id).Append(n.Handled ? '1' : '0').Append(n.Count).Append(n.Time.Ticks).Append(';');
+            string sig = sb.ToString();
+            if (sig == noticeSig) return;
+            noticeSig = sig;
+            HashSet<string> selected = new HashSet<string>();
+            foreach (Notice n in SelectedNotices()) selected.Add(n.Id);
+            string focusedId = notices.FocusedItem != null && notices.FocusedItem.Tag is Notice ? ((Notice)notices.FocusedItem.Tag).Id : null;
+            notices.BeginUpdate();
+            try
+            {
+                notices.Items.Clear();
+                foreach (Notice n in list)
+                {
+                    ListViewItem it = new ListViewItem(n.StateText);
+                    it.UseItemStyleForSubItems = false;
+                    it.SubItems.Add(n.Time.Date == DateTime.Today ? n.Time.ToString("HH:mm") : n.Time.ToString("M/d HH:mm"));
+                    it.SubItems[1].Tag = n.Time;
+                    it.SubItems.Add((n.Title ?? "") + (string.IsNullOrEmpty(n.Text) ? "" : "　" + n.Text)
+                        + (n.Handled && n.NeedsAction && !string.IsNullOrEmpty(n.HandledNote) ? "　［" + n.HandledNote + "］" : ""));
+                    it.SubItems.Add(n.Count > 1 ? n.Count + "回" : "");
+                    it.SubItems[3].Tag = (long)n.Count;
+                    Color c = n.Level == NoticeLevel.Error ? Ui.Err : n.Level == NoticeLevel.Warning ? Ui.Warn : n.Level == NoticeLevel.Ok ? Ui.Ok : SystemColors.WindowText;
+                    if (n.Handled) c = Ui.Quiet;
+                    for (int k = 1; k < it.SubItems.Count; k++) it.SubItems[k].ForeColor = c;
+                    it.SubItems[0].ForeColor = !n.Handled ? Color.White : Ui.Quiet;
+                    it.SubItems[0].BackColor = !n.Handled ? (n.Level == NoticeLevel.Error ? Ui.Err : Ui.Warn) : notices.BackColor;
+                    it.Tag = n;
+                    notices.Items.Add(it);
+                    if (selected.Contains(n.Id)) it.Selected = true;
+                    if (n.Id == focusedId) it.Focused = true;
+                }
+                if (list.Count == 0)
+                {
+                    ListViewItem none = new ListViewItem("");
+                    none.SubItems.Add("");
+                    none.SubItems.Add(showOpen.Checked && !showDone.Checked ? "未対応のお知らせはありません。" : "表示するお知らせはありません。");
+                    none.SubItems.Add("");
+                    none.ForeColor = Ui.Quiet;
+                    notices.Items.Add(none);
+                }
+                ((AcListView)notices).Resort();
+            }
+            finally { notices.EndUpdate(); }
+        }
+
         private void OnCoreChanged()
         {
             if (IsDisposed) return;
@@ -246,6 +389,18 @@ namespace AutoCopy
             RefreshView();
         }
 
+        /// <summary>すべてのジョブの有効/無効を切り替える（保存は1回）</summary>
+        private void SetAllEnabled(bool on)
+        {
+            List<JobConfig> list = AppCore.Settings.Jobs;
+            if (list.Count == 0) return;
+            if (!Ui.Confirm(this, on ? "すべてのジョブ（" + list.Count + "件）を有効にします。よろしいですか？" : "すべてのジョブ（" + list.Count + "件）を無効にします。\n無効のジョブは自動では実行されません。よろしいですか？")) return;
+            foreach (JobConfig j in list.ToArray()) j.Enabled = on;
+            AppCore.SaveSettings();
+            Logger.Info(null, on ? "すべてのジョブを有効にしました" : "すべてのジョブを無効にしました");
+            RefreshView();
+        }
+
         private void OnItemChecked(object sender, ItemCheckedEventArgs e)
         {
             if (filling) return;
@@ -263,7 +418,16 @@ namespace AutoCopy
             try
             {
                 jobs.BeginUpdate();
-                if (jobs.Items.Count != s.Jobs.Count) jobs.Items.Clear();
+                // 並べ替えても正しく更新できるよう、行は順番ではなくジョブの ID で探す
+                Dictionary<string, ListViewItem> rows = new Dictionary<string, ListViewItem>();
+                foreach (ListViewItem r0 in jobs.Items) if (r0.Tag is string) rows[(string)r0.Tag] = r0;
+                HashSet<string> alive = new HashSet<string>();
+                foreach (JobConfig j0 in s.Jobs) alive.Add(j0.Id);
+                for (int r1 = jobs.Items.Count - 1; r1 >= 0; r1--)
+                    if (!(jobs.Items[r1].Tag is string) || !alive.Contains((string)jobs.Items[r1].Tag)) jobs.Items.RemoveAt(r1);
+                bool resort = false;
+                AcListView sjobs = jobs as AcListView;
+                int sc = sjobs != null ? sjobs.SortColumn : -1;
                 for (int i = 0; i < s.Jobs.Count; i++)
                 {
                     JobConfig j = s.Jobs[i];
@@ -295,22 +459,28 @@ namespace AutoCopy
                     string[] cols = new string[] { j.Name + (j.Scope == JobScope.Dist ? "" : "（このPCだけ）"), j.ModeLabel, paths, interval, last, result, next };
 
                     ListViewItem it;
-                    if (i < jobs.Items.Count) it = jobs.Items[i];
-                    else
+                    if (!rows.TryGetValue(j.Id, out it))
                     {
                         it = new ListViewItem(cols[0]);
                         for (int c = 1; c < cols.Length; c++) it.SubItems.Add(cols[c]);
                         it.UseItemStyleForSubItems = false;
+                        it.Tag = j.Id;
                         jobs.Items.Add(it);
+                        resort = true;
                     }
-                    it.Tag = j.Id;
-                    for (int c = 0; c < cols.Length; c++) if (it.SubItems[c].Text != cols[c]) it.SubItems[c].Text = cols[c];
+                    for (int c = 0; c < cols.Length; c++) if (it.SubItems[c].Text != cols[c]) { it.SubItems[c].Text = cols[c]; if (c == sc) resort = true; }
+                    // 並べ替え用の値（表示は短い形でも、日時・間隔の順に並ぶように）
+                    it.SubItems[3].Tag = (long)j.IntervalMinutes;
+                    it.SubItems[4].Tag = rt.LastRun == DateTime.MinValue ? DateTime.MaxValue : rt.LastRun;
+                    it.SubItems[6].Tag = !j.Enabled || rt.Running ? DateTime.MaxValue : rt.NextRun;
                     it.Checked = j.Enabled;
                     it.SubItems[5].ForeColor = color;
                     it.SubItems[1].ForeColor = j.Mirror || j.Sync ? Ui.Warn : SystemColors.WindowText;
                     it.ForeColor = j.Enabled ? SystemColors.WindowText : Ui.Quiet;
                 }
+                if (resort && sjobs != null) sjobs.Resort();
                 jobs.EndUpdate();
+                if (jobsAll != null) jobsAll.Refresh2();
             }
             finally { filling = false; }
 
@@ -347,21 +517,7 @@ namespace AutoCopy
             pendingButton.Text = "ミラーの保留中の削除 " + tp + "件を確認";
 
             // お知らせ
-            List<Notice> list = AppCore.RecentNotices();
-            if (notices.Items.Count != list.Count || (list.Count > 0 && notices.Items[0].Tag != list[0]))
-            {
-                notices.BeginUpdate();
-                notices.Items.Clear();
-                foreach (Notice n in list)
-                {
-                    ListViewItem it = new ListViewItem(n.Time.ToString("HH:mm"));
-                    it.SubItems.Add((n.Title ?? "") + (string.IsNullOrEmpty(n.Text) ? "" : "　" + n.Text));
-                    it.ForeColor = n.Level == NoticeLevel.Error ? Ui.Err : n.Level == NoticeLevel.Warning ? Ui.Warn : n.Level == NoticeLevel.Ok ? Ui.Ok : SystemColors.WindowText;
-                    it.Tag = n;
-                    notices.Items.Add(it);
-                }
-                notices.EndUpdate();
-            }
+            RefreshNotices();
 
             st1.Text = s.FolderName + "（" + Environment.MachineName + "）";
             st2.Text = s.DistVersion > 0 ? "配布設定 " + (s.DistName ?? "") + " 第" + s.DistVersion + "版" : "配布設定なし";
@@ -374,6 +530,7 @@ namespace AutoCopy
         {
             JobConfig j = new JobConfig();
             j.Scope = JobScope.Local;
+            j.Enabled = false;   // 新しいジョブは無効で作る（確かめてから有効にする）
             using (JobEditForm f = new JobEditForm(j, true))
             {
                 if (f.ShowDialog(this) != DialogResult.OK) return;
@@ -414,6 +571,7 @@ namespace AutoCopy
             c.Id = Guid.NewGuid().ToString("N");
             c.Name = j.Name + "（コピー）";
             c.Scope = JobScope.Local;
+            c.Enabled = false;
             using (JobEditForm f = new JobEditForm(c, true))
             {
                 if (f.ShowDialog(this) != DialogResult.OK) return;

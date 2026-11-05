@@ -86,6 +86,9 @@ namespace AutoCopy.Tests
             Add("T57", "大きいファイルの重複の扱い（使わない・毎回選ぶ・自動）と前の版の設定の引き継ぎ", T57_DedupChoice);
             Add("T58", "大きいファイルの重複：見つけたら毎回選ぶ（コピー時・重複チェック）・テキストにする・普通にコピー", T58_DedupAsk);
             Add("T59", "大きいファイルの重複：1つ目は「先にコピーしたもの → パス名が短いもの → ファイル名が短いもの」の順で決める", T59_DedupFirst);
+            Add("T60", "同期：一方で削除されたファイルは削除候補として示し、確認してから削除（控え・削除済みへ）／残すと戻す", T60_SyncDeleteCandidates);
+            Add("T61", "重複チェック：名前変更が大量でも速く終わり、同じフォルダのものは1つのまとまりにする", T61_DupManyRenames);
+            Add("T62", "お知らせ：未対応・対応済み（自動・手動）・同じお知らせはまとめる・保存される", T62_NoticeStates);
 
             int ng = 0;
             foreach (TestCase t in cases)
@@ -852,7 +855,15 @@ namespace AutoCopy.Tests
             target.Jobs.Add(mine);
             try
             {
-                Distribution.Apply(target, back);
+                int added = Distribution.Apply(target, back);
+                Eq(1, added, "新しく加わったジョブの数");
+                True(!target.Jobs.Find(delegate(JobConfig j) { return j.Scope == JobScope.Dist; }).Enabled, "新しく加わった配布のジョブは無効で取り込む");
+                True(target.Jobs.Find(delegate(JobConfig j) { return j.Name == "自分用"; }).Enabled, "このPCのジョブの有効/無効は変えない");
+                // 有効にしてから次の版を取り込んでも、このPCで決めた有効/無効を引き継ぐ
+                target.Jobs.Find(delegate(JobConfig j) { return j.Scope == JobScope.Dist; }).Enabled = true;
+                DistPayload again = Distribution.Decrypt(Distribution.ReadEnvelope(file), "secret-pass");
+                Eq(0, Distribution.Apply(target, again), "2回目は新しいジョブなし");
+                True(target.Jobs.Find(delegate(JobConfig j) { return j.Scope == JobScope.Dist; }).Enabled, "有効にしたジョブは有効のまま");
                 Eq("鈴木_総務", target.FolderName, "フォルダ名は残る");
                 Eq(2, target.Jobs.Count, "配布ジョブ＋自分のジョブ");
                 True(target.Jobs.Exists(delegate(JobConfig j) { return j.Name == "自分用"; }), "このPCだけのジョブは残る");
@@ -1854,6 +1865,170 @@ namespace AutoCopy.Tests
             AppCore.SaveState(d.Job.Id);
             JobState re = JobState.Load(d.Job.Id);
             Eq(first, re.Files["長い長いフォルダ\\最初.bin"].CopiedAt, "保存して読み直しても同じ");
+        }
+
+        private static void T60_SyncDeleteCandidates()
+        {
+            SyncPair p = new SyncPair("T60");
+            WriteFile(Path.Combine(p.A, "d.txt"), "消すファイル", 600);
+            WriteFile(Path.Combine(p.A, "e.txt"), "残すファイル", 600);
+            WriteFile(Path.Combine(p.A, "f.txt"), "変わるファイル", 600);
+            p.Run(p.JA, "pc1");
+            p.Run(p.JB, "pc2");
+            True(File.Exists(Path.Combine(p.B, "d.txt")), "PC2 に d");
+
+            // PC1 で d・e を削除 → すぐには消さず、共有フォルダから消すかの候補にする
+            File.Delete(Path.Combine(p.A, "d.txt"));
+            File.Delete(Path.Combine(p.A, "e.txt"));
+            RunResult r1 = p.Run(p.JA, "pc1");
+            Eq(2, r1.SyncDeleteCandidates, "削除候補 2件");
+            Eq(2, r1.SyncDeleteNew, "新しく見つかった 2件");
+            True(File.Exists(Path.Combine(p.S, "d.txt")) && File.Exists(Path.Combine(p.S, "e.txt")), "確認するまで共有フォルダには残る");
+            List<SyncDeleteItem> items = SyncDeleteStore.GetItems(p.JA.Id);
+            Eq(2, items.Count, "保存された候補");
+            True(items.TrueForAll(delegate(SyncDeleteItem x) { return x.Side == SyncDeleteItem.SideShared; }), "このPCで消したもの");
+            RunResult r1b = p.Run(p.JA, "pc1");
+            Eq(0, r1b.SyncDeleteNew, "2回目は新しい候補なし（見つけた日時も引き継ぐ）");
+            List<AppCore.AttentionItem> att = AppCore.AttentionItems();
+            True(att.Exists(delegate(AppCore.AttentionItem x) { return x.Action == "synccand" && x.JobId == p.JA.Id; }), "確認が必要なものに出る");
+
+            // 予測でも「削除の確認」と出る（何も変えない）
+            RunResult pv = AppCore.DryRun(p.JA, false);
+            True(pv.Plan.Exists(delegate(PlanItem x) { return x.Kind == PlanKind.SyncDelete && x.Rel == "d.txt"; }), "予測に削除の確認");
+
+            // d は削除する、e は残す
+            SyncDeleteItem d = items.Find(delegate(SyncDeleteItem x) { return x.Rel == "d.txt"; });
+            SyncDeleteItem e = items.Find(delegate(SyncDeleteItem x) { return x.Rel == "e.txt"; });
+            Eq(0, AppCore.ResolveSyncDeletes(p.JA, new List<SyncDeleteItem>(new SyncDeleteItem[] { d }), true).Count, "削除できる");
+            True(!File.Exists(Path.Combine(p.S, "d.txt")), "共有フォルダから外れた");
+            True(Directory.GetFiles(Path.Combine(p.S, "_AutoCopy\\削除済み"), "d.txt", SearchOption.AllDirectories).Length == 1, "共有フォルダの「削除済み」に移った（戻せる）");
+            Eq(0, AppCore.ResolveSyncDeletes(p.JA, new List<SyncDeleteItem>(new SyncDeleteItem[] { e }), false).Count, "残すを選べる");
+            Eq(0, SyncDeleteStore.Count(p.JA.Id), "候補はなくなる");
+            RunResult r2 = p.Run(p.JA, "pc1");
+            Eq(1, r2.Downloaded, "残すにした e は、このPCへ戻す");
+            Eq("残すファイル", Read(Path.Combine(p.A, "e.txt")), "e が戻った");
+            Eq(0, r2.SyncDeleteCandidates, "d は候補に出ない");
+
+            // PC2：共有フォルダで消えた d → PC2 からも消すかの候補
+            RunResult r3 = p.Run(p.JB, "pc2");
+            Eq(1, r3.SyncDeleteCandidates, "PC2 の候補");
+            SyncDeleteItem dB = SyncDeleteStore.GetItems(p.JB.Id)[0];
+            Eq(SyncDeleteItem.SideLocal, dB.Side, "共有フォルダで消えたもの");
+            True(File.Exists(Path.Combine(p.B, "d.txt")), "確認するまで PC2 には残る");
+            Eq(0, AppCore.ResolveSyncDeletes(p.JB, new List<SyncDeleteItem>(new SyncDeleteItem[] { dB }), true).Count, "PC2 から外す");
+            True(!File.Exists(Path.Combine(p.B, "d.txt")), "PC2 から外れた");
+            string[] bk = Directory.GetFiles(Path.Combine(AppPaths.SyncBackupDir, p.JB.Id), "d.txt", SearchOption.AllDirectories);
+            True(bk.Length == 1 && Read(bk[0]) == "消すファイル", "PC2 の分は控えに残る（消さない）");
+            RunResult r4 = p.Run(p.JB, "pc2");
+            Eq(0, r4.SyncDeleteCandidates + r4.Copied + r4.Downloaded, "その後は何もしない");
+
+            // 見つけた後で変更されたものは消さない
+            File.Delete(Path.Combine(p.S, "f.txt"));
+            RunResult r5 = p.Run(p.JA, "pc1");
+            Eq(1, r5.SyncDeleteCandidates, "f の候補");
+            SyncDeleteItem f = SyncDeleteStore.GetItems(p.JA.Id)[0];
+            WriteFile(Path.Combine(p.A, "f.txt"), "変わるファイル（変更した）", 90);
+            List<string> errs = AppCore.ResolveSyncDeletes(p.JA, new List<SyncDeleteItem>(new SyncDeleteItem[] { f }), true);
+            Eq(1, errs.Count, "変更されたものは消さない");
+            True(File.Exists(Path.Combine(p.A, "f.txt")), "f は残る");
+            RunResult r6 = p.Run(p.JA, "pc1");
+            Eq(1, r6.Copied, "変更された f は共有フォルダへコピーし直す");
+
+            // 同期でないフォルダへは、削除の手続きでも書き込めない
+            Throws<SourceProtectedException>(delegate { SafeFs.MoveOutOfSync(Path.Combine(baseDir, "T60x\\x.txt"), "x.txt", Path.Combine(baseDir, "T60bk")); }, "同期のフォルダ以外は拒否");
+        }
+
+        private static void T61_DupManyRenames()
+        {
+            Box b = new Box("T61");
+            b.Job.FollowRename = false;   // 名前変更の追従をしない＝重複チェックで見つける
+            b.Job.DupShowOrphans = true;
+            const int dirs = 30, per = 100;
+            for (int d = 0; d < dirs; d++)
+                for (int i = 0; i < per; i++) b.W("d" + d.ToString("00") + "\\file" + i.ToString("000") + ".txt", "中身 " + d + "-" + i + new string('x', (d * per + i) % 97), 600);
+            b.Run();
+            for (int d = 0; d < dirs; d++)
+                for (int i = 0; i < per; i++)
+                {
+                    string rel = "d" + d.ToString("00") + "\\file" + i.ToString("000") + ".txt";
+                    File.Move(b.S(rel), b.S("d" + d.ToString("00") + "\\renamed" + i.ToString("000") + ".txt"));
+                }
+            b.Run();
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            DupResult r = DupChecker.Run(b.Job, b.App, b.State, CancellationToken.None);
+            sw.Stop();
+            int renameGroups = 0, oldEntries = 0;
+            foreach (DupGroup g in r.Groups)
+                if (g.Kind == "rename") { renameGroups++; foreach (DupEntry e in g.Entries) if (e.Status == "old") oldEntries++; }
+            Eq(dirs * per, oldEntries, "古い名前 " + (dirs * per) + "件をすべて見つける");
+            Eq(dirs, renameGroups, "フォルダごとに1つのまとまり（1件ずつのまとまりにしない）");
+            True(sw.Elapsed.TotalSeconds < 60, "時間 " + sw.Elapsed.TotalSeconds.ToString("0.0") + "秒");
+            Console.WriteLine("    重複チェック " + (dirs * per) + "件の名前変更：" + sw.Elapsed.TotalSeconds.ToString("0.0") + "秒・まとまり " + r.Groups.Count + "件");
+            DupGroup one = r.Groups.Find(delegate(DupGroup g) { return g.Kind == "rename"; });
+            True(one.Title.Contains(per + "件"), "見出しに件数: " + one.Title);
+            Eq(per * 2, one.Entries.Count, "古い名前と今の名前");
+        }
+
+        private static void T62_NoticeStates()
+        {
+            Box b = new Box("T62");
+            b.W("a.txt", "a");
+            b.Run();
+            string id = b.Job.Id;
+            Predicate<Notice> mine = delegate(Notice n) { return n.JobId == id; };
+
+            // 上書きの確認：確認待ちが残っている間は未対応、なくなれば自動で対応済み
+            ConflictItem c = new ConflictItem(); c.Rel = "a.txt"; c.Reason = "newer";
+            lock (b.State) { b.State.Conflicts.Add(c); }
+            AppCore.Notify(NoticeLevel.Warning, "上書きの確認が 1件 あります", "T62", "conflicts", id);
+            AppCore.RefreshNoticeStates();
+            Notice nc = AppCore.RecentNotices().Find(delegate(Notice n) { return n.JobId == id && n.Action == "conflicts"; });
+            True(nc != null && !nc.Handled && nc.StateText == "未対応", "確認待ちがある間は未対応");
+            lock (b.State) { b.State.Conflicts.Clear(); }
+            AppCore.RefreshNoticeStates();
+            True(nc.Handled && nc.HandledNote == NoticeNotes.Seen && nc.StateText == "対応済み", "確認が済めば自動で対応済み");
+
+            // ただのお知らせは最初から「対応不要」
+            AppCore.Notify(NoticeLevel.Ok, "T62：コピーしました", "1件", "log", id);
+            Notice ok = AppCore.RecentNotices().Find(delegate(Notice n) { return n.JobId == id && n.Level == NoticeLevel.Ok; });
+            True(ok.Handled && ok.StateText == "対応不要", "対応不要");
+
+            // エラー：開いて確認したら対応済み、同じエラーが続いても1件にまとめて点滅させない
+            JobRuntime rt = AppCore.GetRuntime(id);
+            rt.LastResult = "error"; rt.LastMessage = "接続できません"; rt.LastRun = DateTime.Now;
+            AppCore.Notify(NoticeLevel.Error, b.Job.Name + "：エラー", "接続できません", "retry", id);
+            True(AppCore.AttentionItems().Exists(delegate(AppCore.AttentionItem x) { return x.IsError && x.JobId == id; }), "未対応のエラーは確認が必要");
+            AppCore.AckErrors(id);
+            True(!AppCore.AttentionItems().Exists(delegate(AppCore.AttentionItem x) { return x.IsError && x.JobId == id; }), "確認したら外れる");
+            AppCore.Notify(NoticeLevel.Error, b.Job.Name + "：エラー", "接続できません", "retry", id);
+            List<Notice> errs = AppCore.RecentNotices().FindAll(delegate(Notice n) { return n.JobId == id && n.Level == NoticeLevel.Error; });
+            Eq(1, errs.Count, "同じエラーは1件にまとめる");
+            Eq(2, errs[0].Count, "回数");
+            True(errs[0].Handled, "確認済みのまま（また点滅しない）");
+
+            // 別のエラー → その後正常に実行できたら自動で対応済み
+            AppCore.Notify(NoticeLevel.Error, b.Job.Name + "：エラー", "別の原因", "retry", id);
+            Notice e2 = AppCore.RecentNotices().Find(delegate(Notice n) { return n.JobId == id && n.Text == "別の原因"; });
+            True(!e2.Handled, "新しいエラーは未対応");
+            System.Threading.Thread.Sleep(20);
+            rt.LastResult = "ok"; rt.LastRun = DateTime.Now;
+            AppCore.RefreshNoticeStates();
+            True(e2.Handled && e2.HandledNote == NoticeNotes.Recovered, "その後正常に実行できた");
+
+            // 手で未対応に戻す → 自動では対応済みにしない／手で対応済みにする
+            AppCore.SetNoticeHandled(new Notice[] { nc }, false);
+            AppCore.RefreshNoticeStates();
+            True(!nc.Handled, "手で戻したものは未対応のまま");
+            AppCore.SetNoticeHandled(new Notice[] { nc }, true);
+            True(nc.Handled && nc.HandledNote == NoticeNotes.Manual, "手で対応済み");
+
+            // 保存される
+            True(File.Exists(AppCore.NoticePath), "お知らせを保存");
+            NoticeBook saved = Json.Load<NoticeBook>(AppCore.NoticePath);
+            True(saved.Items.Exists(delegate(Notice n) { return n.Id == nc.Id && n.Handled; }), "対応済みの状態も保存");
+            int before = AppCore.RecentNotices().FindAll(mine).Count;
+            int removed = AppCore.ClearHandledNotices();
+            True(removed >= 3 && AppCore.RecentNotices().FindAll(mine).Count < before, "対応済みのものを消せる");
         }
 
         private static void T42_Performance()

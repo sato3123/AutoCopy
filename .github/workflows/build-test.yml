@@ -92,23 +92,26 @@ jobs:
         run: |
           $env:AUTOCOPY_HOME = "$env:RUNNER_TEMP\shots-home"
           $p = Start-Process -FilePath "dist\AutoCopy.exe" -ArgumentList '/screenshots', "`"$pwd\screenshots`"" -PassThru
-          if (-not $p.WaitForExit(240000)) { $p.Kill(); "timeout" | Out-File screenshots\timeout.txt }
+          if (-not $p.WaitForExit(420000)) { $p.Kill(); "timeout" | Out-File screenshots\timeout.txt }
           Get-ChildItem screenshots | Select-Object Name, Length
           Get-Content -Encoding utf8 screenshots\errors.txt
 
-      - name: Layout check at 125% / 150% text size (Windows 7 style DPI)
+      - name: Layout check at 125% / 150% text size (Windows 7 style DPI) and a small screen
         if: always()
         shell: pwsh
         run: |
-          foreach ($sc in '1.25', '1.5') {
-            $dir = "screenshots-" + ($sc -replace '\.', '')
-            $env:AUTOCOPY_HOME = "$env:RUNNER_TEMP\shots-home-$sc"
+          foreach ($cfg in '1.25|', '1.5|', '1|1093x582') {
+            $sc, $scr = $cfg.Split('|')
+            $dir = if ($scr) { "screenshots-small" } else { "screenshots-" + ($sc -replace '\.', '') }
+            $env:AUTOCOPY_HOME = "$env:RUNNER_TEMP\shots-home-$sc-$scr"
             $env:AUTOCOPY_FONTSCALE = $sc
+            if ($scr) { $env:AUTOCOPY_SCREEN = $scr } elseif (Test-Path Env:AUTOCOPY_SCREEN) { Remove-Item Env:AUTOCOPY_SCREEN }
             $p = Start-Process -FilePath "dist\AutoCopy.exe" -ArgumentList '/screenshots', "`"$pwd\$dir`"" -PassThru
-            if (-not $p.WaitForExit(240000)) { $p.Kill(); "timeout" | Out-File "$dir\timeout.txt" }
-            Get-Content -Encoding utf8 "$dir\layout-count.txt"
+            if (-not $p.WaitForExit(420000)) { $p.Kill(); "timeout" | Out-File "$dir\timeout.txt" }
+            "$cfg : " + (Get-Content -Encoding utf8 "$dir\layout-count.txt")
           }
           Remove-Item Env:AUTOCOPY_FONTSCALE
+          if (Test-Path Env:AUTOCOPY_SCREEN) { Remove-Item Env:AUTOCOPY_SCREEN }
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -128,7 +131,7 @@ jobs:
           New-Item -ItemType Directory -Force "$dir\${{ matrix.os }}" | Out-Null
           foreach ($f in 'build-console.txt','test-results.md','test-console.txt','integration-results.md','integration-console.txt') { if (Test-Path $f) { Copy-Item $f "$dir\${{ matrix.os }}\" } }
           if (Test-Path screenshots) { Copy-Item -Recurse screenshots "$dir\${{ matrix.os }}\screenshots" }
-          foreach ($x in 'screenshots-125', 'screenshots-15') { if (Test-Path $x) { Copy-Item -Recurse $x "$dir\${{ matrix.os }}\$x" } }
+          foreach ($x in 'screenshots-125', 'screenshots-15', 'screenshots-small') { if (Test-Path $x) { Copy-Item -Recurse $x "$dir\${{ matrix.os }}\$x" } }
           if (Test-Path dist) { Copy-Item -Recurse dist "$dir\${{ matrix.os }}\dist" }
           $h = "$env:AUTOCOPY_HOME"
           Get-ChildItem -Recurse "$env:RUNNER_TEMP" -Filter "*.log" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*\logs\*' } | Select-Object -First 5 | ForEach-Object { Copy-Item $_.FullName "$dir\${{ matrix.os }}\app-$($_.Directory.Parent.Parent.Name)-$($_.Name)" }

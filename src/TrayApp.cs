@@ -31,6 +31,9 @@ namespace AutoCopy
         private AttentionForm attentionForm;
         private HashSet<string> lastAttention = new HashSet<string>();
         private DateTime nextRemind = DateTime.MinValue;
+        private volatile bool dirty;
+        private DateTime lastIconUpdate = DateTime.MinValue;
+        private bool hadAttention;
 
         // 自動更新
         private readonly System.Windows.Forms.Timer updateTimer;
@@ -60,9 +63,16 @@ namespace AutoCopy
             AppCore.NoticeAdded += delegate(Notice n) { Post(delegate { ShowBalloon(n); }); };
             SingleInstance.StartServer(delegate(string cmd) { Post(delegate { HandleCommand(cmd); }); });
 
+            // 確認が済んだら、すぐにアイコン・お知らせに反映する（ふだんは2秒ごと）
+            AppCore.Changed += delegate { dirty = true; };
             refresh = new System.Windows.Forms.Timer();
-            refresh.Interval = 2000;
-            refresh.Tick += delegate { UpdateIcon(); };
+            refresh.Interval = 400;
+            refresh.Tick += delegate
+            {
+                if (!dirty && (DateTime.Now - lastIconUpdate).TotalMilliseconds < 2000) return;
+                dirty = false;
+                UpdateIcon();
+            };
             refresh.Start();
 
             blink = new System.Windows.Forms.Timer();
@@ -94,13 +104,20 @@ namespace AutoCopy
 
             if (items.Count == 0)
             {
-                blink.Stop();
+                StopBlink();
                 if (attentionForm != null && !attentionForm.IsDisposed) attentionForm.Close();
                 nextRemind = DateTime.MinValue;
+                if (hadAttention)
+                {
+                    hadAttention = false;
+                    // Windows 10/11 の通知センターに残った「確認が必要」の通知を片付ける（アイコンを登録し直すと消える）
+                    try { icon.Visible = false; icon.Visible = true; } catch (Exception) { }
+                }
                 return;
             }
+            hadAttention = true;
             if (s.AttentionBlink) { if (!blink.Enabled) blink.Start(); }
-            else blink.Stop();
+            else StopBlink();
 
             if (!s.AttentionPopup) return;
             if (hasNew || DateTime.Now >= nextRemind)
@@ -110,6 +127,14 @@ namespace AutoCopy
             }
             else if (attentionForm != null && !attentionForm.IsDisposed && attentionForm.Visible)
                 attentionForm.SetItems(items);
+        }
+
+        /// <summary>点滅を止めて、ふつうのアイコンに戻す（点滅の途中で止めても警告のアイコンが残らないように）</summary>
+        private void StopBlink()
+        {
+            if (blink.Enabled) blink.Stop();
+            if (blinkOn) { blinkOn = false; }
+            if (normalIcon != null && icon.Icon != normalIcon) icon.Icon = normalIcon;
         }
 
         public void ShowAttention(List<AppCore.AttentionItem> items)
@@ -283,9 +308,12 @@ namespace AutoCopy
             Color main = AppCore.GlobalPaused ? IconFactory.Gray : IconFactory.Blue;
             Color? badge = null;
             string status;
+            lastIconUpdate = DateTime.Now;
             List<AppCore.AttentionItem> items = AppCore.AttentionItems();
             bool problem = items.Count > 0;
-            if (problem) badge = AppCore.AnyError() ? IconFactory.Red : IconFactory.Orange;
+            bool anyErr = false;
+            foreach (AppCore.AttentionItem a in items) if (a.IsError) anyErr = true;
+            if (problem) badge = anyErr ? IconFactory.Red : IconFactory.Orange;
             else if (AppCore.AnyRunning()) badge = IconFactory.Green;
             if (AppCore.GlobalPaused) status = "一時停止中";
             else if (AppCore.AnyRunning()) status = RunningText();
@@ -364,6 +392,8 @@ namespace AutoCopy
             menu.Items.Add("上書きの確認（" + AppCore.TotalConflicts() + "件）", null, delegate { ShowConflicts(); });
             int pend = AppCore.TotalPendingDeletes();
             if (pend > 0) menu.Items.Add("ミラーの保留中の削除（" + pend + "件）", null, delegate { ShowPending(null); });
+            int sdel = AppCore.TotalSyncDeletes();
+            if (sdel > 0) menu.Items.Add("同期：削除の確認（" + sdel + "件）", null, delegate { ShowSyncDeletes(null); });
             menu.Items.Add("重複チェック結果", null, delegate { ShowDup(null); });
             menu.Items.Add("ログを見る", null, delegate { ShowLog(); });
             menu.Items.Add("設定", null, delegate { ShowSettings(); });
@@ -380,18 +410,74 @@ namespace AutoCopy
                 case "conflicts": ShowConflicts(); break;
                 case "dup": ShowDup(jobId); break;
                 case "pending": ShowPending(jobId); break;
-                case "log": ShowLog(); break;
+                case "synccand": ShowSyncDeletes(jobId); break;
+                case "log": ShowLog(jobId, null); break;
+                case "error":
+                    // エラーを開いた＝確認した（点滅は止める）。そのジョブのログを開く
+                    AppCore.AckErrors(jobId);
+                    ShowLog(jobId, DateTime.Now.AddHours(-24));
+                    break;
                 case "job": ShowMain(); if (mainForm != null && jobId != null) mainForm.EditJob(jobId); break;
                 case "retry": if (jobId != null) AppCore.RunJob(jobId, true, false); ShowMain(); break;
                 default: ShowMain(); break;
             }
         }
 
-        private static void Bring(Form f)
+        /// <summary>お知らせの一覧でダブルクリックしたとき：内容に合った画面を開く</summary>
+        public void OpenNotice(Notice n)
         {
-            if (f.WindowState == FormWindowState.Minimized) f.WindowState = FormWindowState.Normal;
-            f.Show();
-            f.Activate();
+            if (n == null) return;
+            switch (n.Action)
+            {
+                case "conflicts": case "dup": case "pending": case "synccand":
+                    DoAction(n.Action, n.JobId); break;
+                case "job":
+                    if (n.Level == NoticeLevel.Error) AppCore.AckErrors(n.JobId);
+                    ShowMain(); if (mainForm != null && n.JobId != null && AppCore.FindJob(n.JobId) != null) mainForm.EditJob(n.JobId);
+                    break;
+                case "retry":
+                    if (n.Level == NoticeLevel.Error) AppCore.AckErrors(n.JobId);
+                    ShowLog(n.JobId, n.First == DateTime.MinValue ? n.Time : n.First);
+                    break;
+                default:
+                    // 「コピーしました」などのお知らせ：その時刻のログを開く
+                    ShowLog(n.JobId, n.First == DateTime.MinValue ? n.Time : n.First);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// 画面を確実に前に出す。最小化したまま通知領域に入れた画面は、Windows の内部では最小化のままのことがあり、
+        /// Show だけでは開かない（または画面の外 -32000 に出る）ため、元の大きさに戻してから前に出す。
+        /// </summary>
+        public static void Bring(Form f)
+        {
+            if (f == null || f.IsDisposed) return;
+            try
+            {
+                if (!f.Visible) f.Show();
+                if (f.IsHandleCreated && Native.IsIconic(f.Handle)) Native.ShowWindow(f.Handle, Native.SW_RESTORE);
+                if (f.WindowState == FormWindowState.Minimized) f.WindowState = FormWindowState.Normal;
+                // 画面の外に出ていたら戻す（画面の構成が変わったとき・最小化の座標のまま など）
+                Rectangle wa = Ui.WorkArea;
+                bool onScreen = false;
+                foreach (Screen sc in Screen.AllScreens) if (sc.WorkingArea.IntersectsWith(new Rectangle(f.Left + 40, f.Top + 10, Math.Max(1, f.Width - 80), 30))) onScreen = true;
+                if (!onScreen || f.Left <= -10000 || f.Top <= -10000)
+                    f.Location = new Point(wa.Left + Math.Max(0, (wa.Width - f.Width) / 2), wa.Top + Math.Max(0, (wa.Height - f.Height) / 2));
+                f.BringToFront();
+                f.Activate();
+                if (f.IsHandleCreated) Native.SetForegroundWindow(f.Handle);
+                // 他のアプリが前面を持っていても前に出す
+                bool top = f.TopMost;
+                f.TopMost = true;
+                f.TopMost = top;
+            }
+            catch (Exception ex) { Logger.Error(null, "画面を開けませんでした：" + ex.Message); }
+        }
+
+        public void ShowSyncDeletes(string jobId)
+        {
+            using (SyncDeleteForm f = new SyncDeleteForm(jobId)) f.ShowDialog();
         }
 
         public void ShowMain()
@@ -416,9 +502,14 @@ namespace AutoCopy
             f.Show();
         }
 
-        public void ShowLog()
+        public void ShowLog() { ShowLog(null, null); }
+
+        /// <summary>ログを開く。jobId・from を渡すと、そのジョブ・その時刻からに絞って開く</summary>
+        public void ShowLog(string jobId, DateTime? from)
         {
-            if (logForm == null || logForm.IsDisposed) logForm = new LogForm();
+            JobConfig j = jobId != null ? AppCore.FindJob(jobId) : null;
+            if ((j != null || from.HasValue) && logForm != null && !logForm.IsDisposed) { logForm.Close(); logForm = null; }
+            if (logForm == null || logForm.IsDisposed) logForm = new LogForm(j != null ? j.Name : null, from);
             Bring(logForm);
         }
 

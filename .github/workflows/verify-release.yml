@@ -42,7 +42,7 @@ jobs:
           Line ("版: " + $ver.FileVersion + " / 製品: " + $ver.ProductName + " / 会社: " + $ver.CompanyName)
           $env:AUTOCOPY_HOME = "$env:RUNNER_TEMP\rel-home"
           $p = Start-Process -FilePath $exe -ArgumentList '/screenshots', "`"$pwd\shots`"" -PassThru
-          if (-not $p.WaitForExit(240000)) { $p.Kill(); Line "画面の確認: 時間切れ" }
+          if (-not $p.WaitForExit(420000)) { $p.Kill(); Line "画面の確認: 時間切れ" }
           Line ("画面の確認のエラー: " + (Get-Content -Encoding utf8 shots\errors.txt -Raw))
           Line ("表示切れ: " + (Get-Content shots\layout-count.txt))
           $ok = ($s2.Status -eq 'Valid') -and ((Get-Content -Encoding utf8 shots\errors.txt -Raw).Trim() -eq 'なし')

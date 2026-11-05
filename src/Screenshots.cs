@@ -93,6 +93,8 @@ namespace AutoCopy
             }, delegate(Form f) { ((BusyForm)f).ShowProgress(); });
             CaptureTrayMenu();
             CaptureProgressAndPreview(j0);
+            CaptureV19(j0, AppCore.Settings.Jobs[1], AppCore.Settings.Jobs[3]);
+            CheckLists();
             CheckEnabled(j0, AppCore.Settings.Jobs[3]);
             Capture("33_確認が必要です（お知らせ）", delegate()
             {
@@ -288,6 +290,161 @@ namespace AutoCopy
                 return f;
             }, null);
         }
+
+        /// <summary>1.9 で増えた画面：途中経過の予測・「今後も上書きしない」の一覧・同期の削除の確認・件数の多い重複チェック・絞り込んだログ</summary>
+        private static void CaptureV19(JobConfig j0, JobConfig j1, JobConfig sync)
+        {
+            Capture("38_実行結果の予測_調べている途中", delegate()
+            {
+                RunResult full = AppCore.DryRun(j0, false);
+                RunResult part = new RunResult();
+                part.Scanned = full.Scanned;
+                for (int i = 0; i < full.Plan.Count / 2; i++) part.Plan.Add(full.Plan[i]);
+                JobProgress p = new JobProgress();
+                p.SetPhase("変更を判定しています");
+                p.Scanned = 8420;
+                PreviewForm f = new PreviewForm(j0, true);
+                f.SetPartial(part, p);
+                return f;
+            }, null);
+
+            // 「今後も上書きしない」の見本
+            JobState st = AppCore.GetState(j0.Id);
+            lock (st) { st.SkipForever.Add("設定\\共有_一覧（各自で編集）.csv"); st.SkipForever.Add("見積\\見積書_旧版.xlsx"); }
+            Capture("39_今後も上書きしないファイル", delegate() { return new SkipListForm(); }, delegate(Form f) { CheckFirst(f); });
+            lock (st) { st.SkipForever.Clear(); }
+
+            // 同期：削除の確認の見本
+            List<SyncDeleteItem> cand = new List<SyncDeleteItem>();
+            string[,] sample = { { "議事録\\2026-09_定例.docx", SyncDeleteItem.SideShared, "48211" }, { "議事録\\2026-08_定例.docx", SyncDeleteItem.SideShared, "45020" },
+                                 { "共有\\古い手順書.pdf", SyncDeleteItem.SideLocal, "1820455" } };
+            for (int i = 0; i < sample.GetLength(0); i++)
+            {
+                SyncDeleteItem x = new SyncDeleteItem();
+                x.Rel = sample[i, 0]; x.Side = sample[i, 1]; x.Size = long.Parse(sample[i, 2]);
+                x.Mtime = DateTime.UtcNow.AddDays(-3 - i).Ticks; x.Detected = Fmt.Now();
+                cand.Add(x);
+            }
+            SyncDeleteStore.Replace(sync.Id, cand);
+            Capture("40_同期_削除の確認", delegate() { return new SyncDeleteForm(null); }, delegate(Form f) { CheckFirst(f); });
+
+            // 件数がとても多い重複チェックの結果（表示する行数を抑える）
+            try
+            {
+                DupResult big = new DupResult();
+                big.JobId = j1.Id; big.JobName = j1.Name; big.Checked = Fmt.Now(); big.DestRoot = CopyEngine.ResolvedDest(j1, AppCore.Settings);
+                for (int d = 0; d < 60; d++)
+                {
+                    DupGroup g = new DupGroup();
+                    g.Kind = "rename";
+                    g.Title = "ファイル名の変更　フォルダ「図面\\" + (2000 + d) + "」の中で 60件";
+                    for (int i = 0; i < 60; i++)
+                    {
+                        DupEntry o = new DupEntry(); o.Rel = "図面\\" + (2000 + d) + "\\旧_" + i + ".dwg"; o.FileCount = 1; o.Size = 1200000 + i; o.Mtime = DateTime.UtcNow.Ticks;
+                        o.Status = "old"; o.CanDelete = true; o.Recommended = true;
+                        DupEntry n = new DupEntry(); n.Rel = "図面\\" + (2000 + d) + "\\新_" + i + ".dwg"; n.FileCount = 1; n.Size = o.Size; n.Mtime = o.Mtime;
+                        n.Status = "current"; n.CanDelete = false;
+                        g.Entries.Add(o); g.Entries.Add(n);
+                    }
+                    big.Groups.Add(g);
+                }
+                big.Seen = true;
+                Directory.CreateDirectory(AppPaths.DupDir);
+                Json.Save(DupChecker.ResultPath(j1.Id), big);
+                Capture("41_重複チェック結果_件数が多い", delegate() { DupForm d = new DupForm(); d.SelectJob(j1.Id); return d; }, null);
+                File.Delete(DupChecker.ResultPath(j1.Id));
+            }
+            catch (Exception ex) { errors.Add("件数の多い重複チェック: " + ex); }
+
+            Capture("42_ログ_ジョブと時刻で絞り込み", delegate() { return new LogForm(j0.Name, DateTime.Today); }, null);
+        }
+
+        /// <summary>
+        /// 一覧の動きの確認：見出しのクリックで日時・容量・数の順に並ぶ／行のダブルクリックでチェックが変わらない／
+        /// チェック欄の上のアイコンで全件を切り替えられる。結果は list-check.md。
+        /// </summary>
+        private static void CheckLists()
+        {
+            List<string> lines = new List<string>();
+            lines.Add("| 確認 | 結果 | 内容 |");
+            lines.Add("| --- | --- | --- |");
+            int ng = 0;
+            Form f = new Form();
+            try
+            {
+                f.StartPosition = FormStartPosition.Manual; f.Location = new Point(20, 20); f.Size = new Size(700, 400);
+                AcListView lv = (AcListView)Ui.List("名前|120", "日時|140", "サイズ|90", "件数|60");
+                lv.CheckBoxes = true;
+                lv.Dock = DockStyle.Fill;
+                string[][] rows = {
+                    new string[] { "b", "2026/11/05 09:00", "1.5 MB", "12" },
+                    new string[] { "a", "2026/10/30 18:30", "900 KB", "3" },
+                    new string[] { "c", "2026/11/05 08:59", "2 GB", "120" },
+                    new string[] { "d", "", "", "" } };
+                foreach (string[] r in rows) { ListViewItem it = new ListViewItem(r); lv.Items.Add(it); }
+                Panel bar = Ui.CheckAllBar(lv, "すべてにチェック／すべて外す", null);
+                f.Controls.Add(lv);
+                f.Controls.Add(bar);
+                f.Show(); Pump(500);
+
+                ng += ListCheck(lines, "日時の並べ替え（新しい順）", lv, 1, false, "b,c,a,d");
+                ng += ListCheck(lines, "日時の並べ替え（古い順）", lv, 1, true, "a,c,b,d");
+                ng += ListCheck(lines, "容量の並べ替え（大きい順）", lv, 2, false, "c,b,a,d");
+                ng += ListCheck(lines, "数の並べ替え（小さい順）", lv, 3, true, "a,b,c,d");
+                bool marked = lv.Columns[3].Text.EndsWith("▲");
+                lines.Add("| 見出しの ▲▼ | " + (marked ? "OK" : "NG") + " | " + lv.Columns[3].Text + " |"); if (!marked) ng++;
+
+                // ダブルクリック（チェック欄でない場所）ではチェックが変わらない
+                ListViewItem target = lv.Items[0];
+                bool before = target.Checked;
+                Rectangle rc = target.GetBounds(ItemBoundsPortion.Label);
+                IntPtr lp = (IntPtr)(((rc.Top + rc.Height / 2) << 16) | ((rc.Left + 10) & 0xFFFF));
+                SendMessage(lv.Handle, 0x0201, (IntPtr)1, lp);   // WM_LBUTTONDOWN
+                SendMessage(lv.Handle, 0x0202, IntPtr.Zero, lp); // WM_LBUTTONUP
+                SendMessage(lv.Handle, 0x0203, (IntPtr)1, lp);   // WM_LBUTTONDBLCLK
+                SendMessage(lv.Handle, 0x0202, IntPtr.Zero, lp);
+                Pump(300);
+                bool same = target.Checked == before;
+                lines.Add("| 行のダブルクリックでチェックが変わらない | " + (same ? "OK" : "NG") + " | 前 " + before + " → 後 " + target.Checked + " |"); if (!same) ng++;
+
+                // チェック欄の上のアイコン：すべてにチェック → すべて外す
+                CheckAllButton cab = (CheckAllButton)bar.Controls[0];
+                cab.PerformClick(); Pump(200);
+                int on = lv.CheckedItems.Count;
+                bool allOn = on == lv.Items.Count && cab.State == CheckState.Checked;
+                cab.PerformClick(); Pump(200);
+                bool allOff = lv.CheckedItems.Count == 0 && cab.State == CheckState.Unchecked;
+                lv.Items[1].Checked = true; Pump(100);
+                bool mixed = cab.State == CheckState.Indeterminate;
+                lines.Add("| チェック欄の上のアイコン（すべて／外す／一部） | " + (allOn && allOff && mixed ? "OK" : "NG") + " | " + on + "件チェック・外す " + allOff + "・一部 " + mixed + " |");
+                if (!(allOn && allOff && mixed)) ng++;
+
+                // 列の幅を一覧の幅に合わせる（狭くしても右の列が外に出ない）
+                f.Width = 420; Pump(300);
+                int sum = 0; foreach (ColumnHeader c in lv.Columns) sum += c.Width;
+                bool fits = sum <= lv.ClientSize.Width + 2;
+                lines.Add("| 列の幅を一覧に合わせる（狭い画面） | " + (fits ? "OK" : "NG") + " | 列の合計 " + sum + "px／一覧 " + lv.ClientSize.Width + "px |"); if (!fits) ng++;
+            }
+            catch (Exception ex) { errors.Add("一覧の動きの確認: " + ex); }
+            finally { f.Close(); f.Dispose(); Pump(200); }
+            File.WriteAllText(Path.Combine(outDir, "list-check.md"), string.Join("\r\n", lines.ToArray()), new System.Text.UTF8Encoding(false));
+            if (ng > 0) errors.Add("一覧の動きの確認で NG " + ng + "件（list-check.md）");
+        }
+
+        private static int ListCheck(List<string> lines, string name, AcListView lv, int col, bool asc, string expect)
+        {
+            lv.SetSort(col, asc);
+            Pump(100);
+            List<string> got = new List<string>();
+            foreach (ListViewItem it in lv.Items) got.Add(it.Text);
+            string g = string.Join(",", got.ToArray());
+            bool ok = g == expect;
+            lines.Add("| " + name + " | " + (ok ? "OK" : "NG") + " | " + g + (ok ? "" : "（期待 " + expect + "）") + " |");
+            return ok ? 0 : 1;
+        }
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern IntPtr SendMessage(IntPtr hwnd, int msg, IntPtr wp, IntPtr lp);
 
         /// <summary>設定画面：上の設定で、下の項目が操作できる・できないが正しく変わるか</summary>
         private static void CheckEnabled(JobConfig j0, JobConfig sync)

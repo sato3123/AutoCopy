@@ -143,6 +143,33 @@ namespace AutoCopy
         }
 
         /// <summary>コピー先の「_AutoCopy」フォルダを隠しフォルダにする（ない場合は何もしない）</summary>
+        /// <summary>
+        /// 同期：共有フォルダで削除されたファイルを、確認のうえこのPCのフォルダからも外す。
+        /// 消さずに控えのフォルダ（backupRoot）へ移す（同期のフォルダの中だけ。それ以外は止める）。
+        /// </summary>
+        public static string MoveOutOfSync(string localPath, string rel, string backupRoot)
+        {
+            if (!IsInSyncRoot(localPath))
+            {
+                if (Blocked != null) Blocked(PathUtil.Normalize(localPath));
+                throw new SourceProtectedException(localPath);
+            }
+            string b = PathUtil.Combine(backupRoot, rel);
+            string lb = PathUtil.Long(b);
+            Directory.CreateDirectory(Path.GetDirectoryName(lb));
+            if (File.Exists(lb)) lb = lb + "." + DateTime.Now.Ticks;
+            string lf = PathUtil.Long(localPath);
+            try { File.Move(lf, lb); }
+            catch (IOException)
+            {
+                // 別のドライブなど：控えにコピーしてから元を消す
+                File.Copy(lf, lb, false);
+                File.SetAttributes(lf, FileAttributes.Normal);
+                File.Delete(lf);
+            }
+            return lb;
+        }
+
         public static void HideMeta(string destRoot)
         {
             try

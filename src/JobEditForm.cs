@@ -68,6 +68,14 @@ namespace AutoCopy
             CancelButton = cancel;
 
             Controls.Add(tabs);
+            if (isNew)
+            {
+                Label nl = Ui.L("新しいジョブは「無効」で作られます（自動では実行されません）。「テスト」で結果を確かめてから、メイン画面のジョブの左のチェックを入れて有効にしてください。");
+                Ui.FitToForm(nl, 760);
+                Panel nb = Ui.Banner(Ui.InfoBack, nl);
+                nb.Dock = DockStyle.Top;
+                Controls.Add(nb);
+            }
             Controls.Add(foot);
             LoadValues();
             loading = false;

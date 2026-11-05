@@ -173,7 +173,18 @@ namespace AutoCopy
                 if (c.Count < 2) continue;
                 List<string> cur = new List<string>(), old = new List<string>();
                 foreach (string r in c) { if (orphans.Contains(r)) old.Add(r); else cur.Add(r); }
-                if (cur.Count > 0) foreach (string o in old) pairs.Add(new KeyValuePair<string, string>(o, BestMatch(o, cur)));
+                if (cur.Count > 0)
+                {
+                    // 同じ名前のものを優先して組にする（名前で引けるようにして、件数が多くても速く）
+                    Dictionary<string, string> byName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (string x in cur) { string nm = PathUtil.FileName(x); if (!byName.ContainsKey(nm)) byName[nm] = x; }
+                    foreach (string o in old)
+                    {
+                        string m;
+                        if (!byName.TryGetValue(PathUtil.FileName(o), out m)) m = cur[0];
+                        pairs.Add(new KeyValuePair<string, string>(o, m));
+                    }
+                }
                 else if (old.Count > 1) orphanOnly.Add(old);
             }
 
@@ -189,43 +200,65 @@ namespace AutoCopy
                 l.Add(p);
             }
             HashSet<string> handled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            // フォルダごとの件数・容量を1回の走査でまとめて数える（フォルダの数 × ファイルの数 の繰り返しをしない）
+            HashSet<string> needDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string gk in folderGroups.Keys) { string[] pp = gk.Split('|'); if (!ss.Dirs.Contains(pp[0])) { needDirs.Add(pp[0]); needDirs.Add(pp[1]); } }
+            Dictionary<string, DirAgg> agg = AggregateDirs(ds, orphans, needDirs, ct);
             foreach (KeyValuePair<string, List<KeyValuePair<string, string>>> fg in folderGroups)
             {
+                ct.ThrowIfCancellationRequested();
                 string[] parts = fg.Key.Split('|');
                 string po = parts[0], pc = parts[1];
                 if (ss.Dirs.Contains(po)) continue; // コピー元にまだあるフォルダは対象外
-                int total = 0; long bytes = 0; long mt = 0; bool allOrphan = true;
-                foreach (KeyValuePair<string, ScanItem> kv in ds.Files)
-                {
-                    if (!kv.Key.StartsWith(po + "\\", StringComparison.OrdinalIgnoreCase)) continue;
-                    total++; bytes += kv.Value.Size; mt = Math.Max(mt, kv.Value.Mtime);
-                    if (!orphans.Contains(kv.Key)) allOrphan = false;
-                }
-                if (!allOrphan || total < 2 || fg.Value.Count * 10 < total * 9) continue;
-                long curBytes = 0; int curCount = 0; long curMt = 0;
-                foreach (KeyValuePair<string, ScanItem> kv in ds.Files)
-                {
-                    if (!kv.Key.StartsWith(pc + "\\", StringComparison.OrdinalIgnoreCase)) continue;
-                    curCount++; curBytes += kv.Value.Size; curMt = Math.Max(curMt, kv.Value.Mtime);
-                }
+                DirAgg ao, ac;
+                if (!agg.TryGetValue(po, out ao)) continue;
+                if (!agg.TryGetValue(pc, out ac)) ac = new DirAgg();
+                if (!ao.AllOrphan || ao.Count < 2 || fg.Value.Count * 10 < ao.Count * 9) continue;
                 DupGroup g = new DupGroup();
                 g.Kind = "folder";
-                g.Title = "フォルダ名の変更の可能性　「" + po + "」→「" + pc + "」　中身の一致 " + fg.Value.Count + " / " + total + " ファイル";
-                g.Entries.Add(Entry(po, true, total, bytes, mt, "old", true));
-                g.Entries.Add(Entry(pc, true, curCount, curBytes, curMt, "current", false));
+                g.Title = "フォルダ名の変更の可能性　「" + po + "」→「" + pc + "」　中身の一致 " + fg.Value.Count + " / " + ao.Count + " ファイル";
+                g.Entries.Add(Entry(po, true, ao.Count, ao.Bytes, ao.Mtime, "old", true));
+                g.Entries.Add(Entry(pc, true, ac.Count, ac.Bytes, ac.Mtime, "current", false));
                 res.Groups.Add(g);
                 foreach (KeyValuePair<string, string> p in fg.Value) handled.Add(p.Key);
             }
+            // ファイル名の変更・移動：同じフォルダどうしのものは1つのまとまりにする（件数が多くても一覧が重くならないように）
+            Dictionary<string, List<KeyValuePair<string, string>>> renameGroups = new Dictionary<string, List<KeyValuePair<string, string>>>(StringComparer.OrdinalIgnoreCase);
+            List<string> renameOrder = new List<string>();
             foreach (KeyValuePair<string, string> p in pairs)
             {
                 if (handled.Contains(p.Key)) continue;
-                bool moved = !string.Equals(PathUtil.FileName(p.Key), PathUtil.FileName(p.Value), StringComparison.OrdinalIgnoreCase);
+                string gk = PathUtil.ParentRel(p.Key) + "|" + PathUtil.ParentRel(p.Value);
+                List<KeyValuePair<string, string>> l;
+                if (!renameGroups.TryGetValue(gk, out l)) { l = new List<KeyValuePair<string, string>>(); renameGroups[gk] = l; renameOrder.Add(gk); }
+                l.Add(p);
+            }
+            foreach (string gk in renameOrder)
+            {
+                List<KeyValuePair<string, string>> l = renameGroups[gk];
                 DupGroup g = new DupGroup();
                 g.Kind = "rename";
-                g.Title = (moved ? "ファイル名の変更　" : "移動　") + p.Key + " → " + p.Value;
-                ScanItem a = ds.Files[p.Key], b = ds.Files[p.Value];
-                g.Entries.Add(Entry(p.Key, false, 1, a.Size, a.Mtime, "old", true));
-                g.Entries.Add(Entry(p.Value, false, 1, b.Size, b.Mtime, "current", false));
+                if (l.Count == 1)
+                {
+                    KeyValuePair<string, string> p = l[0];
+                    bool renamed = !string.Equals(PathUtil.FileName(p.Key), PathUtil.FileName(p.Value), StringComparison.OrdinalIgnoreCase);
+                    g.Title = (renamed ? "ファイル名の変更　" : "移動　") + p.Key + " → " + p.Value;
+                }
+                else
+                {
+                    string[] pp = gk.Split('|');
+                    string a = pp[0].Length == 0 ? "（いちばん上）" : pp[0], b = pp[1].Length == 0 ? "（いちばん上）" : pp[1];
+                    g.Title = (string.Equals(pp[0], pp[1], StringComparison.OrdinalIgnoreCase)
+                        ? "ファイル名の変更　フォルダ「" + a + "」の中で " + l.Count + "件"
+                        : "移動・名前の変更　「" + a + "」→「" + b + "」　" + l.Count + "件");
+                }
+                HashSet<string> added = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (KeyValuePair<string, string> p in l)
+                {
+                    ScanItem a = ds.Files[p.Key], b = ds.Files[p.Value];
+                    if (added.Add(p.Key)) g.Entries.Add(Entry(p.Key, false, 1, a.Size, a.Mtime, "old", true));
+                    if (added.Add(p.Value)) g.Entries.Add(Entry(p.Value, false, 1, b.Size, b.Mtime, "current", false));
+                }
                 res.Groups.Add(g);
             }
 
@@ -406,11 +439,35 @@ namespace AutoCopy
             return e;
         }
 
-        private static string BestMatch(string o, List<string> cur)
+        private class DirAgg
         {
-            string name = PathUtil.FileName(o);
-            foreach (string c in cur) if (string.Equals(PathUtil.FileName(c), name, StringComparison.OrdinalIgnoreCase)) return c;
-            return cur[0];
+            public int Count;
+            public long Bytes, Mtime;
+            public bool AllOrphan = true;
+        }
+
+        /// <summary>指定したフォルダ（の中すべて）のファイル数・容量・最終更新・すべて孤立か を、1回の走査で数える</summary>
+        private static Dictionary<string, DirAgg> AggregateDirs(ScanResult ds, HashSet<string> orphans, HashSet<string> dirs, CancellationToken ct)
+        {
+            Dictionary<string, DirAgg> r = new Dictionary<string, DirAgg>(StringComparer.OrdinalIgnoreCase);
+            if (dirs.Count == 0) return r;
+            int n = 0;
+            foreach (KeyValuePair<string, ScanItem> kv in ds.Files)
+            {
+                if ((++n & 4095) == 0) ct.ThrowIfCancellationRequested();
+                string k = kv.Key;
+                bool orphan = orphans.Contains(k);
+                for (int i = k.LastIndexOf('\\'); i > 0; i = k.LastIndexOf('\\', i - 1))
+                {
+                    string d = k.Substring(0, i);
+                    if (!dirs.Contains(d)) continue;
+                    DirAgg a;
+                    if (!r.TryGetValue(d, out a)) { a = new DirAgg(); r[d] = a; }
+                    a.Count++; a.Bytes += kv.Value.Size; a.Mtime = Math.Max(a.Mtime, kv.Value.Mtime);
+                    if (!orphan) a.AllOrphan = false;
+                }
+            }
+            return r;
         }
 
         private static bool SplitPrefix(string o, string n, out string po, out string pn)

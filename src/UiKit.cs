@@ -44,7 +44,7 @@ namespace AutoCopy
         public static int MaxWidth(int px)
         {
             int w = S(px);
-            try { w = Math.Min(w, Screen.PrimaryScreen.WorkingArea.Width - S(220)); } catch (Exception) { }
+            try { w = Math.Min(w, Ui.WorkArea.Width - S(220)); } catch (Exception) { }
             return Math.Max(S(200), w);
         }
 
@@ -120,7 +120,7 @@ namespace AutoCopy
             Size want = new Size(S(w), S(h));
             try
             {
-                Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+                Rectangle wa = Ui.WorkArea;
                 want.Width = Math.Min(want.Width, wa.Width - 24);
                 want.Height = Math.Min(want.Height, wa.Height - 48);
             }
@@ -354,9 +354,59 @@ namespace AutoCopy
             return p;
         }
 
+        /// <summary>
+        /// 画面の作業領域。確認用に環境変数 AUTOCOPY_SCREEN=1093x582 などで狭い画面を再現できる。
+        /// </summary>
+        public static Rectangle WorkArea
+        {
+            get
+            {
+                Rectangle wa = Screen.PrimaryScreen.WorkingArea;
+                try
+                {
+                    string v = Environment.GetEnvironmentVariable("AUTOCOPY_SCREEN");
+                    if (!string.IsNullOrEmpty(v))
+                    {
+                        string[] p = v.ToLowerInvariant().Split('x');
+                        int w, h;
+                        if (p.Length == 2 && int.TryParse(p[0], out w) && int.TryParse(p[1], out h) && w >= 640 && h >= 400)
+                            wa = new Rectangle(wa.X, wa.Y, Math.Min(w, wa.Width), Math.Min(h, wa.Height));
+                    }
+                }
+                catch (Exception) { }
+                return wa;
+            }
+        }
+
+        /// <summary>
+        /// チェック欄の真上に置く「すべてにチェック／すべて外す」のアイコン（表示中の状態に合わせて ☑・□・■ に変わる）。
+        /// toggle を渡すと、自分で全件を切り替える（ジョブの有効/無効をまとめて保存する場合など）。
+        /// </summary>
+        public static Panel CheckAllBar(ListView lv, string tip, Action<bool> toggle, params Control[] extra)
+        {
+            FlowLayoutPanel p = new FlowLayoutPanel();
+            p.Dock = DockStyle.Top;
+            p.AutoSize = true;
+            p.WrapContents = false;
+            p.Padding = new Padding(0);
+            p.Margin = new Padding(0);
+            CheckAllButton b = new CheckAllButton(lv, toggle);
+            new ToolTip().SetToolTip(b, tip);
+            b.AccessibleName = tip;
+            p.Controls.Add(b);
+            Label l = L(tip);
+            l.ForeColor = Quiet;
+            l.Margin = new Padding(S(2), S(5), S(12), 0);
+            l.Cursor = Cursors.Hand;
+            l.Click += delegate { b.PerformClick(); };
+            p.Controls.Add(l);
+            foreach (Control c in extra) p.Controls.Add(c);
+            return p;
+        }
+
         public static ListView List(params string[] columns)
         {
-            ListView lv = new ListView();
+            ListView lv = new AcListView();
             lv.View = View.Details;
             lv.FullRowSelect = true;
             lv.HideSelection = false;
@@ -369,6 +419,7 @@ namespace AutoCopy
                 if (w > 0) w = Math.Max(S(w), TextWidth(parts[0], Base) + 16);
                 lv.Columns.Add(parts[0], w);
             }
+            ((AcListView)lv).RememberWidths();
             return lv;
         }
 
@@ -583,6 +634,349 @@ namespace AutoCopy
             Controls.Add(lb);
             Controls.Add(h);
             Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); })));
+        }
+    }
+
+    /// <summary>
+    /// 一覧表。見出しをクリックすると並べ替え（もう一度で逆順、▲▼で表示）、
+    /// 横幅に合わせて列の幅を自動調整、行のダブルクリックではチェックが変わらない。
+    /// </summary>
+    public class AcListView : ListView
+    {
+        private int sortColumn = -1;
+        private bool sortAsc = true;
+        private bool suppressCheck;
+        private bool fitting;
+        private int[] designWidths = new int[0];
+        private readonly List<string> headers = new List<string>();
+
+        /// <summary>仮想表示（VirtualMode）の一覧で、並べ替えを自分で行うときの通知（列, 昇順）</summary>
+        public event Action<int, bool> SortRequested;
+
+        /// <summary>並べ替えを無効にする（順番に意味がある一覧）</summary>
+        public bool Sortable = true;
+
+        public int SortColumn { get { return sortColumn; } }
+        public bool SortAscending { get { return sortAsc; } }
+
+        public AcListView()
+        {
+            DoubleBuffered = true;
+        }
+
+        internal void RememberWidths()
+        {
+            headers.Clear();
+            designWidths = new int[Columns.Count];
+            for (int i = 0; i < Columns.Count; i++) { headers.Add(Columns[i].Text); designWidths[i] = Columns[i].Width; }
+        }
+
+        // ---------- 並べ替え ----------
+
+        protected override void OnColumnClick(ColumnClickEventArgs e)
+        {
+            base.OnColumnClick(e);
+            if (!Sortable) return;
+            if (e.Column == sortColumn) sortAsc = !sortAsc;
+            else { sortColumn = e.Column; sortAsc = !LooksLikeNewestFirst(e.Column); }
+            ApplySort();
+        }
+
+        /// <summary>日時の列は、最初のクリックで新しい順にする</summary>
+        private bool LooksLikeNewestFirst(int col)
+        {
+            string h = col < headers.Count ? headers[col] : "";
+            return h.Contains("日時") || h.Contains("時刻") || h.Contains("更新") || h.Contains("前回") || h.Contains("最後");
+        }
+
+        /// <summary>並べ替えの状態を指定して並べ直す（col = -1 で解除）</summary>
+        public void SetSort(int col, bool asc)
+        {
+            sortColumn = col; sortAsc = asc;
+            ApplySort();
+        }
+
+        /// <summary>中身を更新した後に、今の並べ替えを掛け直す</summary>
+        public void Resort()
+        {
+            if (sortColumn < 0) return;
+            if (VirtualMode) { if (SortRequested != null) SortRequested(sortColumn, sortAsc); return; }
+            if (ListViewItemSorter == null) ListViewItemSorter = new ItemComparer(this);
+            BeginUpdate();
+            try { Sort(); } finally { EndUpdate(); }
+        }
+
+        private void ApplySort()
+        {
+            for (int i = 0; i < Columns.Count && i < headers.Count; i++)
+            {
+                Columns[i].Text = headers[i] + (i == sortColumn ? (sortAsc ? " ▲" : " ▼") : "");
+                // ▲▼ を付けても見出しが欠けない幅にする
+                int need = Ui.TextWidth(Columns[i].Text, Font) + 14;
+                if (i < designWidths.Length && designWidths[i] > 0 && designWidths[i] < need) designWidths[i] = need;
+            }
+            FitColumns();
+            if (sortColumn < 0) { ListViewItemSorter = null; return; }
+            if (VirtualMode)
+            {
+                if (SortRequested != null) SortRequested(sortColumn, sortAsc);
+                Invalidate();
+                return;
+            }
+            ListViewItemSorter = new ItemComparer(this);
+            BeginUpdate();
+            try { Sort(); } finally { EndUpdate(); }
+        }
+
+        private class ItemComparer : System.Collections.IComparer
+        {
+            private readonly AcListView lv;
+            public ItemComparer(AcListView lv) { this.lv = lv; }
+            public int Compare(object x, object y)
+            {
+                ListViewItem a = (ListViewItem)x, b = (ListViewItem)y;
+                int c = lv.sortColumn;
+                // グループ表示のときは、グループの中で並べ替える（グループの順番は変えない）
+                object x1 = Cell(a, c), y1 = Cell(b, c);
+                // 空欄は、昇順でも降順でも後ろ
+                bool ex = SortKey.IsBlank(x1), ey = SortKey.IsBlank(y1);
+                if (ex != ey) return ex ? 1 : -1;
+                int r = SortKey.Compare(x1, y1);
+                if (r == 0) r = a.Index.CompareTo(b.Index);
+                return lv.sortAsc ? r : -r;
+            }
+            private static object Cell(ListViewItem it, int c)
+            {
+                if (c >= it.SubItems.Count) return "";
+                ListViewItem.ListViewSubItem s = it.SubItems[c];
+                if (s.Tag is IComparable) return s.Tag;
+                return s.Text ?? "";
+            }
+        }
+
+        // ---------- ダブルクリックでチェックが変わらないようにする ----------
+
+        private const int WM_LBUTTONDBLCLK = 0x0203;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern int GetWindowLong(IntPtr hwnd, int index);
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_LBUTTONDBLCLK && CheckBoxes)
+            {
+                // チェック欄そのものをダブルクリックしたときだけは、通常どおり切り替える
+                int lp = m.LParam.ToInt32();
+                Point pt = new Point((short)(lp & 0xFFFF), (short)((lp >> 16) & 0xFFFF));
+                ListViewHitTestInfo h = null;
+                try { h = HitTest(pt); } catch (Exception) { }
+                bool onBox = h != null && h.Location == ListViewHitTestLocations.StateImage;
+                if (!onBox)
+                {
+                    suppressCheck = true;
+                    try { base.WndProc(ref m); } finally { suppressCheck = false; }
+                    return;
+                }
+            }
+            base.WndProc(ref m);
+        }
+
+        protected override void OnItemCheck(ItemCheckEventArgs e)
+        {
+            if (suppressCheck) { e.NewValue = e.CurrentValue; return; }
+            base.OnItemCheck(e);
+        }
+
+        // ---------- 列の幅を横幅に合わせる ----------
+
+        protected override void OnColumnWidthChanged(ColumnWidthChangedEventArgs e)
+        {
+            base.OnColumnWidthChanged(e);
+            // 利用者が手で幅を変えたら、それを基準にする
+            if (!fitting && e.ColumnIndex < designWidths.Length) designWidths[e.ColumnIndex] = Columns[e.ColumnIndex].Width;
+        }
+
+        protected override void OnResize(EventArgs e)
+        {
+            base.OnResize(e);
+            FitColumns();
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            FitColumns();
+        }
+
+        /// <summary>列の合計が横幅を越えるときは縮め、余るときは一番広い列を広げる</summary>
+        public void FitColumns()
+        {
+            if (fitting || View != View.Details || Columns.Count == 0 || designWidths.Length != Columns.Count) return;
+            int avail = ClientSize.Width - 2;
+            // 縦のスクロールバーがまだ出ていなければ、出たときの分を空けておく（行が増えても横スクロールが出ないように）
+            if (IsHandleCreated && (GetWindowLong(Handle, -16) & 0x00200000) == 0) avail -= SystemInformation.VerticalScrollBarWidth;
+            if (avail < Ui.S(120)) return;
+            fitting = true;
+            try
+            {
+                int sum = 0, widest = -1;
+                for (int i = 0; i < designWidths.Length; i++)
+                {
+                    if (designWidths[i] <= 0) continue;
+                    sum += designWidths[i];
+                    if (widest < 0 || designWidths[i] > designWidths[widest]) widest = i;
+                }
+                if (sum <= 0) return;
+                int[] w = (int[])designWidths.Clone();
+                if (sum > avail)
+                {
+                    int over = sum - avail;
+                    // 縮められる幅（見出しが読める幅より上の分）の割合で縮める
+                    int[] min = new int[w.Length];
+                    int room = 0;
+                    for (int i = 0; i < w.Length; i++)
+                    {
+                        if (w[i] <= 0) continue;
+                        // 見出し（並べ替えの ▲▼ を含む）が読める幅は残す
+                        min[i] = Math.Min(w[i], Math.Max(Ui.S(40), Ui.TextWidth((i < headers.Count ? headers[i] : "") + " ▼", Font) + 14));
+                        room += w[i] - min[i];
+                    }
+                    if (room > 0)
+                    {
+                        int cut = Math.Min(over, room), done = 0;
+                        for (int i = 0; i < w.Length; i++)
+                        {
+                            if (w[i] <= 0) continue;
+                            int d = (int)((long)(w[i] - min[i]) * cut / room);
+                            w[i] -= d; done += d;
+                        }
+                        for (int i = 0; i < w.Length && done < cut; i++)
+                            if (w[i] > min[i]) { w[i]--; done++; }
+                    }
+                }
+                else if (widest >= 0) w[widest] += avail - sum;
+                for (int i = 0; i < w.Length; i++)
+                    if (Columns[i].Width != w[i]) Columns[i].Width = w[i];
+            }
+            finally { fitting = false; }
+        }
+    }
+
+    /// <summary>並べ替えの比較（日時・容量・数値・文字の順に見分ける）</summary>
+    public static class SortKey
+    {
+        private static readonly string[] DateFormats = {
+            "yyyy/MM/dd HH:mm:ss", "yyyy/MM/dd HH:mm", "yyyy/MM/dd", "yyyy/M/d H:mm:ss", "yyyy/M/d H:mm", "yyyy/M/d",
+            "MM/dd HH:mm:ss", "MM/dd HH:mm", "M/d H:mm", "MM/dd", "HH:mm:ss", "HH:mm", "H:mm" };
+
+        public static int Compare(object a, object b)
+        {
+            if (a is IComparable && !(a is string) && b != null && a.GetType() == b.GetType()) return ((IComparable)a).CompareTo(b);
+            string x = a == null ? "" : a.ToString(), y = b == null ? "" : b.ToString();
+            bool ex = IsBlank(x), ey = IsBlank(y);
+            if (ex || ey) return ex == ey ? 0 : ex ? 1 : -1;   // 空欄は後ろ
+            double dx, dy;
+            DateTime tx, ty;
+            if (TryDate(x, out tx) && TryDate(y, out ty)) return tx.CompareTo(ty);
+            if (TryNumber(x, out dx) && TryNumber(y, out dy)) return dx.CompareTo(dy);
+            return string.Compare(x, y, StringComparison.CurrentCultureIgnoreCase);
+        }
+
+        public static bool IsBlank(object o)
+        {
+            if (o == null) return true;
+            if (!(o is string)) return false;
+            string s = ((string)o).Trim();
+            return s.Length == 0 || s == "-" || s == "－" || s == "—";
+        }
+
+        public static bool TryDate(string s, out DateTime t)
+        {
+            s = s.Trim();
+            return DateTime.TryParseExact(s, DateFormats, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AllowWhiteSpaces, out t);
+        }
+
+        /// <summary>「1.5 GB」「12,345」「45%」「3件」などを数にする</summary>
+        public static bool TryNumber(string s, out double v)
+        {
+            v = 0;
+            s = s.Trim().Replace(",", "");
+            int i = 0;
+            if (i < s.Length && (s[i] == '-' || s[i] == '+')) i++;
+            int start = i;
+            while (i < s.Length && (char.IsDigit(s[i]) || s[i] == '.')) i++;
+            if (i == start) return false;
+            if (!double.TryParse(s.Substring(0, i), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out v)) return false;
+            string unit = s.Substring(i).Trim().ToUpperInvariant();
+            if (unit.StartsWith("KB")) v *= 1024;
+            else if (unit.StartsWith("MB")) v *= 1024.0 * 1024;
+            else if (unit.StartsWith("GB")) v *= 1024.0 * 1024 * 1024;
+            else if (unit.StartsWith("TB")) v *= 1024.0 * 1024 * 1024 * 1024;
+            else if (unit.Length > 0 && unit != "B" && unit != "%" && unit != "件" && unit != "回" && unit != "秒" && unit != "個" && !unit.StartsWith("ファイル") && !unit.StartsWith("B/") && !unit.StartsWith("(") && !unit.StartsWith("（")) return false;
+            return true;
+        }
+    }
+
+    /// <summary>チェック欄の真上に置く、全件チェックの切り替えアイコン</summary>
+    public class CheckAllButton : Button
+    {
+        private readonly ListView lv;
+        private readonly Action<bool> toggle;
+        private CheckState state = CheckState.Unchecked;
+
+        public CheckAllButton(ListView lv, Action<bool> toggle)
+        {
+            this.lv = lv;
+            this.toggle = toggle;
+            FlatStyle = FlatStyle.Flat;
+            FlatAppearance.BorderSize = 0;
+            FlatAppearance.MouseOverBackColor = Color.FromArgb(229, 241, 251);
+            int sz = Math.Max(Ui.S(22), System.Windows.Forms.SystemInformation.SmallIconSize.Height + Ui.S(6));
+            Size = new Size(sz, sz);
+            Margin = new Padding(Ui.S(1), Ui.S(1), 0, Ui.S(1));
+            TabStop = true;
+            Cursor = Cursors.Hand;
+            lv.ItemChecked += delegate { Refresh2(); };
+            lv.HandleCreated += delegate { Refresh2(); };
+            Refresh2();
+        }
+
+        public CheckState State { get { return state; } }
+
+        /// <summary>一覧のチェックの状態から、アイコンを ☑（すべて）・■（一部）・□（なし）に変える</summary>
+        public void Refresh2()
+        {
+            int on = 0, n = lv.Items.Count;
+            foreach (ListViewItem it in lv.Items) if (it.Checked) on++;
+            CheckState s = n > 0 && on == n ? CheckState.Checked : on > 0 ? CheckState.Indeterminate : CheckState.Unchecked;
+            if (s != state) { state = s; Invalidate(); }
+        }
+
+        protected override void OnClick(EventArgs e)
+        {
+            base.OnClick(e);
+            bool check = state != CheckState.Checked;
+            if (toggle != null) toggle(check);
+            else
+            {
+                lv.BeginUpdate();
+                try { foreach (ListViewItem it in lv.Items) it.Checked = check; }
+                finally { lv.EndUpdate(); }
+            }
+            Refresh2();
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+            System.Windows.Forms.VisualStyles.CheckBoxState cs =
+                state == CheckState.Checked ? System.Windows.Forms.VisualStyles.CheckBoxState.CheckedNormal :
+                state == CheckState.Indeterminate ? System.Windows.Forms.VisualStyles.CheckBoxState.MixedNormal :
+                System.Windows.Forms.VisualStyles.CheckBoxState.UncheckedNormal;
+            Size gs = CheckBoxRenderer.GetGlyphSize(e.Graphics, cs);
+            // 一覧のチェック欄と同じ見た目・同じ位置（左端から少し）に描く
+            Point at = new Point(Math.Max(0, Ui.S(4) - 1), (Height - gs.Height) / 2);
+            CheckBoxRenderer.DrawCheckBox(e.Graphics, at, cs);
         }
     }
 }

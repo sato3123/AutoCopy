@@ -22,8 +22,10 @@ namespace AutoCopy
         public static List<string> Check(Form f)
         {
             List<string> issues = new List<string>();
-            if (f.Width > SmallScreenWidth || f.Height > SmallScreenHeight)
-                issues.Add("画面の大きさ " + f.Width + "×" + f.Height + " が小さい画面（1366×768）に収まらない");
+            int sw = SmallScreenWidth, sh = SmallScreenHeight;
+            if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("AUTOCOPY_SCREEN"))) { sw = Ui.WorkArea.Width; sh = Ui.WorkArea.Height; }
+            if (f.Width > sw || f.Height > sh)
+                issues.Add("画面の大きさ " + f.Width + "×" + f.Height + " が画面（" + sw + "×" + sh + "）に収まらない");
             Walk(f, issues, f);
             // タブは1枚ずつ表示して調べる（表示していないタブの中は Visible = false のため）
             foreach (TabControl tc in FindAll<TabControl>(f))
@@ -177,12 +179,20 @@ namespace AutoCopy
             {
                 ListView lv = (ListView)c;
                 if (lv.View == View.Details)
+                {
+                    int sum = 0;
                     foreach (ColumnHeader col in lv.Columns)
                     {
                         if (col.Width <= 0) continue;   // わざと隠している列
+                        sum += col.Width;
                         int need = TextRenderer.MeasureText(col.Text, lv.Font).Width + 12;
                         if (need > col.Width) issues.Add(Name(c) + "：見出し「" + col.Text + "」が欠ける（必要 " + need + "px／実際 " + col.Width + "px）");
                     }
+                    // 列の合計が一覧の幅を越える＝右の列が画面に収まらず、横にスクロールしないと見えない
+                    int vs = lv.Items.Count > 0 || lv.VirtualListSize > 0 ? SystemInformation.VerticalScrollBarWidth : 0;
+                    if (lv.ClientSize.Width > 100 && sum > lv.ClientSize.Width + vs + 4)
+                        issues.Add(Name(c) + "：列が一覧の幅に収まらない（列の合計 " + sum + "px／一覧の幅 " + lv.ClientSize.Width + "px）");
+                }
             }
             else if (c is ComboBox)
             {

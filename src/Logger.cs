@@ -132,6 +132,41 @@ namespace AutoCopy
             return res;
         }
 
+        /// <summary>ログの種類の日本語名（画面・CSVで「COPY（コピー）」のように併記する）</summary>
+        public static string TypeJa(string type)
+        {
+            switch (type ?? "")
+            {
+                case "COPY": return "コピー";
+                case "OVERWRITE": return "上書き";
+                case "RENAME": return "名前の変更";
+                case "DELETE": return "削除";
+                case "RESTORE": return "元に戻す";
+                case "PURGE": return "古い退避を整理";
+                case "CONFLICT": return "上書き確認待ち";
+                case "HOLD": return "削除を保留";
+                case "SKIP": return "スキップ";
+                case "SYNCIN": return "同期：取り込み";
+                case "SYNCDEL": return "同期：削除";
+                case "DEDUP": return "大きい重複の置き換え";
+                case "DUPCHECK": return "重複チェック";
+                case "SUMMARY": return "実行結果のまとめ";
+                case "ERROR": return "エラー";
+                case "BLOCKED": return "安全のため中止";
+                case "RETRY": return "再試行";
+                case "UPDATE": return "プログラムの更新";
+                case "INFO": return "お知らせ";
+                default: return "";
+            }
+        }
+
+        /// <summary>「COPY（コピー）」の形</summary>
+        public static string TypeLabel(string type)
+        {
+            string ja = TypeJa(type);
+            return ja.Length == 0 ? (type ?? "") : (type ?? "") + "（" + ja + "）";
+        }
+
         public static string PcLabel(string folder, string pc)
         {
             if (string.IsNullOrEmpty(folder)) return pc ?? "";

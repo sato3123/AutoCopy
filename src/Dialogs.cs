@@ -84,6 +84,7 @@ namespace AutoCopy
             lv = Ui.List("ファイル|260", "ジョブ|140", "コピー元|150", "コピー先|200", "状態|120");
             lv.CheckBoxes = true;
             lv.Dock = DockStyle.Fill;
+            Panel checkBar = Ui.CheckAllBar(lv, "すべてにチェック／すべて外す", null);
 
             backup = Ui.C("上書きする前に、コピー先の古いファイルを「_AutoCopy\\退避」に残す", true);
             // 画面の幅が足りないときは折り返す
@@ -92,8 +93,8 @@ namespace AutoCopy
                 Ui.B("共有フォルダの方を使う（同期のみ）", delegate { Apply(AppCore.ActTakeShared); }),
                 Ui.B("今回はスキップ", delegate { Apply(AppCore.ActSkipOnce); }),
                 Ui.B("今後も上書きしない", delegate { Apply(AppCore.ActSkipForever); }),
-                Ui.B("すべてチェック", delegate { foreach (ListViewItem it in lv.Items) it.Checked = true; }),
-                Ui.B("コピー先のフォルダを開く", delegate { OpenDest(); }));
+                Ui.B("コピー先のフォルダを開く", delegate { OpenDest(); }),
+                Ui.B("「今後も上書きしない」にしたファイル…", delegate { using (SkipListForm f = new SkipListForm()) f.ShowDialog(this); Reload(); }));
             FlowLayoutPanel bottom = Ui.Column(actions, backup,
                 Ui.Hint("「今回はスキップ」：コピー元がまた変わるまで聞きません。「後で決める」場合は、このまま閉じてください（トレイに確認待ちとして残ります）。"));
             bottom.Dock = DockStyle.Bottom;
@@ -102,6 +103,7 @@ namespace AutoCopy
             actions.MaximumSize = new Size(Math.Max(200, ClientSize.Width - 30), 0);
 
             Controls.Add(lv);
+            Controls.Add(checkBar);
             Controls.Add(top);
             Controls.Add(bottom);
             Controls.Add(Ui.Footer(Ui.B("閉じる（後で決める）", delegate { Close(); }), Ui.B("最新にする", delegate { Reload(); })));
@@ -129,6 +131,8 @@ namespace AutoCopy
                     it.SubItems.Add(j.Name);
                     it.SubItems.Add(Fmt.LocalTime(c.SrcMtime) + "・" + Fmt.Size(c.SrcSize));
                     it.SubItems.Add(Fmt.LocalTime(c.DstMtime) + "・" + Fmt.Size(c.DstSize));
+                    it.SubItems[2].Tag = c.SrcMtime;   // 並べ替えは日時の順
+                    it.SubItems[3].Tag = c.DstMtime;
                     it.SubItems.Add(c.Reason == "newer" ? "コピー先が新しい" : c.Reason == "both" ? "同期：両方で変更" : c.Reason == "first" ? "同期：初回で中身が違う" : "日時同じ・サイズ違い");
                     if (j.Sync) it.ForeColor = Ui.Warn;
                     it.ForeColor = SystemColors.WindowText;
@@ -137,6 +141,7 @@ namespace AutoCopy
                     lv.Items.Add(it);
                 }
             }
+            ((AcListView)lv).Resort();
             lv.EndUpdate();
             Text = "上書きの確認（" + lv.Items.Count + "件）";
         }
@@ -300,6 +305,8 @@ namespace AutoCopy
         private DupResult current;
         private JobConfig currentJob;
         private bool filling;
+        /// <summary>重複チェックの一覧に一度に出す行数の上限</summary>
+        public const int MaxRows = 5000;
 
         public DupForm()
         {
@@ -317,6 +324,43 @@ namespace AutoCopy
             lv.Dock = DockStyle.Fill;
             lv.ItemCheck += OnItemCheck;
             lv.ItemChecked += delegate { if (!filling) UpdateTotal(); };
+            Panel checkBar = Ui.CheckAllBar(lv, "すべてにチェック／すべて外す（削除できるものだけ）", delegate(bool on)
+            {
+                // 1件ずつの確認を通さずに、まとめて決める（件数が多くても速く）：
+                // 削除できるものだけチェックし、同じ中身のグループでは少なくとも1つ残す
+                filling = true;
+                lv.BeginUpdate();
+                try
+                {
+                    Dictionary<ListViewGroup, int> left = new Dictionary<ListViewGroup, int>();
+                    foreach (ListViewItem it in lv.Items)
+                    {
+                        bool want = false;
+                        DupEntry d = it.Tag as DupEntry;
+                        if (on && it.Tag is DedupPendingItem) want = true;
+                        else if (on && d != null && d.CanDelete)
+                        {
+                            want = true;
+                            ListViewGroup g = it.Group;
+                            if (g != null && NeedsKeep(g))
+                            {
+                                int remain;
+                                if (!left.TryGetValue(g, out remain))
+                                {
+                                    remain = 0;
+                                    foreach (ListViewItem x in g.Items) { DupEntry e2 = x.Tag as DupEntry; if (e2 != null && !e2.CanDelete) remain = -1; }
+                                    if (remain == 0) remain = g.Items.Count;   // 全部が削除できる：最後の1つは残す
+                                    left[g] = remain;
+                                }
+                                if (remain > 0) { remain--; left[g] = remain; if (remain == 0) want = false; }
+                            }
+                        }
+                        if (it.Checked != want) it.Checked = want;
+                    }
+                }
+                finally { lv.EndUpdate(); filling = false; }
+                UpdateTotal();
+            });
 
             total = Ui.L("");
             total.Font = Ui.Bold;
@@ -332,12 +376,23 @@ namespace AutoCopy
             Button del = Ui.B("選んだものを削除…", delegate { DeleteChecked(); });
             del.ForeColor = Ui.Err;
             Controls.Add(lv);
+            Controls.Add(checkBar);
             Controls.Add(top);
             Controls.Add(bottom);
             Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), del,
                 Ui.B("元に戻す…", delegate { if (currentJob != null) using (TrashForm f = new TrashForm(currentJob)) f.ShowDialog(this); }),
                 Ui.B("削除済みフォルダを開く", delegate { if (currentJob != null) Ui.OpenFolder(PathUtil.Combine(PathUtil.Combine(CopyEngine.ResolvedDest(currentJob, AppCore.Settings), AppPaths.DestMetaFolder), "削除済み")); })));
             FillJobs();
+            VisibleChanged += delegate { if (Visible) MarkSeen(); };
+        }
+
+        /// <summary>画面に表示した結果を「見た」にする（開く前に別のジョブの結果を見たことにしない）</summary>
+        private void MarkSeen()
+        {
+            if (current == null || current.Seen || currentJob == null) return;
+            current.Seen = true;
+            try { Json.Save(DupChecker.ResultPath(currentJob.Id), current); } catch (Exception) { }
+            AppCore.RaiseChanged();
         }
 
         private void FillJobs()
@@ -362,12 +417,7 @@ namespace AutoCopy
             if (i < 0 || i >= AppCore.Settings.Jobs.Count) return;
             currentJob = AppCore.Settings.Jobs[i];
             current = DupChecker.LoadResult(currentJob.Id);
-            if (current != null && !current.Seen)
-            {
-                current.Seen = true;
-                try { Json.Save(DupChecker.ResultPath(currentJob.Id), current); } catch (Exception) { }
-                AppCore.RaiseChanged();
-            }
+            if (Visible) MarkSeen();
             filling = true;
             lv.BeginUpdate();
             lv.Items.Clear();
@@ -380,13 +430,19 @@ namespace AutoCopy
             else
             {
                 summary.Text = current.Checked + " にチェック・グループ " + current.Groups.Count + "件" + (largeCount > 0 ? "・大きいファイルの重複 " + largeCount + "件" : "");
+                int rows = lv.Items.Count, allRows = rows, hiddenGroups = 0;
+                foreach (DupGroup g in current.Groups) allRows += g.Entries.Count;
                 foreach (DupGroup g in current.Groups)
                 {
+                    // 件数がとても多いときは、表示する行数を抑える（画面が固まったり落ちたりしないように）
+                    if (rows >= MaxRows) { hiddenGroups++; continue; }
+                    rows += g.Entries.Count;
                     ListViewGroup lg = new ListViewGroup(g.Title);
                     lg.Tag = g.Kind;
                     lv.Groups.Add(lg);
                     foreach (DupEntry e in g.Entries)
                     {
+                        if (lv.Items.Count >= MaxRows + 2000) { hiddenGroups++; break; }   // 1つのまとまりがとても大きいとき
                         ListViewItem it = new ListViewItem(e.CanDelete ? "削除" : "残す", lg);
                         bool empty = e.Status == "empty";
                         it.SubItems.Add(e.Rel + (empty ? "\\（空のフォルダ）" : e.IsFolder ? "\\（フォルダごと）" : ""));
@@ -402,6 +458,8 @@ namespace AutoCopy
                         lv.Items.Add(it);
                     }
                 }
+                if (hiddenGroups > 0)
+                    summary.Text += "　※件数が多いため、最初の約 " + Fmt.Count(lv.Items.Count) + "行だけ表示しています（全 " + Fmt.Count(allRows) + "行・残り " + hiddenGroups + "グループ）。表示したものを処理してから「今すぐ再チェック」を押すと続きが出ます。";
             }
             lv.EndUpdate();
             filling = false;
@@ -424,8 +482,10 @@ namespace AutoCopy
             });
             ListViewGroup lg = null;
             string lastTarget = null;
+            int shownLarge = 0;
             foreach (DedupPendingItem p in items)
             {
+                if (++shownLarge > MaxRows / 2) break;
                 if (!string.Equals(p.Target, lastTarget, StringComparison.OrdinalIgnoreCase))
                 {
                     lastTarget = p.Target;
@@ -500,7 +560,7 @@ namespace AutoCopy
             // 残す側が1つもなくなる選び方はできない
             ListViewGroup g = lv.Items[e.Index].Group;
             if (g == null) return;
-            if (g.Tag as string == "empty") return;   // 空のフォルダは全部選んでもよい
+            if (!NeedsKeep(g)) return;   // 空のフォルダ・孤立したファイルは全部選んでもよい
             int keep = 0, total = 0;
             foreach (ListViewItem it in g.Items)
             {
@@ -515,6 +575,13 @@ namespace AutoCopy
                 e.NewValue = CheckState.Unchecked;
                 Ui.Info(this, "同じ中身のファイルは、少なくとも1つ残してください。");
             }
+        }
+
+        /// <summary>同じ中身のグループ（少なくとも1つ残す必要がある）か</summary>
+        private static bool NeedsKeep(ListViewGroup g)
+        {
+            string k = g.Tag as string;
+            return k != "empty" && k != "orphan" && k != "large";
         }
 
         private void UpdateTotal()
@@ -578,6 +645,186 @@ namespace AutoCopy
             }
             catch (Exception ex) { Ui.Error(this, ex.Message); }
             LoadResult();
+        }
+    }
+
+    /// <summary>「今後も上書きしない」にしたファイルの一覧。チェックして取り消すと、次回からまた上書きの確認に出る。</summary>
+    public class SkipListForm : Form
+    {
+        private readonly ListView lv;
+
+        public SkipListForm()
+        {
+            Ui.SetupForm(this, "「今後も上書きしない」にしたファイル", 860, 520);
+            FlowLayoutPanel top = Ui.Column(
+                Ui.Heading("「今後も上書きしない」にしたファイル"),
+                Ui.Hint("ここにあるファイルは、コピー元が変わってもコピーしません（上書きの確認にも出ません）。チェックして「取り消す」を押すと、次回の実行からまた確認するようになります。"));
+            top.Dock = DockStyle.Top;
+            top.Padding = new Padding(12, 10, 12, 6);
+            lv = Ui.List("ファイル|360", "ジョブ|160", "コピー元の更新日時|140", "コピー先の更新日時|140");
+            lv.CheckBoxes = true;
+            lv.Dock = DockStyle.Fill;
+            Panel bar = Ui.CheckAllBar(lv, "すべてにチェック／すべて外す", null);
+            Controls.Add(lv);
+            Controls.Add(bar);
+            Controls.Add(top);
+            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }),
+                Ui.B("チェックしたものを取り消す（また確認する）", delegate { Forget(); })));
+            Reload();
+        }
+
+        private void Reload()
+        {
+            lv.BeginUpdate();
+            lv.Items.Clear();
+            foreach (JobConfig j in AppCore.Settings.Jobs.ToArray())
+            {
+                JobState st = AppCore.GetState(j.Id);
+                List<string> rels;
+                lock (st) rels = new List<string>(st.SkipForever);
+                rels.Sort(StringComparer.CurrentCultureIgnoreCase);
+                string src = CopyEngine.ResolvedSource(j, AppCore.Settings), dst = CopyEngine.ResolvedDest(j, AppCore.Settings);
+                foreach (string r in rels)
+                {
+                    ListViewItem it = new ListViewItem(r);
+                    it.SubItems.Add(j.Name);
+                    it.SubItems.Add(MtimeOf(PathUtil.Combine(src, r)));
+                    it.SubItems.Add(MtimeOf(PathUtil.Combine(dst, r)));
+                    it.Tag = new KeyValuePair<JobConfig, string>(j, r);
+                    lv.Items.Add(it);
+                }
+            }
+            if (lv.Items.Count == 0)
+            {
+                ListViewItem none = new ListViewItem("（「今後も上書きしない」にしたファイルはありません）");
+                none.ForeColor = Ui.Quiet;
+                lv.Items.Add(none);
+            }
+            lv.EndUpdate();
+            Text = "「今後も上書きしない」にしたファイル（" + CountReal() + "件）";
+        }
+
+        private int CountReal()
+        {
+            int n = 0;
+            foreach (ListViewItem it in lv.Items) if (it.Tag != null) n++;
+            return n;
+        }
+
+        private static string MtimeOf(string path)
+        {
+            try
+            {
+                FileInfo fi = new FileInfo(PathUtil.Long(path));
+                return fi.Exists ? fi.LastWriteTime.ToString("yyyy/MM/dd HH:mm") : "（ありません）";
+            }
+            catch (Exception) { return ""; }
+        }
+
+        private void Forget()
+        {
+            Dictionary<JobConfig, List<string>> by = new Dictionary<JobConfig, List<string>>();
+            foreach (ListViewItem it in lv.CheckedItems)
+            {
+                if (!(it.Tag is KeyValuePair<JobConfig, string>)) continue;
+                KeyValuePair<JobConfig, string> kv = (KeyValuePair<JobConfig, string>)it.Tag;
+                List<string> l;
+                if (!by.TryGetValue(kv.Key, out l)) { l = new List<string>(); by[kv.Key] = l; }
+                l.Add(kv.Value);
+            }
+            int n = 0;
+            foreach (List<string> l in by.Values) n += l.Count;
+            if (n == 0) { Ui.Info(this, "取り消すファイルにチェックを入れてください。"); return; }
+            if (!Ui.Confirm(this, n + "件の「今後も上書きしない」を取り消します。\n次回の実行で、コピー先の方が新しければ、また上書きの確認に出ます。よろしいですか？")) return;
+            foreach (KeyValuePair<JobConfig, List<string>> kv in by) AppCore.ForgetSkipForever(kv.Key, kv.Value);
+            Reload();
+        }
+    }
+
+    /// <summary>同期：一方で削除されたファイルを、もう一方からも消すかどうかの確認</summary>
+    public class SyncDeleteForm : Form
+    {
+        private readonly ListView lv;
+        private readonly string onlyJob;
+
+        public SyncDeleteForm(string jobId)
+        {
+            onlyJob = jobId;
+            Ui.SetupForm(this, "同期：削除の確認", 1000, 540);
+            FlowLayoutPanel top = Ui.Column(
+                Ui.Heading("同期のフォルダで削除されたファイルがあります"),
+                Ui.Hint("一方（このPC または 共有フォルダ）で削除されたファイルです。もう一方からも消すか、残すかを選んでください。選ぶまでは、どちらもそのままにします。"),
+                Ui.Hint("「削除する」：このPCの分は控え（" + AppPaths.SyncBackupDir + "）へ、共有フォルダの分は「_AutoCopy\\削除済み」へ移します（保存日数の間は戻せます）。「残す」：次回の実行で、消えた側へコピーし直します。"));
+            top.Dock = DockStyle.Top;
+            top.Padding = new Padding(12, 10, 12, 6);
+            lv = Ui.List("ファイル|330", "ジョブ|140", "どこで削除されたか → どうなるか|280", "サイズ|80", "更新日時|130", "見つけた日時|130");
+            lv.CheckBoxes = true;
+            lv.Dock = DockStyle.Fill;
+            Panel bar = Ui.CheckAllBar(lv, "すべてにチェック／すべて外す", null);
+            Button del = Ui.B("チェックしたものを削除する…", delegate { Apply(true); });
+            del.ForeColor = Ui.Err;
+            Controls.Add(lv);
+            Controls.Add(bar);
+            Controls.Add(top);
+            Controls.Add(Ui.Footer(Ui.B("閉じる（後で決める）", delegate { Close(); }), del,
+                Ui.B("チェックしたものを残す（戻す）", delegate { Apply(false); })));
+            Reload();
+        }
+
+        private class Row { public JobConfig Job; public SyncDeleteItem Item; }
+
+        public void Reload()
+        {
+            lv.BeginUpdate();
+            lv.Items.Clear();
+            foreach (JobConfig j in AppCore.Settings.Jobs.ToArray())
+            {
+                if (!j.Sync || (onlyJob != null && j.Id != onlyJob)) continue;
+                foreach (SyncDeleteItem i in SyncDeleteStore.GetItems(j.Id))
+                {
+                    ListViewItem it = new ListViewItem(i.Rel);
+                    it.SubItems.Add(j.Name);
+                    it.SubItems.Add(i.SideText);
+                    it.SubItems.Add(Fmt.Size(i.Size));
+                    it.SubItems.Add(Fmt.LocalTime(i.Mtime));
+                    it.SubItems[4].Tag = i.Mtime;
+                    it.SubItems.Add(i.Detected ?? "");
+                    it.ForeColor = i.Side == SyncDeleteItem.SideLocal ? Ui.Warn : SystemColors.WindowText;
+                    Row r = new Row(); r.Job = j; r.Item = i;
+                    it.Tag = r;
+                    lv.Items.Add(it);
+                }
+            }
+            lv.EndUpdate();
+            Text = "同期：削除の確認（" + lv.Items.Count + "件）";
+        }
+
+        private void Apply(bool delete)
+        {
+            Dictionary<JobConfig, List<SyncDeleteItem>> by = new Dictionary<JobConfig, List<SyncDeleteItem>>();
+            int n = 0;
+            foreach (ListViewItem it in lv.CheckedItems)
+            {
+                Row r = it.Tag as Row;
+                if (r == null) continue;
+                List<SyncDeleteItem> l;
+                if (!by.TryGetValue(r.Job, out l)) { l = new List<SyncDeleteItem>(); by[r.Job] = l; }
+                l.Add(r.Item);
+                n++;
+            }
+            if (n == 0) { Ui.Info(this, "ファイルにチェックを入れてください。"); return; }
+            string msg = delete
+                ? n + "件を、もう一方からも削除します（消さずに控え・削除済みへ移すので、保存日数の間は戻せます）。よろしいですか？"
+                : n + "件を残します。次回の実行で、消えた側へコピーし直します。よろしいですか？";
+            if (!Ui.Confirm(this, msg)) return;
+            List<string> errors = Ui.Busy<List<string>>(this, "処理しています…", delegate()
+            {
+                List<string> e = new List<string>();
+                foreach (KeyValuePair<JobConfig, List<SyncDeleteItem>> kv in by) e.AddRange(AppCore.ResolveSyncDeletes(kv.Key, kv.Value, delete));
+                return e;
+            });
+            Reload();
+            if (errors.Count > 0) Ui.Error(this, "できなかったものがあります：\n" + string.Join("\n", errors.ToArray()));
         }
     }
 }

@@ -200,6 +200,7 @@ namespace AutoCopy
             if (mirrorPanel.Visible && !cMirrorAgree.Checked) { Ui.Error(this, "ミラーのジョブについて「内容を理解しました」にチェックを入れてください。"); return; }
 
             AppSettings s = AppCore.Settings;
+            int newDisabled = 0;
             try
             {
                 if (payload != null)
@@ -207,7 +208,7 @@ namespace AutoCopy
                     // 前の版と比べ、コピー元・コピー先が変わったジョブは記録を使わない
                     Dictionary<string, JobConfig> before = new Dictionary<string, JobConfig>();
                     foreach (JobConfig j in s.Jobs) before[j.Id] = j;
-                    Distribution.Apply(s, payload);
+                    newDisabled = Distribution.Apply(s, payload);
                     // 更新版の置き場所が配布設定になければ、この配布フォルダを使う（NAS の配布フォルダに新しい exe を置けば全PCが更新される）
                     if (string.IsNullOrEmpty(s.UpdateFolder) && setupPath != null)
                     {
@@ -257,6 +258,12 @@ namespace AutoCopy
                 Logger.Info(null, payload != null
                     ? "配布設定を取り込みました：" + payload.Name + " 第" + payload.Version + "版（フォルダ名：" + folder + "）"
                     : "初回セットアップを行いました（フォルダ名：" + folder + "）");
+                if (newDisabled > 0)
+                {
+                    Logger.Info(null, "配布設定で新しく加わったジョブ " + newDisabled + "件 を「無効」で取り込みました");
+                    Ui.Info(this, "配布設定で新しく加わったジョブ " + newDisabled + "件 は「無効」で取り込みました。\n"
+                        + "メイン画面でコピー元・コピー先などの内容を確かめてから、ジョブの左のチェックを入れて有効にしてください。");
+                }
                 DialogResult = DialogResult.OK;
                 Close();
             }

@@ -146,8 +146,15 @@ namespace AutoCopy
         }
 
         /// <summary>配布用の中身をこのPCの設定に取り込む。フォルダ名・このPCだけのジョブは残す。</summary>
-        public static void Apply(AppSettings s, DistPayload p)
+        /// <summary>
+        /// 新しく加わったジョブは「無効」で取り込む（内容を確かめてから有効にしてもらう）。
+        /// 取り込み済みのジョブは、このPCで決めた有効/無効をそのまま使う。新しく加わった（無効にした）ジョブの数を返す。
+        /// </summary>
+        public static int Apply(AppSettings s, DistPayload p)
         {
+            Dictionary<string, bool> wasEnabled = new Dictionary<string, bool>();
+            foreach (JobConfig j in s.Jobs) wasEnabled[j.Id] = j.Enabled;
+            int added = 0;
             s.LogRoot = p.LogRoot;
             if (!string.IsNullOrEmpty(p.UpdateFolder)) s.UpdateFolder = p.UpdateFolder;
             if (p.LocalLogDays > 0) s.LocalLogDays = p.LocalLogDays;
@@ -161,6 +168,9 @@ namespace AutoCopy
                 foreach (JobConfig j in p.Jobs)
                 {
                     j.Scope = JobScope.Dist;
+                    bool en;
+                    if (wasEnabled.TryGetValue(j.Id, out en)) j.Enabled = en;
+                    else { j.Enabled = false; added++; }
                     merged.Add(j); // ID が同じなら状態（前回の記録）はそのまま引き継がれる
                 }
             }
@@ -172,6 +182,7 @@ namespace AutoCopy
             if (p.Credentials != null)
                 foreach (DistCredential c in p.Credentials)
                     CredentialStore.Save(c.Server, c.User, c.Password);
+            return added;
         }
 
         /// <summary>配布フォルダを作る</summary>

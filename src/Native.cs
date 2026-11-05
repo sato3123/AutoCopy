@@ -13,6 +13,17 @@ namespace AutoCopy
         [DllImport("user32.dll")]
         private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
 
+        [DllImport("user32.dll")]
+        public static extern bool IsIconic(IntPtr hwnd);
+
+        [DllImport("user32.dll")]
+        public static extern bool ShowWindow(IntPtr hwnd, int cmd);
+
+        [DllImport("user32.dll")]
+        public static extern bool SetForegroundWindow(IntPtr hwnd);
+
+        public const int SW_RESTORE = 9, SW_SHOW = 5;
+
         /// <summary>タスクバーのボタンを、画面を開くまで点滅させる</summary>
         public static void Flash(IntPtr hwnd)
         {
