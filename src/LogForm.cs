@@ -126,7 +126,7 @@ namespace AutoCopy
         {
             sOpen = Ui.C("未対応", true);
             sDone = Ui.C("対応済み", true);
-            sKind = Ui.Combo(140, "すべて", "エラー", "上書きの確認", "重複", "ミラーの削除保留", "同期の削除", "注意");
+            sKind = Ui.Combo(140, "すべて", "エラー", "一部失敗", "上書きの確認", "重複", "ミラーの削除保留", "同期の削除", "注意");
             sOpen.CheckedChanged += delegate { FillStatus(); };
             sDone.CheckedChanged += delegate { FillStatus(); };
             sKind.SelectedIndexChanged += delegate { FillStatus(); };

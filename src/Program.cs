@@ -34,6 +34,17 @@ namespace AutoCopy
                 return;
             }
 
+#if UPDATEFAIL
+            // 確認用：更新の後に起動できない版（見張り役が前の版に戻すことを確かめる）
+            if (args.Length > 0 && args[0].Equals("/updated", StringComparison.OrdinalIgnoreCase)) Environment.Exit(3);
+#endif
+            // 更新の見張り役（前の版の exe から起動される）
+            if (args.Length > 0 && args[0].Equals("/updateguard", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.Exit(Updater.RunGuard(args));
+                return;
+            }
+
             string command = BuildCommand(args);
             if (args.Length >= 2 && args[0].Equals("/updated", StringComparison.OrdinalIgnoreCase))
             {
@@ -118,9 +129,28 @@ namespace AutoCopy
                 try { AppCore.SaveSettings(); } catch (Exception) { }
             }
             AppCore.Start();
+            // 前回の更新に失敗して前の版に戻した：知らせる
+            try
+            {
+                if (File.Exists(Updater.RollbackFile))
+                {
+                    string msg = File.ReadAllText(Updater.RollbackFile);
+                    File.Delete(Updater.RollbackFile);
+                    Logger.Write(null, "UPDATE", msg, -1, -1);
+                    AppCore.Notify(NoticeLevel.Warning, "更新に失敗したため、前の版に戻しました", msg, "log", null);
+                }
+            }
+            catch (Exception ex) { Logger.Error(null, "更新の記録を読めません: " + ex.Message); }
             using (TrayApp app = new TrayApp())
             {
                 app.HandleCommand(command);
+                if (command.StartsWith("updated|"))
+                {
+                    // 新しい版として問題なく動き始めたら、見張り役に知らせる
+                    EventHandler idle = null;
+                    idle = delegate { Application.Idle -= idle; Updater.MarkStarted(); };
+                    Application.Idle += idle;
+                }
                 Application.Run(app);
             }
             AppCore.Stop();

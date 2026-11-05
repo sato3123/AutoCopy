@@ -104,6 +104,7 @@ namespace AutoCopy
             foreach (string k in ds.Files.Keys)
             {
                 if (ss.Files.ContainsKey(k)) continue;
+                if (ss.InFailedDir(k)) continue;   // コピー元で読めなかったフォルダの中：孤立とは限らない
                 // 重複のため代わりに置いたテキスト（元のファイルがコピー元にある）は孤立ではない
                 if (k.EndsWith(AppPaths.PlaceholderSuffix, StringComparison.OrdinalIgnoreCase)
                     && ss.Files.ContainsKey(k.Substring(0, k.Length - AppPaths.PlaceholderSuffix.Length))) continue;
@@ -217,7 +218,8 @@ namespace AutoCopy
                 DupGroup g = new DupGroup();
                 g.Kind = "folder";
                 g.Title = "フォルダ名の変更の可能性　「" + po + "」→「" + pc + "」　中身の一致 " + fg.Value.Count + " / " + ao.Count + " ファイル";
-                g.Entries.Add(Entry(po, true, ao.Count, ao.Bytes, ao.Mtime, "old", true));
+                // 中身がすべて一致したときだけ、最初からチェックを入れる（一部だけ一致のときは、確かめてから選んでもらう）
+                g.Entries.Add(Entry(po, true, ao.Count, ao.Bytes, ao.Mtime, "old", fg.Value.Count == ao.Count));
                 g.Entries.Add(Entry(pc, true, ac.Count, ac.Bytes, ac.Mtime, "current", false));
                 res.Groups.Add(g);
                 foreach (KeyValuePair<string, string> p in fg.Value) handled.Add(p.Key);
@@ -485,7 +487,7 @@ namespace AutoCopy
 
         private static void Save(DupResult r)
         {
-            try { Json.Save(ResultPath(r.JobId), r); } catch (Exception) { }
+            try { Json.Save(ResultPath(r.JobId), r); } catch (Exception ex) { Logger.Error(r.JobName, "重複チェックの結果を保存できません: " + ex.Message); }
         }
 
         internal static string Fingerprint(string path)
@@ -522,6 +524,36 @@ namespace AutoCopy
                 }
             }
             catch (Exception) { return null; }
+        }
+
+        /// <summary>
+        /// 削除の直前の確認：「古い名前」のファイルは、同じまとまりの「今の名前」のファイルと中身が本当に同じか（1バイトずつ）を確かめる。
+        /// MD5 だけに頼らず、チェックの後で変わった場合も消さない。同じでないものは skipped に入れて、削除の対象から外す。
+        /// </summary>
+        public static List<DupEntry> VerifyBeforeDelete(JobConfig job, AppSettings app, DupResult r, List<DupEntry> sel, List<string> skipped)
+        {
+            string dst = CopyEngine.ResolvedDest(job, app);
+            List<DupEntry> ok = new List<DupEntry>();
+            foreach (DupEntry e in sel)
+            {
+                if (e.Status != "old" || e.IsFolder) { ok.Add(e); continue; }
+                DupGroup g = r != null ? r.Groups.Find(delegate(DupGroup x) { return x.Entries.Contains(e); }) : null;
+                bool same = false;
+                if (g != null)
+                    foreach (DupEntry c in g.Entries)
+                    {
+                        if (c.Status != "current" || c.Size != e.Size) continue;
+                        try { if (SafeFs.SameBytes(PathUtil.Combine(dst, e.Rel), PathUtil.Combine(dst, c.Rel))) { same = true; break; } }
+                        catch (Exception ex) { Logger.Error(job.Name, "中身を比べられません: " + e.Rel + "　" + ex.Message); }
+                    }
+                if (same) ok.Add(e);
+                else
+                {
+                    skipped.Add(e.Rel);
+                    Logger.Write(job.Name, "SKIP", e.Rel + "　今の名前のファイルと中身が同じでないため、削除しませんでした（重複チェック）", e.Size, -1);
+                }
+            }
+            return ok;
         }
 
         /// <summary>選ばれたものをコピー先の「削除済み」へ移す</summary>
@@ -786,10 +818,29 @@ namespace AutoCopy
         /// 選んだファイルを、そのフォルダの「_AutoCopy\重複で削除\日時」へ移す（消さない。戻せる）。
         /// 自動コピーのコピー元のファイルは移さない（元データは削除しない）。できなかったものを返す。
         /// </summary>
-        public static List<string> MoveAway(string root, List<string> rels, out int moved)
+        public static List<string> MoveAway(string root, List<FolderDupGroup> groups, ICollection<string> toMove, out int moved)
         {
             List<string> errs = new List<string>();
             moved = 0;
+            HashSet<string> want = new HashSet<string>(toMove, StringComparer.OrdinalIgnoreCase);
+            List<string> rels = new List<string>();
+            foreach (FolderDupGroup g in groups)
+            {
+                List<string> mine = g.Files.FindAll(delegate(string f) { return want.Contains(f); });
+                if (mine.Count == 0) continue;
+                List<string> keep = g.Files.FindAll(delegate(string f) { return !want.Contains(f); });
+                if (keep.Count == 0) { foreach (string f in mine) errs.Add(f + "：同じ中身のファイルが1つも残らないため、移しませんでした"); continue; }
+                string keeper = PathUtil.Combine(root, keep[0]);
+                foreach (string f in mine)
+                {
+                    // 移す直前に、残すファイルと中身が本当に同じかを1バイトずつ確かめる（MD5 だけに頼らない・検索の後で変わった場合も）
+                    bool same;
+                    try { same = SafeFs.SameBytes(PathUtil.Combine(root, f), keeper); }
+                    catch (Exception ex) { errs.Add(f + "：中身を確かめられないため、移しませんでした（" + ex.Message + "）"); continue; }
+                    if (!same) { errs.Add(f + "：残すファイルと中身が同じでなくなったため、移しませんでした"); continue; }
+                    rels.Add(f);
+                }
+            }
             string batch = DateTime.Now.ToString("yyyyMMdd-HHmmss");
             foreach (string r in rels)
             {

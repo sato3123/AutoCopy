@@ -127,6 +127,8 @@ namespace AutoCopy
         [DataMember(Name = "SyncTakeShared")] public bool SyncTakeNew;
         // 同期：このPCにだけあって、共有フォルダにないファイルを共有フォルダへコピーするか（初期値：コピーしない）
         [DataMember] public bool SyncPushNew;
+        // 同期：前回の詳しい確認から、この時間（分）以内で、どのPCも共有フォルダを変えていなければ、共有フォルダの詳しい確認を省略する（0 = 毎回確認）
+        [DataMember] public int SyncRemoteCacheMinutes;
         // ログオン時（アプリの起動時）にも実行する。false なら、止まっている間に予定の時刻が過ぎたときだけ起動後に実行する
         [DataMember] public bool RunAtStartup;
         // ログオン時（アプリの起動時）だけ実行する（一定の間隔では実行しない）
@@ -207,6 +209,7 @@ namespace AutoCopy
             DupMonth = 1;
             SyncTakeNew = true;
             SyncPushNew = false;
+            SyncRemoteCacheMinutes = 30;
             RunAtStartup = true;
             DupShowSameContent = true;
             DupShowOrphans = false;
@@ -264,6 +267,7 @@ namespace AutoCopy
             r.NamePatterns.Add("desktop.ini");
             r.NamePatterns.Add("~$*");
             r.NamePatterns.Add("*.ckpart");
+            r.NamePatterns.Add("*.ckold");
             r.ExcludeHidden = true;
             r.ExcludeSystem = true;
             return r;

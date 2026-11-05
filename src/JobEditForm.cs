@@ -22,6 +22,7 @@ namespace AutoCopy
         private CheckBox cAlwaysRename;
         private Label lSyncNote, lDedupNote;
         private RadioButton rDist, rLocal, rAppend, rMirror, rSync, rAsk, rSkip, rOver;
+        private NumericUpDown nSyncCache;
         private NumericUpDown nInterval, nDelay, nTol, nPar, nBw, nMirrorCount, nMirrorPct, nDedup;
         private ComboBox cbUnit;
         private Label lPreview;
@@ -143,7 +144,13 @@ namespace AutoCopy
             rSyncPush = Ui.R("共有フォルダへコピーする（このPCで追加したファイルも他のPCへ）", false);
             FlowLayoutPanel syncPush = Ui.Column(Ui.Hint("このPCにだけあって、共有フォルダにないファイル："), rSyncNoPush, rSyncPush);
             syncPush.Margin = new Padding(Ui.S(22), 0, 3, 4);
-            FlowLayoutPanel modes = Ui.Column(rAppend, rMirror, mirrorLimit, rSync, lSyncNote, syncNew, syncPush);
+            // 共有フォルダの詳しい確認を省略する時間（複数PCで同期するときの待ち時間を減らす）
+            nSyncCache = Ui.N(0, 1440, 30, 72);
+            Label lCacheNote = Ui.Wrap("共有フォルダの中を全部調べるのは時間がかかるため、前回の詳しい確認からこの時間以内で、どのPCも自動コピーで共有フォルダを変えていなければ、前回の確認の結果を使います（0 = 毎回詳しく確認）。自動コピー以外の方法で共有フォルダを直接変えた場合は、この時間がたってから反映されます。", 540);
+            lCacheNote.ForeColor = Ui.Quiet;
+            FlowLayoutPanel syncCache = Ui.Column(Ui.Row(Ui.Hint("共有フォルダの詳しい確認を、前回から"), nSyncCache, Ui.Hint("分以内なら省略する")), lCacheNote);
+            syncCache.Margin = new Padding(Ui.S(22), 0, 3, 4);
+            FlowLayoutPanel modes = Ui.Column(rAppend, rMirror, mirrorLimit, rSync, lSyncNote, syncNew, syncPush, syncCache);
             b.Controls.Add(Ui.Row(Ui.L("コピーの方式", 130), modes));
 
             // 実行のタイミング：一定の間隔で（＋ログオン時）／ログオン時のみ
@@ -252,6 +259,7 @@ namespace AutoCopy
             lSyncNote.Enabled = sync;
             rSyncNoTake.Enabled = rSyncTake.Enabled = sync;
             rSyncNoPush.Enabled = rSyncPush.Enabled = sync;
+            nSyncCache.Enabled = sync;
             // 実行する時間帯・起動後の待ち
             tStart.Enabled = tEnd.Enabled = cWindow.Checked;
             nDelay.Enabled = cDelay.Checked;
@@ -320,6 +328,7 @@ namespace AutoCopy
                 rAppend.Checked = true; UpdateEnabled();
                 expect(!rSync.Checked && !rMirror.Checked, "追加・更新を選んでも他の方式の選択が外れない");
                 expect(!rSyncTake.Enabled && !rSyncNoTake.Enabled && !rSyncPush.Enabled && !rSyncNoPush.Enabled, "同期でないのに、共有フォルダ／このPCにだけあるファイルの扱いを選べる");
+                expect(!nSyncCache.Enabled, "同期でないのに、共有フォルダの確認を省略する時間を変えられる");
                 rDedupOff.Checked = true; UpdateEnabled();
                 expect(rDedupOn.Enabled && !nDedup.Enabled, "重複の省略を使わないのに大きさを変えられる");
                 expect(!rDedupAsk.Checked && !rDedupOn.Checked, "使わないを選んでも他の選択が外れない");
@@ -597,6 +606,7 @@ namespace AutoCopy
             rSyncTake.Checked = j.SyncTakeNew;
             rSyncNoTake.Checked = !j.SyncTakeNew;
             rSyncPush.Checked = j.SyncPushNew;
+            nSyncCache.Value = Clamp(nSyncCache, j.SyncRemoteCacheMinutes);
             rSyncNoPush.Checked = !j.SyncPushNew;
             cRunAtStartup.Checked = j.RunAtStartup;
             rStartupOnly.Checked = j.StartupOnly;
@@ -692,6 +702,7 @@ namespace AutoCopy
             j.Sync = rSync.Checked;
             j.SyncTakeNew = rSync.Checked && rSyncTake.Checked;
             j.SyncPushNew = rSync.Checked && rSyncPush.Checked;
+            j.SyncRemoteCacheMinutes = (int)nSyncCache.Value;
             j.RunAtStartup = cRunAtStartup.Checked;
             j.StartupOnly = rStartupOnly.Checked;
             j.Dedup = rDedupOff.Checked ? DedupMode.Off : rDedupOn.Checked ? DedupMode.Auto : DedupMode.Ask;
@@ -796,7 +807,7 @@ namespace AutoCopy
             if (v != null) { Ui.Error(this, v); return; }
             SaveServerEdits();
             foreach (KeyValuePair<string, string[]> kv in credEdits)
-                if (!string.IsNullOrEmpty(kv.Value[0])) { try { CredentialStore.Save(kv.Key, kv.Value[0], kv.Value[1]); } catch (Exception) { } }
+                if (!string.IsNullOrEmpty(kv.Value[0])) { try { CredentialStore.Save(kv.Key, kv.Value[0], kv.Value[1]); } catch (Exception ex) { Logger.Error(null, "ID・パスワードを保存できません（" + kv.Key + "）: " + ex.Message); Ui.Error(this, "ID・パスワードを保存できませんでした（" + kv.Key + "）：" + ex.Message); } }
             using (PreviewForm f = new PreviewForm(j, false)) f.ShowDialog(this);
         }
     }

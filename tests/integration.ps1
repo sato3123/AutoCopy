@@ -128,16 +128,13 @@ $us | ConvertTo-Json -Depth 6 | Out-File -Encoding utf8 "$homeU\roaming\settings
 $ulog = Join-Path $homeU ("local\logs\" + (Get-Date -Format 'yyyy-MM-dd') + '.log')
 function ULog { if (Test-Path $ulog) { Get-Content -Encoding utf8 $ulog -Raw } else { '' } }
 
-# 署名なしで動いているとき：署名なしの新しい版に更新できる
+# 署名なしの版には更新しない（署名なしで動いているときも）
 Copy-Item $nextExe $updSrc
 $p0 = Start-Process -FilePath $appExe -ArgumentList '/startup' -PassThru
 Start-Sleep -Seconds 5
 Start-Process -FilePath $appExe -ArgumentList '/checkupdate' -Wait
-$ok = WaitFor { (Ver $appExe) -eq '99.0.0.0' -and $p0.HasExited -and (AppProcs) } 60
-Check 'I17' '置き場所に新しい版を置くと、自動で入れ替えて起動し直す' $ok ("版: " + (Ver $appExe) + "・前のプロセス終了: " + $p0.HasExited + "・動作中: " + [bool](AppProcs))
-$ok = WaitFor { (ULog) -match "`tUPDATE`t" -and (ULog) -match '新しい版（99.0.0.0）で起動し直しました' } 15
-Check 'I18' '更新をログに記録し、新しい版で動き続ける' $ok ''
-Check 'I19' '前の版を AutoCopy.exe.old として残す' (Test-Path "$appExe.old") ''
+$ok = WaitFor { (ULog) -match 'デジタル署名がない版には更新しません' } 30
+Check 'I17' '署名のない版には更新しない（改ざん・なりすましを防ぐ）' ($ok -and (Ver $appExe) -ne '99.0.0.0' -and -not $p0.HasExited) ("版: " + (Ver $appExe))
 AppProcs | Stop-Process -Force
 Start-Sleep -Seconds 2
 
@@ -175,6 +172,24 @@ Set-AuthenticodeSignature -FilePath "$updSrc\AutoCopy.exe" -Certificate $certA -
 Start-Process -FilePath $appExe -ArgumentList '/checkupdate' -Wait
 $ok = WaitFor { (Ver $appExe) -eq '99.0.0.0' -and $p1.HasExited -and (AppProcs) } 60
 Check 'I22' '同じ証明書で署名された新しい版には更新する' $ok ("版: " + (Ver $appExe))
+$ok = WaitFor { (ULog) -match "`tUPDATE`t" -and (ULog) -match '新しい版（99.0.0.0）で起動し直しました' } 15
+Start-Sleep -Seconds 8   # 見張り役が「起動できた」を確かめる時間
+Check 'I18' '更新をログに記録し、新しい版で動き続ける（見張り役は前の版に戻さない）' ($ok -and (Ver $appExe) -eq '99.0.0.0' -and (AppProcs) -and -not (Test-Path "$appExe.failed")) ''
+Check 'I19' '前の版を AutoCopy.exe.old として残す' (Test-Path "$appExe.old") ''
+
+# 更新したが新しい版が起動できない → 前の版に戻して起動し直し、その版は使わない
+$badExe = (Resolve-Path 'dist-bad\AutoCopy.exe').Path
+Copy-Item $badExe "$updSrc\AutoCopy.exe" -Force
+Set-AuthenticodeSignature -FilePath "$updSrc\AutoCopy.exe" -Certificate $certA -HashAlgorithm SHA256 | Out-Null
+$p2 = @(AppProcs)[0]
+Start-Process -FilePath $appExe -ArgumentList '/checkupdate' -Wait
+$ok = WaitFor { (ULog) -match '前の版（99.0.0.0）に戻しました' -and (Ver $appExe) -eq '99.0.0.0' -and (AppProcs) -and $p2.HasExited } 120
+$blocked = Join-Path $homeU 'local\update-blocked.txt'
+Check 'I23' '新しい版が起動できなかったら、前の版に戻して起動し直す（失敗した版は使わない）' ($ok -and (Test-Path "$appExe.failed") -and (Test-Path $blocked)) ("版: " + (Ver $appExe) + "・記録: " + $(if (Test-Path $blocked) { Get-Content $blocked } else { 'なし' }))
+$before = ([regex]::Matches((ULog), '前にこの版')).Count
+Start-Process -FilePath $appExe -ArgumentList '/checkupdate' -Wait
+$ok = WaitFor { ([regex]::Matches((ULog), '前にこの版')).Count -gt $before } 30
+Check 'I24' '一度失敗した版には、もう一度更新しない' ($ok -and (Ver $appExe) -eq '99.0.0.0') ("版: " + (Ver $appExe))
 AppProcs | Stop-Process -Force
 
 $md = @('| No | テスト | 結果 | メモ |', '| --- | --- | --- | --- |') + $results

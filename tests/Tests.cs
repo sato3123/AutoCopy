@@ -93,6 +93,16 @@ namespace AutoCopy.Tests
             Add("T64", "実行の予定：重複チェックの毎月・毎年・ログオン時、止まっている間に過ぎた予定は起動後に実行", T64_Schedule);
             Add("T65", "フォルダ内の重複ファイル検索：コピーと関係なく探す・1つ残す候補・移す（戻せる）・コピー元は移さない", T65_FolderDup);
             Add("T66", "条件で選ぶ：名前・拡張子・大きさ・更新日時・種類、重複で残す1つの決め方", T66_SelectCriteria);
+            Add("T67", "上書きに失敗しても元のファイルは変わらない・一時ファイルを残さない", T67_OverwriteFailKeepsOriginal);
+            Add("T68", "コピー中にコピー元が変わったら、やり直す（変わり続けたらコピーしない）", T68_SourceChanged);
+            Add("T69", "中止したら、置き換える直前でも止める（コピー先は元のまま）", T69_CancelBeforeCommit);
+            Add("T70", "エラーの種類（ディスクがいっぱい・ネットワーク・アクセス拒否）とネットワーク切断の検知", T70_ErrorKinds);
+            Add("T71", "状態ファイル・JSONが壊れたとき：壊れたものを残して前回の内容から戻す・どちらもだめなら空から", T71_StateCorrupt);
+            Add("T72", "読めなかったフォルダの中は、ミラーで削除しない（結果は「一部失敗」）", T72_ScanFailNoDelete);
+            Add("T73", "同じフォルダを使うジョブは同時に動かさない（終わってから実行）・実行時にも重なりを確かめる", T73_JobConflicts);
+            Add("T74", "自動更新：前の版に戻す（関連ファイルも）・失敗した版は使わない", T74_UpdateRollback);
+            Add("T75", "同期：共有フォルダの詳しい確認を一定時間省略・他のPCが変えたらすぐ確認し直す", T75_SyncRemoteCache);
+            Add("T76", "性能：大量ファイル（既定10万件）の確認の時間とメモリ（100万件に換算）", T76_ManyFiles);
 
             int ng = 0;
             foreach (TestCase t in cases)
@@ -1442,6 +1452,7 @@ namespace AutoCopy.Tests
                 App.TrashDays = 30;
                 JA = new JobConfig(); JA.Name = name + "A"; JA.Source = A; JA.Dest = S; JA.Sync = true; JA.RetryCount = 0; JA.SyncTakeNew = true; JA.SyncPushNew = true;
                 JB = new JobConfig(); JB.Name = name + "B"; JB.Source = B; JB.Dest = S; JB.Sync = true; JB.RetryCount = 0; JB.SyncTakeNew = true; JB.SyncPushNew = true;
+                JA.SyncRemoteCacheMinutes = 0; JB.SyncRemoteCacheMinutes = 0;   // 既存のテストは毎回詳しく確認する（T75 で省略を確かめる）
                 App.Jobs.Add(JA); App.Jobs.Add(JB);
                 AppCore.Settings = App;
                 SafeFs.SetProtectedSources(new string[] { A, B });
@@ -2201,7 +2212,7 @@ namespace AutoCopy.Tests
             // 移す：消さずに「_AutoCopy\重複で削除」へ
             SafeFs.SetProtectedSources(new string[0]);
             int moved;
-            List<string> errs = FolderDup.MoveAway(root, new List<string>(new string[] { "sub\\a のコピー.txt" }), out moved);
+            List<string> errs = FolderDup.MoveAway(root, r.Groups, new List<string>(new string[] { "sub\\a のコピー.txt" }), out moved);
             Eq(0, errs.Count, "移せる");
             Eq(1, moved, "1件");
             True(!File.Exists(Path.Combine(root, "sub\\a のコピー.txt")), "元の場所からなくなる");
@@ -2212,7 +2223,19 @@ namespace AutoCopy.Tests
 
             // 自動コピーのコピー元のファイルは移さない
             SafeFs.SetProtectedSources(new string[] { Path.Combine(root, "大") });
-            errs = FolderDup.MoveAway(root, new List<string>(new string[] { "大\\2.bin" }), out moved);
+            errs = FolderDup.MoveAway(root, r.Groups, new List<string>(new string[] { "大\\2.bin" }), out moved);
+            Eq(1, errs.Count, "コピー元のファイルは移さない");
+            // 1つも残らない選び方は移さない／検索の後で中身が変わったものは移さない
+            FolderDupGroup gb = r.Groups.Find(delegate(FolderDupGroup x) { return x.Files.Contains("大\\1.bin"); });
+            SafeFs.SetProtectedSources(new string[0]);
+            errs = FolderDup.MoveAway(root, r.Groups, new List<string>(gb.Files), out moved);
+            Eq(0, moved, "全部を選んでも1つは残す（移さない）");
+            WriteFile(Path.Combine(root, "sub\\深い\\a.txt"), "同じ中身ではなくなった", 50);
+            errs = FolderDup.MoveAway(root, r.Groups, new List<string>(new string[] { "sub\\深い\\a.txt" }), out moved);
+            Eq(0, moved, "検索の後で中身が変わったものは移さない");
+            True(File.Exists(Path.Combine(root, "sub\\深い\\a.txt")), "残っている");
+            SafeFs.SetProtectedSources(new string[] { Path.Combine(root, "大") });
+            errs = FolderDup.MoveAway(root, r.Groups, new List<string>(new string[] { "大\\2.bin" }), out moved);
             Eq(1, errs.Count, "コピー元のファイルは移さない");
             True(File.Exists(Path.Combine(root, "大\\2.bin")), "コピー元のファイルは残る");
             True(SafeFs.IsProtected(Path.Combine(root, "大\\x")) && !SafeFs.IsProtected(Path.Combine(root, "sub")), "コピー元かどうか");
@@ -2247,6 +2270,404 @@ namespace AutoCopy.Tests
             Eq(1, KeepRule.Pick(rows, KeepRule.Oldest, null), "古いものを残す");
             SelectCriteria m = new SelectCriteria(); m.Words.Add("個人");
             Eq(0, KeepRule.Pick(rows, KeepRule.Matching, m), "条件に合うもの（場所）を残す");
+        }
+
+        private static int PartFiles(string dir)
+        {
+            int n = 0;
+            foreach (string f in Directory.GetFiles(dir, "*", SearchOption.AllDirectories))
+                if (f.EndsWith(SafeFs.PartSuffix, StringComparison.OrdinalIgnoreCase) || f.EndsWith(SafeFs.AsideSuffix, StringComparison.OrdinalIgnoreCase)) n++;
+            return n;
+        }
+
+        private static void T67_OverwriteFailKeepsOriginal()
+        {
+            string root = Path.Combine(baseDir, "T67");
+            SafeFs.SetProtectedSources(new string[0]);
+            string src = Path.Combine(root, "src\\a.txt"), dst = Path.Combine(root, "dst\\a.txt");
+            WriteFile(src, "新しい内容", 60);
+            WriteFile(dst, "元の内容", 600);
+            using (new FileStream(dst, FileMode.Open, FileAccess.Read, FileShare.None))   // 他のアプリが開いている
+            {
+                bool failed = false;
+                try { SafeFs.CopyFile(src, dst, File.GetLastWriteTimeUtc(src), null, CancellationToken.None); }
+                catch (IOException) { failed = true; }
+                catch (UnauthorizedAccessException) { failed = true; }
+                True(failed, "開いているファイルへは上書きできない（例外）");
+            }
+            Eq("元の内容", Read(dst), "元のファイルは変わらない");
+            Eq(0, PartFiles(Path.Combine(root, "dst")), "一時ファイル・控えを残さない");
+            // 開放後は上書きできる
+            SafeFs.CopyFile(src, dst, File.GetLastWriteTimeUtc(src), null, CancellationToken.None);
+            Eq("新しい内容", Read(dst), "上書きできる");
+            Eq(0, PartFiles(Path.Combine(root, "dst")), "一時ファイルを残さない");
+            // 読み取り専用のコピー先も、元を失わずに上書きする
+            WriteFile(src, "3回目", 30);
+            File.SetAttributes(dst, FileAttributes.ReadOnly);
+            SafeFs.CopyFile(src, dst, File.GetLastWriteTimeUtc(src), null, CancellationToken.None);
+            Eq("3回目", Read(dst), "読み取り専用でも上書き");
+            True(SafeFs.TempName(dst) != SafeFs.TempName(dst), "一時ファイルの名前は毎回違う");
+        }
+
+        private static void T68_SourceChanged()
+        {
+            string root = Path.Combine(baseDir, "T68");
+            SafeFs.SetProtectedSources(new string[0]);
+            string src = Path.Combine(root, "src\\a.txt"), dst = Path.Combine(root, "dst\\a.txt");
+            WriteFile(src, "コピー元", 600);
+            WriteFile(dst, "元の内容", 900);
+            // 1回目のコピー中だけ変わる → やり直してコピーできる
+            int calls = 0;
+            SafeFs.CopyFile(src, dst, File.GetLastWriteTimeUtc(src), null, CancellationToken.None, delegate(long n)
+            {
+                if (calls++ == 0) File.SetLastWriteTimeUtc(src, DateTime.UtcNow.AddSeconds(-300));
+            });
+            Eq("コピー元", Read(dst), "やり直してコピーできた");
+            True(calls >= 2, "やり直した");
+            // 変わり続ける → コピーしない（元のまま）
+            WriteFile(dst, "元の内容", 900);
+            int k = 0;
+            Throws<SourceChangedException>(delegate()
+            {
+                SafeFs.CopyFile(src, dst, File.GetLastWriteTimeUtc(src), null, CancellationToken.None, delegate(long n)
+                {
+                    File.SetLastWriteTimeUtc(src, DateTime.UtcNow.AddSeconds(-100 - (k++)));
+                });
+            }, "変わり続けるときは SourceChangedException");
+            Eq("元の内容", Read(dst), "コピー先は元のまま");
+            Eq(0, PartFiles(Path.Combine(root, "dst")), "一時ファイルを残さない");
+            Eq(ErrorKind.Changed, ErrorKind.Classify(new SourceChangedException(src)), "種類は「コピー中に変更」");
+        }
+
+        private static void T69_CancelBeforeCommit()
+        {
+            string root = Path.Combine(baseDir, "T69");
+            SafeFs.SetProtectedSources(new string[0]);
+            string src = Path.Combine(root, "src\\a.txt"), dst = Path.Combine(root, "dst\\a.txt");
+            WriteFile(src, "新しい内容", 600);
+            WriteFile(dst, "元の内容", 900);
+            CancellationTokenSource cts = new CancellationTokenSource();
+            Throws<OperationCanceledException>(delegate()
+            {
+                SafeFs.CopyFile(src, dst, File.GetLastWriteTimeUtc(src), null, cts.Token, delegate(long n) { cts.Cancel(); });   // 全部読んだ直後に中止
+            }, "中止");
+            Eq("元の内容", Read(dst), "置き換えない");
+            Eq(0, PartFiles(Path.Combine(root, "dst")), "一時ファイルを残さない");
+            // 新規の場合も作らない
+            string dst2 = Path.Combine(root, "dst\\b.txt");
+            CancellationTokenSource c2 = new CancellationTokenSource();
+            Throws<OperationCanceledException>(delegate()
+            {
+                SafeFs.CopyFile(src, dst2, File.GetLastWriteTimeUtc(src), null, c2.Token, delegate(long n) { c2.Cancel(); });
+            }, "中止（新規）");
+            True(!File.Exists(dst2), "新規のファイルも作らない");
+        }
+
+        private static void T70_ErrorKinds()
+        {
+            Eq(ErrorKind.DiskFull, ErrorKind.Classify(new IOException("full", unchecked((int)0x80070070))), "ディスクがいっぱい（112）");
+            Eq(ErrorKind.DiskFull, ErrorKind.Classify(new IOException("full", unchecked((int)0x80070027))), "ディスクがいっぱい（39）");
+            Eq(ErrorKind.Network, ErrorKind.Classify(new IOException("net", unchecked((int)0x80070035))), "ネットワークのパスが見つからない（53）");
+            Eq(ErrorKind.Network, ErrorKind.Classify(new IOException("net", unchecked((int)0x80070040))), "ネットワーク名が使えなくなった（64）");
+            Eq(ErrorKind.Locked, ErrorKind.Classify(new IOException("lock", unchecked((int)0x80070020))), "使用中（32）");
+            Eq(ErrorKind.AccessDenied, ErrorKind.Classify(new UnauthorizedAccessException("x")), "アクセス拒否");
+            Eq(ErrorKind.NotFound, ErrorKind.Classify(new FileNotFoundException("x")), "見つからない");
+            Eq(ErrorKind.Other, ErrorKind.Classify(new IOException("other")), "その他");
+            Eq(ErrorKind.Network, ErrorKind.Classify(new Exception("wrap", new IOException("net", unchecked((int)0x80070035)))), "中の例外も見る");
+            True(ErrorKind.IsFatal(ErrorKind.Network) && ErrorKind.IsFatal(ErrorKind.DiskFull) && !ErrorKind.IsFatal(ErrorKind.Locked), "ジョブを止める種類");
+            True(ErrorKind.Describe(new IOException("x", unchecked((int)0x80070070))).StartsWith("【"), "表示に種類を付ける");
+
+            // Wi-Fi・LAN が切れているとき：ネットワークのフォルダはエラー（【ネットワークの切断】）
+            Environment.SetEnvironmentVariable("AUTOCOPY_TEST_OFFLINE", "1");
+            try
+            {
+                True(!NetAccess.NetworkUp(), "切断を検知");
+                string msg = null;
+                try { NetAccess.Ensure("\\\\nas-test\\share\\folder", 1, 1, CancellationToken.None, null); }
+                catch (Exception ex) { msg = ex.Message; }
+                True(msg != null && msg.Contains("ネットワークの切断") && msg.Contains("Wi-Fi"), "切断のエラー: " + msg);
+                NetAccess.Ensure(baseDir, 0, 1, CancellationToken.None, null);   // ローカルのフォルダは使える
+                // ジョブ全体としてもエラーになる
+                Box b = new Box("T70");
+                b.W("a.txt", "a");
+                b.Job.Dest = "\\\\nas-test\\share\\T70";
+                b.Apply();
+                JobRuntime rt = AppCore.GetRuntime(b.Job.Id);
+                True(AppCore.RunJob(b.Job.Id, true, false), "実行開始");
+                for (int i = 0; i < 300 && rt.Running; i++) Thread.Sleep(100);
+                Eq("error", rt.LastResult, "結果はエラー: " + rt.LastMessage);
+                True(rt.LastMessage.Contains("ネットワークの切断"), "エラーの内容: " + rt.LastMessage);
+                True(AppCore.RecentNotices().Exists(delegate(Notice n) { return (n.Text ?? "").Contains("ネットワークの切断") || (n.Title ?? "").Contains("ネットワークの切断"); }), "エラーのお知らせ");
+            }
+            finally { Environment.SetEnvironmentVariable("AUTOCOPY_TEST_OFFLINE", null); }
+        }
+
+        private static void T71_StateCorrupt()
+        {
+            string id = "t71-" + Guid.NewGuid().ToString("N").Substring(0, 6);
+            string path = JobState.PathFor(id);
+            JobState s = JobState.Load(id);
+            s.LastMessage = "1回目";
+            s.Save();
+            s.LastMessage = "2回目";
+            s.Save();
+            True(File.Exists(path + ".bak"), "前回の内容を .bak に残す");
+            Eq("2回目", JobState.Load(id).LastMessage, "普通に読める");
+            True(JobState.Load(id).LoadProblem == null, "問題なし");
+            Eq(0, Directory.GetFiles(Path.GetDirectoryName(path), Path.GetFileName(path) + ".*.tmp").Length, "一時ファイルを残さない");
+
+            File.WriteAllBytes(path, new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9 });   // 壊れる
+            JobState r = JobState.Load(id);
+            Eq("1回目", r.LastMessage, "前回保存した内容（.bak）から戻す");
+            True(r.LoadProblem != null, "問題を知らせる");
+            True(Directory.GetFiles(Path.GetDirectoryName(path), Path.GetFileName(path) + ".corrupt-*").Length >= 1, "壊れたファイルを残す");
+
+            // 途中で切れたファイル（件数より短い）も壊れていると判定
+            s.LastMessage = "3回目"; s.Save();
+            byte[] full = File.ReadAllBytes(path);
+            byte[] cut = new byte[full.Length - 3]; Array.Copy(full, cut, cut.Length);
+            File.WriteAllBytes(path, cut);
+            True(JobState.Load(id).LoadProblem != null, "途中で切れたファイル");
+
+            File.WriteAllBytes(path, new byte[] { 0 });
+            File.WriteAllBytes(path + ".bak", new byte[] { 0 });
+            JobState e = JobState.Load(id);
+            True(e.LoadProblem != null && e.LoadProblem.Contains("作り直します"), "どちらもだめなら空から: " + e.LoadProblem);
+            lock (e) Eq(0, e.Files.Count, "記録は空（削除の候補は出ない）");
+
+            // JSON（お知らせ・同期の削除候補など）
+            string jp = Path.Combine(baseDir, "T71\\x.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(jp));
+            List<string> v1 = new List<string>(new string[] { "a" });
+            Json.Save(jp, v1);
+            Json.Save(jp, new List<string>(new string[] { "a", "b" }));
+            string problem;
+            Eq(2, Json.LoadSafe<List<string>>(jp, out problem).Count, "普通に読める");
+            True(problem == null, "問題なし");
+            File.WriteAllText(jp, "{壊れた");
+            List<string> back = Json.LoadSafe<List<string>>(jp, out problem);
+            True(back != null && back.Count == 1 && problem != null, "壊れたら .bak から戻す: " + problem);
+            File.WriteAllText(jp + ".bak", "{壊れた");
+            True(Json.LoadSafe<List<string>>(jp, out problem) == null && problem != null, "どちらもだめなら null と説明");
+            // 保存できないときは例外（握りつぶさない）
+            string dirAsFile = Path.Combine(baseDir, "T71\\dir.json");
+            Directory.CreateDirectory(dirAsFile);
+            bool threw = false;
+            try { Json.Save(dirAsFile, v1); } catch (Exception) { threw = true; }
+            True(threw, "保存できないときは例外");
+        }
+
+        private static void T72_ScanFailNoDelete()
+        {
+            Box b = new Box("T72");
+            b.Job.Mirror = true;
+            b.W("keep.txt", "keep");
+            b.W("sub\\a.txt", "a");
+            b.W("sub\\b.txt", "b");
+            b.Run();
+            True(b.DE("sub\\a.txt"), "コピーされた");
+            string sub = b.S("sub");
+            System.Security.AccessControl.DirectorySecurity sec = Directory.GetAccessControl(sub);
+            System.Security.Principal.SecurityIdentifier everyone = new System.Security.Principal.SecurityIdentifier(System.Security.Principal.WellKnownSidType.WorldSid, null);
+            System.Security.AccessControl.FileSystemAccessRule deny = new System.Security.AccessControl.FileSystemAccessRule(everyone,
+                System.Security.AccessControl.FileSystemRights.ListDirectory, System.Security.AccessControl.AccessControlType.Deny);
+            sec.AddAccessRule(deny);
+            Directory.SetAccessControl(sub, sec);
+            try
+            {
+                bool cannotRead = false;
+                try { Directory.GetFiles(sub); } catch (UnauthorizedAccessException) { cannotRead = true; }
+                if (!cannotRead) throw new SkipException("この環境ではフォルダの読み取りを拒否できません");
+                Apply_NoSnapshot(b);
+                RunResult r = new CopyEngine(b.Job, b.App, b.State, false, false, CancellationToken.None).Run();
+                True(r.ScanFailedDirs >= 1, "読めなかったフォルダを数える");
+                Eq(JobOutcome.Partial, r.Outcome, "結果は「一部失敗」");
+                True(b.DE("sub\\a.txt") && b.DE("sub\\b.txt"), "読めなかったフォルダの中はミラーで削除しない");
+                Eq(0, b.TrashCount("削除済み"), "削除済みへも移さない");
+                RunResult d = new CopyEngine(b.Job, b.App, b.State, true, true, CancellationToken.None).Run();
+                True(!d.Plan.Exists(delegate(PlanItem p) { return p.Rel.StartsWith("sub\\"); }), "予測でも削除に出さない");
+            }
+            finally
+            {
+                sec = Directory.GetAccessControl(sub);
+                sec.RemoveAccessRule(deny);
+                Directory.SetAccessControl(sub, sec);
+            }
+            // 読めるようになり、本当に消えたら削除される（今までどおり）
+            File.Delete(b.S("sub\\a.txt"));
+            RunResult r2 = b.Run();
+            Eq(JobOutcome.Success, r2.Outcome, "結果は「成功」");
+            True(!b.DE("sub\\a.txt") && b.DE("sub\\b.txt"), "本当に消えたものは削除（削除済みへ）");
+        }
+
+        private static void Apply_NoSnapshot(Box b) { b.Apply(); }
+
+        private static void T73_JobConflicts()
+        {
+            Box b = new Box("T73");
+            b.W("a.txt", "a");
+            JobConfig j2 = new JobConfig();
+            j2.Name = "T73-2";
+            j2.Source = Path.Combine(b.Root, "src2");
+            j2.Dest = b.Dst;   // 同じコピー先
+            j2.Enabled = false;
+            Directory.CreateDirectory(j2.Source);
+            b.App.Jobs.Add(j2);
+            b.Apply();
+            JobRuntime r2 = AppCore.GetRuntime(j2.Id), r1 = AppCore.GetRuntime(b.Job.Id);
+            r2.Running = true;   // 別のジョブが同じコピー先で動いている
+            try
+            {
+                True(AppCore.OverlappingRunning(b.Job) == j2, "同じフォルダを使うジョブを見つける");
+                True(AppCore.RunJob(b.Job.Id, true, false), "手動の実行は受け付ける");
+                True(!r1.Running, "今は動かさない");
+                Eq("T73-2", r1.WaitingFor, "待っている相手");
+                True(r1.QueuedManual, "手動の実行を覚えている");
+                True(!b.DE("a.txt"), "まだコピーしない");
+            }
+            finally { r2.Running = false; }
+            True(AppCore.OverlappingRunning(b.Job) == null, "相手が終わった");
+            True(AppCore.RunJob(b.Job.Id, true, false), "終わったら実行");
+            for (int i = 0; i < 300 && r1.Running; i++) Thread.Sleep(100);
+            True(b.DE("a.txt"), "コピーされた");
+            True(r1.WaitingFor == null && !r1.QueuedManual, "待ちは解除");
+
+            // 関係ないフォルダのジョブは同時に動ける
+            j2.Dest = Path.Combine(b.Root, "dst2");
+            r2.Running = true;
+            try { True(AppCore.OverlappingRunning(b.Job) == null, "別のフォルダなら待たない"); }
+            finally { r2.Running = false; }
+
+            // 実行時の確かめ：設定ファイルを直接直してコピー先を別のジョブのコピー元の中にした
+            j2.Dest = Path.Combine(b.Src, "inside");
+            j2.Source = Path.Combine(b.Root, "src2");
+            string v = CopyEngine.Validate(j2, b.App, b.App.Jobs.ToArray());
+            True(v != null, "重なりを見つける: " + v);
+            Throws<InvalidOperationException>(delegate()
+            {
+                new CopyEngine(j2, b.App, AppCore.GetState(j2.Id), false, false, CancellationToken.None).Run();
+            }, "実行時にも止める");
+            True(!Directory.Exists(Path.Combine(b.Src, "inside")), "コピー元に何も作らない");
+            b.App.Jobs.Remove(j2);
+            b.Apply();
+        }
+
+        private static void T74_UpdateRollback()
+        {
+            string dir = Path.Combine(baseDir, "T74");
+            Directory.CreateDirectory(dir);
+            string exe = Path.Combine(dir, "AutoCopy.exe");
+            File.WriteAllText(exe, "NEW");
+            File.WriteAllText(exe + ".old", "OLD");
+            string manual = Path.Combine(dir, Updater.Related[1]);
+            File.WriteAllText(manual, "NEW manual");
+            File.WriteAllText(manual + ".old", "OLD manual");
+            try { File.Delete(Updater.BlockedFile); File.Delete(Updater.RollbackFile); } catch (Exception) { }
+            True(Updater.BlockedVersion() == null, "最初は記録なし");
+            string err = Updater.Rollback(exe, "9.9.9.9", "1.0.0.0", "が起動できなかった");
+            True(err == null, "戻せる: " + err);
+            Eq("OLD", File.ReadAllText(exe), "exe は前の版");
+            Eq("NEW", File.ReadAllText(exe + ".failed"), "失敗した版は .failed として残す");
+            Eq("OLD manual", File.ReadAllText(manual), "説明書も前の版");
+            Eq("9.9.9.9", Updater.BlockedVersion(), "失敗した版を記録（次からは使わない）");
+            True(File.ReadAllText(Updater.RollbackFile).Contains("戻しました"), "戻したことを次の起動で知らせる");
+            True(Updater.Rollback(exe, "9.9.9.9", "1.0.0.0", "x") != null, "前の版がなければ戻せない（何もしない）");
+            Eq("OLD", File.ReadAllText(exe), "そのまま");
+            try { File.Delete(Updater.BlockedFile); File.Delete(Updater.RollbackFile); } catch (Exception) { }
+
+            // 署名のない exe（このテストの exe）は署名なしとして扱う＝更新に使わない
+            string self = System.Reflection.Assembly.GetExecutingAssembly().Location;
+            string sig; bool unsigned;
+            Updater.CheckSignature(self, out sig, out unsigned);
+            True(unsigned, "署名なし");
+            Eq("E8F609B1AEE069E00891E639CBB03B3CEECB9AC7", Updater.OfficialThumbprint, "正式な証明書の拇印");
+        }
+
+        private static void T75_SyncRemoteCache()
+        {
+            SyncPair p = new SyncPair("T75");
+            p.JA.SyncRemoteCacheMinutes = 30; p.JB.SyncRemoteCacheMinutes = 30;
+            WriteFile(Path.Combine(p.A, "a.txt"), "PC1", 600);
+            RunResult r1 = p.Run(p.JA, "pc1");
+            True(!r1.RemoteScanSkipped, "初回は詳しく確認");
+            Eq(1, r1.Copied, "共有へ a");
+            True(SyncRemoteCache.ReadStamp(p.S).Length > 0, "共有フォルダに変更の印");
+            RunResult r2 = p.Run(p.JA, "pc1");
+            True(r2.RemoteScanSkipped, "変わっていなければ詳しい確認を省略");
+            Eq(0, r2.Copied + r2.Overwritten + r2.Downloaded, "何もしない");
+            // このPCで変えたものは省略中でも送る
+            WriteFile(Path.Combine(p.A, "b.txt"), "PC1-b", 300);
+            RunResult r3 = p.Run(p.JA, "pc1");
+            Eq(1, r3.Copied, "このPCの新しいファイルは送る");
+            RunResult r3b = p.Run(p.JA, "pc1");
+            True(r3b.RemoteScanSkipped, "自分の送信では印が変わっても省略を続ける");
+            Eq(0, r3b.Copied + r3b.Overwritten + r3b.Downloaded, "送ったものを二重に送らない");
+            // 他のPCが共有フォルダを変えた → 印が変わる → すぐ詳しく確認して取り込む
+            WriteFile(Path.Combine(p.B, "c.txt"), "PC2", 300);
+            RunResult rb = p.Run(p.JB, "pc2");
+            True(rb.Copied >= 1, "PC2 が共有へ c");
+            RunResult r4 = p.Run(p.JA, "pc1");
+            True(!r4.RemoteScanSkipped, "他のPCの変更に気づいて詳しく確認");
+            Eq(1, r4.Downloaded, "c を取り込み");
+            // 「全体を再確認」では必ず詳しく確認
+            CopyEngine e = new CopyEngine(p.JA, p.App, AppCore.GetState(p.JA.Id), false, false, CancellationToken.None);
+            e.FullVerify = true;
+            p.App.InstanceId = "pc1";
+            True(!e.Run().RemoteScanSkipped, "全体を再確認では省略しない");
+            // 0分なら毎回詳しく確認
+            p.JA.SyncRemoteCacheMinutes = 0;
+            True(!p.Run(p.JA, "pc1").RemoteScanSkipped, "0分なら毎回確認");
+            SyncRemoteCache.Invalidate(p.JA.Id); SyncRemoteCache.Invalidate(p.JB.Id);
+        }
+
+        private static void T76_ManyFiles()
+        {
+            int count = 100000;
+            string env = Environment.GetEnvironmentVariable("AUTOCOPY_PERF_FILES");
+            int envN;
+            if (!string.IsNullOrEmpty(env) && int.TryParse(env, out envN) && envN > 0) count = envN;
+            Box b = new Box("T76");
+            Stopwatch sw = Stopwatch.StartNew();
+            byte[] one = new byte[] { 65 };
+            DateTime old = DateTime.UtcNow.AddHours(-1);
+            for (int i = 0; i < count; i++)
+            {
+                string d = Path.Combine(b.Src, "d" + (i / 1000).ToString("000"));
+                if (i % 1000 == 0) Directory.CreateDirectory(d);
+                string f = Path.Combine(d, "f" + i + ".txt");
+                File.WriteAllBytes(f, one);
+                File.SetLastWriteTimeUtc(f, old);
+            }
+            long tCreate = sw.ElapsedMilliseconds;
+            GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+            long m0 = GC.GetTotalMemory(true);
+            sw.Restart();
+            ScanResult sr = Scanner.Scan(b.Src, true, new ExcludeMatcher(b.Job.Exclude), true, CancellationToken.None);
+            long tScan = sw.ElapsedMilliseconds;
+            long m1 = GC.GetTotalMemory(true);
+            Eq(count, sr.Files.Count, "全件を数える");
+            double perFile = (double)(m1 - m0) / count;
+            GC.KeepAlive(sr);
+            sr = null;
+            b.Apply();
+            sw.Restart();
+            RunResult r = AppCore.DryRun(b.Job, false);
+            long tDry = sw.ElapsedMilliseconds;
+            Eq((long)count, Count(r, PlanKind.Copy), "予測：コピーの件数（全件）");
+            True(r.Plan.Count <= RunResult.PlanLimit, "予測の一覧は上限まで");
+            double mb1m = perFile * 1000000 / 1024 / 1024;
+            double scan1m = tScan * (1000000.0 / count) / 1000;
+            Note = count + "件：作成 " + tCreate + "ms・確認 " + tScan + "ms・予測 " + tDry + "ms・1件あたり約 " + (int)perFile + " バイト → 100万件で 確認 約" + (int)scan1m + "秒・メモリ 約" + (int)mb1m + "MB";
+            True(perFile < 2048, "1件あたりのメモリ（2KB 未満）: " + (int)perFile);
+            True(scan1m < 1800, "100万件の確認が30分以内（換算）: " + (int)scan1m + "秒");
+            Directory.Delete(b.Src, true);
+        }
+
+        private static long Count(RunResult r, string kind)
+        {
+            long[] v;
+            if (r.PlanCounts != null && r.PlanCounts.TryGetValue(kind, out v)) return v[0];
+            return r.Plan.FindAll(delegate(PlanItem p) { return p.Kind == kind; }).Count;
         }
 
         private static void T42_Performance()

@@ -8,6 +8,89 @@ using System.Threading;
 
 namespace AutoCopy
 {
+    /// <summary>ジョブの結果の分類</summary>
+    public static class JobOutcome
+    {
+        public const string Success = "成功", Partial = "一部失敗", Canceled = "中断", Failed = "失敗";
+    }
+
+    /// <summary>
+    /// エラーの原因の分類（ネットワークの切断・容量不足・アクセス拒否・使用中 など）。
+    /// ネットワークの切断と容量不足は、続けても失敗するだけなので、ジョブを止める。
+    /// </summary>
+    public static class ErrorKind
+    {
+        public const string Network = "network", DiskFull = "diskfull", AccessDenied = "access", Locked = "locked",
+            NotFound = "notfound", TooLong = "toolong", Changed = "changed", Other = "other";
+
+        public static string Classify(Exception ex)
+        {
+            if (ex == null) return Other;
+            if (ex is SourceChangedException) return Changed;
+            if (ex is UnauthorizedAccessException) return AccessDenied;
+            if (ex is PathTooLongException) return TooLong;
+            if (ex is FileNotFoundException || ex is DirectoryNotFoundException) return NotFound;
+            int code = Win32Code(ex);
+            switch (code)
+            {
+                case 112: case 39: return DiskFull;                        // ERROR_DISK_FULL / HANDLE_DISK_FULL
+                case 5: return AccessDenied;
+                case 32: case 33: return Locked;                           // 共有違反・ロック違反
+                case 2: case 3: return NotFound;
+                case 206: return TooLong;
+                case 51: case 53: case 54: case 55: case 59: case 64: case 65: case 67: case 121:
+                case 1231: case 1232: case 1236: case 1222: case 2250:
+                    return Network;                                         // ネットワークの名前が見つからない・切断 など
+            }
+            if (ex.InnerException != null && ex.InnerException != ex) return Classify(ex.InnerException);
+            return Other;
+        }
+
+        public static int Win32Code(Exception ex)
+        {
+            int hr = System.Runtime.InteropServices.Marshal.GetHRForException(ex);
+            if ((hr & 0xFFFF0000) == 0x80070000) return hr & 0xFFFF;
+            return -1;
+        }
+
+        public static string Label(string kind)
+        {
+            switch (kind)
+            {
+                case Network: return "ネットワークの切断";
+                case DiskFull: return "容量不足";
+                case AccessDenied: return "アクセス拒否";
+                case Locked: return "使用中";
+                case NotFound: return "見つからない";
+                case TooLong: return "パスが長すぎる";
+                case Changed: return "コピー中に変更";
+            }
+            return "その他";
+        }
+
+        /// <summary>ジョブを止めるべき原因か（続けても同じ失敗をくり返す）</summary>
+        public static bool IsFatal(string kind) { return kind == Network || kind == DiskFull; }
+
+        /// <summary>「【容量不足】…」の形の説明</summary>
+        public static string Describe(Exception ex)
+        {
+            return "【" + Label(Classify(ex)) + "】" + ex.Message;
+        }
+    }
+
+    /// <summary>ネットワークの切断・容量不足などで、ジョブを途中で止めた</summary>
+    public class JobAbortException : Exception
+    {
+        public readonly string Kind;
+        public JobAbortException(string kind, string message, Exception inner) : base(message, inner) { Kind = kind; }
+    }
+
+    /// <summary>コピーしている間に、コピー元のファイルが変わった（保存中など）。次回コピーする</summary>
+    public class SourceChangedException : IOException
+    {
+        public SourceChangedException(string path) : base("コピー中にコピー元が変わったため、次回コピーします（保存中の可能性）: " + PathUtil.Plain(path)) { }
+    }
+
     public class SourceProtectedException : Exception
     {
         public SourceProtectedException(string path)
@@ -84,14 +167,12 @@ namespace AutoCopy
 
         public static byte[] CopyIntoSync(string from, string toLocal, string rel, DateTime mtimeUtc, string backupRoot, CancellationToken ct, Action<long> onBytes)
         {
-            long copied = 0;
             if (!IsInSyncRoot(toLocal))
             {
                 if (Blocked != null) Blocked(PathUtil.Normalize(toLocal));
                 throw new SourceProtectedException(toLocal);
             }
             string lto = PathUtil.Long(toLocal);
-            string tmp = PathUtil.Long(toLocal + ".ckpart");
             string parent = Path.GetDirectoryName(PathUtil.Plain(toLocal));
             if (!Directory.Exists(PathUtil.Long(parent))) Directory.CreateDirectory(PathUtil.Long(parent));
             if (File.Exists(lto) && backupRoot != null)
@@ -101,45 +182,157 @@ namespace AutoCopy
                 Directory.CreateDirectory(Path.GetDirectoryName(lb));
                 if (File.Exists(lb)) lb = lb + "." + DateTime.Now.Ticks;
                 File.Copy(lto, lb, false);
+                if (!SameBytes(lto, lb)) { TryDelete(lb); throw new IOException("控えを正しく作れなかったため、取り込みを止めました: " + rel); }
             }
-            byte[] hash;
-            byte[] buf = new byte[1024 * 1024];
-            using (MD5 md5 = MD5.Create())
+            return CopyVerifiedAndCommit(from, toLocal, mtimeUtc, null, ct, onBytes);
+        }
+
+        /// <summary>一時ファイルの名前（同じファイルへ同時に書いてもぶつからないよう、毎回違う名前にする）</summary>
+        public static string TempName(string dst)
+        {
+            return dst + "." + Guid.NewGuid().ToString("N").Substring(0, 12) + PartSuffix;
+        }
+
+        public const string PartSuffix = ".ckpart", AsideSuffix = ".ckold";
+
+        /// <summary>
+        /// コピーの本体（CopyFile・CopyIntoSync 共通）：
+        /// 1) 一時ファイル（毎回違う名前）に書き、ディスクに書き込みを確定させる（電源断・強制終了でも、元のファイルは変わらない）
+        /// 2) コピー中にコピー元が変わったら（大きさ・更新日時）一時ファイルを捨てて、少し待ってやり直す（3回まで）
+        /// 3) 中止されたら、置き換える直前でも止める（コピー先は元のまま）
+        /// 4) 置き換えは元のファイルを失わない方法で行う（失敗したら元のファイルに戻す）
+        /// </summary>
+        private static byte[] CopyVerifiedAndCommit(string src, string dst, DateTime srcMtimeUtc, Throttle throttle, CancellationToken ct, Action<long> onBytes)
+        {
+            string ls = PathUtil.Long(src), ld = PathUtil.Long(dst);
+            for (int attempt = 1; ; attempt++)
             {
+                string lt = PathUtil.Long(TempName(dst));
                 try
                 {
-                    using (FileStream fin = new FileStream(PathUtil.Long(from), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, buf.Length, FileOptions.SequentialScan))
-                    using (FileStream fout = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None, buf.Length))
+                    FileInfo before = new FileInfo(ls);
+                    if (!before.Exists) throw new FileNotFoundException("コピー元が見つかりません: " + src);
+                    long bs = before.Length, bm = before.LastWriteTimeUtc.Ticks;
+                    long copied;
+                    byte[] hash = CopyCore(ls, lt, throttle, ct, onBytes, out copied);
+                    FileInfo after = new FileInfo(ls);
+                    after.Refresh();
+                    if (!after.Exists || after.Length != bs || after.LastWriteTimeUtc.Ticks != bm || copied != bs)
                     {
-                        int n;
-                        while ((n = fin.Read(buf, 0, buf.Length)) > 0)
-                        {
-                            ct.ThrowIfCancellationRequested();
-                            fout.Write(buf, 0, n);
-                            md5.TransformBlock(buf, 0, n, null, 0);
-                            copied += n;
-                            if (onBytes != null) onBytes(copied);
-                        }
-                        md5.TransformFinalBlock(buf, 0, 0);
+                        TryDelete(lt);
+                        if (attempt >= 3) throw new SourceChangedException(src);
+                        if (ct.WaitHandle.WaitOne(700 * attempt)) ct.ThrowIfCancellationRequested();
+                        continue;
                     }
+                    ct.ThrowIfCancellationRequested();   // 中止：置き換える前に止める（コピー先は元のまま）
+                    File.SetLastWriteTimeUtc(lt, srcMtimeUtc);
+                    Commit(lt, ld);
+                    try { File.SetLastWriteTimeUtc(ld, srcMtimeUtc); } catch (Exception ex) { Logger.Error(null, "更新日時を設定できません: " + PathUtil.Plain(dst) + "　" + ex.Message); }
+                    return hash;
                 }
                 catch
                 {
-                    try { if (File.Exists(tmp)) File.Delete(tmp); } catch (Exception) { }   // 自分で作った一時ファイルだけ消す
+                    TryDelete(lt);   // 自分で作った一時ファイルだけ消す
                     throw;
                 }
-                hash = md5.Hash;
             }
-            File.SetLastWriteTimeUtc(tmp, mtimeUtc);
-            if (File.Exists(lto))
+        }
+
+        private static byte[] CopyCore(string ls, string lt, Throttle throttle, CancellationToken ct, Action<long> onBytes, out long copied)
+        {
+            copied = 0;
+            byte[] buf = new byte[1024 * 1024];
+            using (MD5 md5 = MD5.Create())
             {
-                FileAttributes a = File.GetAttributes(lto);
-                if ((a & FileAttributes.ReadOnly) != 0) File.SetAttributes(lto, a & ~FileAttributes.ReadOnly);
-                File.Replace(tmp, lto, null, true);
-                File.SetLastWriteTimeUtc(lto, mtimeUtc);
+                using (FileStream fin = new FileStream(ls, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, buf.Length, FileOptions.SequentialScan))
+                using (FileStream fout = new FileStream(lt, FileMode.CreateNew, FileAccess.Write, FileShare.None, buf.Length))
+                {
+                    int n;
+                    while ((n = fin.Read(buf, 0, buf.Length)) > 0)
+                    {
+                        ct.ThrowIfCancellationRequested();
+                        fout.Write(buf, 0, n);
+                        md5.TransformBlock(buf, 0, n, null, 0);
+                        if (throttle != null) throttle.Consume(n, ct);
+                        copied += n;
+                        if (onBytes != null) onBytes(copied);
+                    }
+                    md5.TransformFinalBlock(buf, 0, 0);
+                    fout.Flush(true);   // ディスクに書き込みを確定させてから置き換える
+                }
+                return md5.Hash;
             }
-            else File.Move(tmp, lto);
-            return hash;
+        }
+
+        /// <summary>
+        /// 一時ファイルで、コピー先を置き換える。元のファイルを失わない：
+        /// File.Replace（元を控えに残す）→ だめなら 元を横へ名前変更 → 新しいものを入れる → 入らなければ元に戻す。
+        /// </summary>
+        public static void Commit(string lt, string ld)
+        {
+            if (!File.Exists(ld)) { File.Move(lt, ld); return; }
+            FileAttributes a = File.GetAttributes(ld);
+            if ((a & FileAttributes.ReadOnly) != 0) File.SetAttributes(ld, a & ~FileAttributes.ReadOnly);
+            string aside = ld + "." + Guid.NewGuid().ToString("N").Substring(0, 12) + AsideSuffix;
+            try
+            {
+                File.Replace(lt, ld, aside, true);
+                TryDelete(aside);
+                return;
+            }
+            catch (Exception ex)
+            {
+                // Replace の途中で失敗：元のファイルが控えの名前になっていれば戻す
+                if (!File.Exists(ld) && File.Exists(aside))
+                {
+                    try { File.Move(aside, ld); }
+                    catch (Exception ex2) { throw new IOException("上書きに失敗し、元のファイルを " + PathUtil.Plain(aside) + " に残しました: " + ex2.Message, ex); }
+                }
+                if (!File.Exists(lt)) throw;   // 一時ファイルがない：これ以上はしない（元のファイルはそのまま）
+            }
+            // Replace が使えない場所（一部の NAS など）：元を横へ移してから入れ替える
+            File.Move(ld, aside);   // 失敗したら例外（元のファイルはそのまま）
+            try { File.Move(lt, ld); }
+            catch
+            {
+                try { File.Move(aside, ld); }
+                catch (Exception ex3) { Logger.Error(null, "上書きに失敗しました。元のファイルは " + PathUtil.Plain(aside) + " に残っています: " + ex3.Message); }
+                throw;
+            }
+            TryDelete(aside);
+        }
+
+        /// <summary>2つのファイルの中身が同じか（大きさ → 1バイトずつ）</summary>
+        public static bool SameBytes(string a, string b)
+        {
+            string la = PathUtil.Long(a), lb = PathUtil.Long(b);
+            FileInfo fa = new FileInfo(la), fb = new FileInfo(lb);
+            if (!fa.Exists || !fb.Exists || fa.Length != fb.Length) return false;
+            byte[] x = new byte[1 << 20], y = new byte[1 << 20];
+            using (FileStream sa = new FileStream(la, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16, FileOptions.SequentialScan))
+            using (FileStream sb = new FileStream(lb, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1 << 16, FileOptions.SequentialScan))
+            {
+                while (true)
+                {
+                    int n = ReadFull(sa, x), m = ReadFull(sb, y);
+                    if (n != m) return false;
+                    if (n == 0) return true;
+                    for (int i = 0; i < n; i++) if (x[i] != y[i]) return false;
+                }
+            }
+        }
+
+        private static int ReadFull(Stream s, byte[] buf)
+        {
+            int t = 0, n;
+            while (t < buf.Length && (n = s.Read(buf, t, buf.Length - t)) > 0) t += n;
+            return t;
+        }
+
+        private static void TryDelete(string l)
+        {
+            try { if (File.Exists(l)) File.Delete(l); }
+            catch (Exception ex) { Logger.Error(null, "一時ファイルを消せません: " + PathUtil.Plain(l) + "　" + ex.Message); }
         }
 
         /// <summary>コピー先の「_AutoCopy」フォルダを隠しフォルダにする（ない場合は何もしない）</summary>
@@ -162,8 +355,9 @@ namespace AutoCopy
             try { File.Move(lf, lb); }
             catch (IOException)
             {
-                // 別のドライブなど：控えにコピーしてから元を消す
+                // 別のドライブなど：控えにコピーし、中身が同じことを確かめてから元を消す
                 File.Copy(lf, lb, false);
+                if (!SameBytes(lf, lb)) { TryDelete(lb); throw new IOException("控えを正しく作れなかったため、このPCのファイルは消しませんでした: " + rel); }
                 File.SetAttributes(lf, FileAttributes.Normal);
                 File.Delete(lf);
             }
@@ -316,67 +510,11 @@ namespace AutoCopy
         /// <summary>onBytes：コピーできたバイト数（進み具合の表示用）</summary>
         public static byte[] CopyFile(string src, string dst, DateTime srcMtimeUtc, Throttle throttle, CancellationToken ct, Action<long> onBytes)
         {
-            long copied = 0;
             Guard(dst);
-            string ls = PathUtil.Long(src), ld = PathUtil.Long(dst);
-            string tmp = dst + ".ckpart";
-            Guard(tmp);
-            string lt = PathUtil.Long(tmp);
+            Guard(dst + PartSuffix);
             string parent = Path.GetDirectoryName(PathUtil.Plain(dst));
             CreateDirectory(parent);
-
-            byte[] hash;
-            byte[] buf = new byte[1024 * 1024];
-            using (MD5 md5 = MD5.Create())
-            {
-                try
-                {
-                    using (FileStream fin = new FileStream(ls, FileMode.Open, FileAccess.Read,
-                        FileShare.ReadWrite | FileShare.Delete, buf.Length, FileOptions.SequentialScan))
-                    using (FileStream fout = new FileStream(lt, FileMode.Create, FileAccess.Write, FileShare.None, buf.Length))
-                    {
-                        int n;
-                        while ((n = fin.Read(buf, 0, buf.Length)) > 0)
-                        {
-                            ct.ThrowIfCancellationRequested();
-                            fout.Write(buf, 0, n);
-                            md5.TransformBlock(buf, 0, n, null, 0);
-                            if (throttle != null) throttle.Consume(n, ct);
-                            copied += n;
-                            if (onBytes != null) onBytes(copied);
-                        }
-                        md5.TransformFinalBlock(buf, 0, 0);
-                    }
-                }
-                catch
-                {
-                    try { if (File.Exists(lt)) File.Delete(lt); } catch (Exception) { }
-                    throw;
-                }
-                hash = md5.Hash;
-            }
-            File.SetLastWriteTimeUtc(lt, srcMtimeUtc);
-
-            if (File.Exists(ld))
-            {
-                FileAttributes a = File.GetAttributes(ld);
-                if ((a & FileAttributes.ReadOnly) != 0) File.SetAttributes(ld, a & ~FileAttributes.ReadOnly);
-                try
-                {
-                    File.Replace(lt, ld, null, true);
-                }
-                catch (Exception)
-                {
-                    File.Delete(ld);
-                    File.Move(lt, ld);
-                }
-                File.SetLastWriteTimeUtc(ld, srcMtimeUtc);
-            }
-            else
-            {
-                File.Move(lt, ld);
-            }
-            return hash;
+            return CopyVerifiedAndCommit(src, dst, srcMtimeUtc, throttle, ct, onBytes);
         }
     }
 

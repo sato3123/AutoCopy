@@ -35,6 +35,9 @@ namespace AutoCopy
             }
             finally
             {
+                // パスワードをメモリに残さない
+                Marshal.Copy(new byte[Math.Max(blob.Length, 1)], 0, c.CredentialBlob, Math.Max(blob.Length, 1));
+                Array.Clear(blob, 0, blob.Length);
                 Marshal.FreeCoTaskMem(c.CredentialBlob);
             }
         }
@@ -106,6 +109,14 @@ namespace AutoCopy
         /// フォルダにアクセスできるようにする。ネットワークなら保存した資格情報で接続する。
         /// retries 回まで intervalSec 秒おきに再試行。失敗したら AccessException。
         /// </summary>
+        /// <summary>ネットワーク（Wi-Fi・LAN）につながっているか。確認用に AUTOCOPY_TEST_OFFLINE=1 でつながっていない状態を作れる</summary>
+        public static bool NetworkUp()
+        {
+            if (Environment.GetEnvironmentVariable("AUTOCOPY_TEST_OFFLINE") == "1") return false;
+            try { return System.Net.NetworkInformation.NetworkInterface.GetIsNetworkAvailable(); }
+            catch (Exception) { return true; }   // 調べられないときは、実際に開いてみて判断する
+        }
+
         public static void Ensure(string folder, int retries, int intervalSec, CancellationToken ct, Action<int> onRetry)
         {
             string plain = PathUtil.Plain(folder);
@@ -117,9 +128,17 @@ namespace AutoCopy
                     if (onRetry != null) onRetry(attempt);
                     if (ct.WaitHandle.WaitOne(TimeSpan.FromSeconds(Math.Max(1, intervalSec)))) throw new OperationCanceledException();
                 }
+                bool unc = PathUtil.IsUnc(plain);
+                // ネットワークにまったくつながっていない（Wi-Fi・LAN が切れている）ときは、ネットワークのフォルダを使えない。
+                // （オフラインファイルなどで「ある」ように見えても、つながっていなければコピーしない）
+                if (unc && !NetworkUp())
+                {
+                    lastError = "【ネットワークの切断】ネットワークにつながっていないため、" + PathUtil.UncShareRoot(plain) + " を使えません（Wi-Fi・LAN が切れている可能性があります）";
+                    continue;
+                }
                 if (ExistsOrParentExists(plain)) return;
 
-                if (PathUtil.IsUnc(plain))
+                if (unc)
                 {
                     string share = PathUtil.UncShareRoot(plain);
                     string server = PathUtil.UncServer(plain);

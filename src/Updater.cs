@@ -4,6 +4,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
+using System.Collections.Generic;
 
 namespace AutoCopy
 {
@@ -73,26 +74,121 @@ namespace AutoCopy
             return CheckSignature(AppPaths.ExePath, out s, out u) == null ? s : null;
         }
 
-        /// <summary>更新版として使ってよいか。だめなら理由。</summary>
+        /// <summary>正式に配布している「自動コピー」の署名の証明書の拇印</summary>
+        public const string OfficialThumbprint = "E8F609B1AEE069E00891E639CBB03B3CEECB9AC7";
+
+        /// <summary>
+        /// 更新版として使ってよいか。だめなら理由。
+        /// ・署名がない版・署名の後で中身が変えられた版は、どんな場合も使わない
+        /// ・今の版が署名付きなら、同じ証明書で署名された版だけ
+        /// ・今の版に署名がない（自分でビルドした など）なら、正式な「自動コピー」の証明書で署名された版だけ
+        /// ・前に更新に失敗した版（起動できなかった版）は使わない
+        /// </summary>
         public static string Acceptable(string path, out Version ver, out string signer)
         {
             signer = null;
             ver = VersionOf(path);
             if (ver == null) return "版を読めません";
             if (ver <= CurrentVersion) return "新しい版ではありません（" + ver + "）";
+            string blocked = BlockedVersion();
+            if (blocked != null && blocked == ver.ToString()) return "前にこの版（" + ver + "）への更新に失敗して元に戻したため、使いません（もっと新しい版を置いてください）";
             bool unsigned;
             string err = CheckSignature(path, out signer, out unsigned);
+            if (unsigned) return "デジタル署名がない版には更新しません（" + ver + "）";
+            if (err != null) return err;
             string mine = CurrentSigner();
             if (mine != null)
             {
                 // 署名付きで動いているときは、同じ証明書で署名された更新版だけを使う
-                if (err != null) return err;
                 if (!string.Equals(signer, mine, StringComparison.OrdinalIgnoreCase))
                     return "今の版と違う証明書で署名されています（拇印 " + signer + "）";
             }
-            else if (err != null && !unsigned) return err;   // 署名なしで動いているとき：壊れた署名は使わない
+            else if (!string.Equals(signer, OfficialThumbprint, StringComparison.OrdinalIgnoreCase))
+                return "正式な「自動コピー」の証明書で署名されていない版には更新しません（拇印 " + signer + "）";
             return null;
         }
+
+        // ---------------- 更新の失敗から戻す ----------------
+
+        public static string BlockedFile { get { return Path.Combine(AppPaths.Local, "update-blocked.txt"); } }
+        public static string RollbackFile { get { return Path.Combine(AppPaths.Local, "update-rollback.txt"); } }
+        private static string MarkerFile(int pid) { return Path.Combine(AppPaths.Local, "update-ok-" + pid + ".txt"); }
+
+        public static string BlockedVersion()
+        {
+            try { return File.Exists(BlockedFile) ? File.ReadAllText(BlockedFile).Trim() : null; }
+            catch (Exception ex) { Logger.Error(null, "更新の記録を読めません: " + ex.Message); return null; }
+        }
+
+        /// <summary>新しい版が問題なく起動できたことを、見張り役に知らせる</summary>
+        public static void MarkStarted()
+        {
+            try { Directory.CreateDirectory(AppPaths.Local); File.WriteAllText(MarkerFile(Process.GetCurrentProcess().Id), CurrentVersion.ToString()); }
+            catch (Exception ex) { Logger.Error(null, "更新の確認の印を書けません: " + ex.Message); }
+        }
+
+        /// <summary>入れ替える関連ファイル（説明書・設定・証明書）</summary>
+        public static readonly string[] Related = { "AutoCopy.exe.config", AppPaths.ManualFileName, AppPaths.CertFileName, AppPaths.CertInstallerName };
+
+        /// <summary>
+        /// 前の版に戻す（新しい版を起動できなかったとき）。exe と関連ファイルを .old から戻し、失敗した版は使わないよう記録する。
+        /// </summary>
+        public static string Rollback(string exePath, string failedVersion, string oldVersion, string reason)
+        {
+            string old = exePath + ".old";
+            if (!File.Exists(old)) return "前の版（" + old + "）がないため戻せません";
+            try
+            {
+                string failed = exePath + ".failed";
+                if (File.Exists(failed)) File.Delete(failed);
+                if (File.Exists(exePath)) File.Move(exePath, failed);
+                File.Move(old, exePath);
+                string dir = Path.GetDirectoryName(exePath);
+                foreach (string name in Related)
+                {
+                    string f = Path.Combine(dir, name), fo = f + ".old";
+                    if (!File.Exists(fo)) continue;
+                    try { if (File.Exists(f)) File.Delete(f); File.Move(fo, f); }
+                    catch (Exception ex) { reason += "（" + name + " を戻せません: " + ex.Message + "）"; }
+                }
+                Directory.CreateDirectory(AppPaths.Local);
+                if (!string.IsNullOrEmpty(failedVersion)) File.WriteAllText(BlockedFile, failedVersion);
+                File.WriteAllText(RollbackFile, "新しい版（" + failedVersion + "）" + reason + "ため、前の版（" + oldVersion + "）に戻しました");
+                return null;
+            }
+            catch (Exception ex) { return "前の版に戻せませんでした: " + ex.Message; }
+        }
+
+        /// <summary>
+        /// 見張り役（前の版の exe から起動される）：新しい版が起動して「起動できた」印を書くまで待つ。
+        /// 印が書かれないまま終わった・時間内に起動できなかったときは、前の版に戻して起動し直す。
+        /// </summary>
+        public static int RunGuard(string[] args)
+        {
+            // /updateguard 新しい版のpid exeのパス 前の版 新しい版 前の版のpid
+            int pid;
+            if (args.Length < 5 || !int.TryParse(args[1], out pid)) return 2;
+            string exe = args[2], oldVer = args[3], newVer = args[4];
+            int oldPid;
+            if (args.Length > 5 && int.TryParse(args[5], out oldPid)) WaitForExit(oldPid, 60);   // 前の版が終わるのを待つ
+            DateTime limit = DateTime.Now.AddSeconds(GuardSeconds);
+            Process p = null;
+            try { p = Process.GetProcessById(pid); } catch (Exception) { }
+            while (DateTime.Now < limit)
+            {
+                if (File.Exists(MarkerFile(pid))) { try { File.Delete(MarkerFile(pid)); } catch (Exception) { } return 0; }   // 起動できた
+                if (p == null || p.HasExited) break;   // 印を書かずに終わった
+                Thread.Sleep(500);
+            }
+            if (File.Exists(MarkerFile(pid))) { try { File.Delete(MarkerFile(pid)); } catch (Exception) { } return 0; }
+            try { if (p != null && !p.HasExited) { p.Kill(); p.WaitForExit(10000); } } catch (Exception) { }
+            string err = Rollback(exe, newVer, oldVer, p == null || p.HasExited ? "が起動できなかった" : "が時間内に起動しなかった");
+            if (err != null) { try { File.WriteAllText(RollbackFile, err); } catch (Exception) { } return 1; }
+            try { Process.Start(exe, "/startup"); } catch (Exception) { }
+            return 1;
+        }
+
+        public static int GuardSeconds = 180;
 
         // ---------------- 確認と更新 ----------------
 
@@ -135,25 +231,42 @@ namespace AutoCopy
             string why = Acceptable(tmp, out v, out signer);
             if (why != null) { try { File.Delete(tmp); } catch (Exception) { } throw new InvalidOperationException("更新版を使えません：" + why); }
 
+            // 説明書・設定ファイル・証明書：先に手元へ「.new」としてコピーしておく（exe と食い違わないよう、そろってから入れ替える）
+            string from = Path.GetDirectoryName(c.Path);
+            List<string> staged = new List<string>();
+            foreach (string name in Related)
+            {
+                string f = Path.Combine(from, name);
+                if (!File.Exists(f)) continue;
+                string to = Path.Combine(dir, name) + ".new";
+                try { File.Copy(f, to, true); staged.Add(name); }
+                catch (Exception ex)
+                {
+                    foreach (string n in staged) { try { File.Delete(Path.Combine(dir, n) + ".new"); } catch (Exception) { } }
+                    try { File.Delete(tmp); } catch (Exception) { }
+                    throw new IOException("更新版の " + name + " をコピーできないため、更新を止めました: " + ex.Message, ex);
+                }
+            }
+
             string old = target + ".old";
             if (File.Exists(old)) File.Delete(old);
             File.Move(target, old);              // 動いている exe でも名前は変えられる
             try { File.Move(tmp, target); }
             catch
             {
-                try { File.Move(old, target); } catch (Exception) { }
+                try { File.Move(old, target); } catch (Exception rex) { Logger.Error(null, "更新に失敗し、前の版を戻せませんでした: " + rex.Message); }
                 throw;
             }
-            // 説明書・設定ファイル・証明書も新しいものがあれば入れ替える（なくても更新は続ける）
-            string from = Path.GetDirectoryName(c.Path);
-            foreach (string name in new string[] { "AutoCopy.exe.config", AppPaths.ManualFileName, AppPaths.CertFileName, AppPaths.CertInstallerName })
+            foreach (string name in staged)
             {
+                string f = Path.Combine(dir, name);
                 try
                 {
-                    string f = Path.Combine(from, name);
-                    if (File.Exists(f)) File.Copy(f, Path.Combine(dir, name), true);
+                    if (File.Exists(f + ".old")) File.Delete(f + ".old");
+                    if (File.Exists(f)) File.Move(f, f + ".old");
+                    File.Move(f + ".new", f);
                 }
-                catch (Exception) { }
+                catch (Exception ex) { Logger.Error(null, "更新：" + name + " を入れ替えられませんでした（前のものを使います）: " + ex.Message); }
             }
             return target;
         }

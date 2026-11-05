@@ -21,6 +21,19 @@ namespace AutoCopy
         public long ExcludedBytes;
         public List<string> ExcludedSamples = new List<string>();
         public List<string> Errors = new List<string>();
+        /// <summary>
+        /// 中を最後まで読めなかったフォルダ（相対パス。"" = いちばん上）。この中のファイルは「なくなった」とは限らないため、
+        /// ミラーの削除・同期の削除の候補・名前変更の判定・重複チェックの孤立ファイルの対象にしない。
+        /// </summary>
+        public List<string> FailedDirs = new List<string>();
+
+        /// <summary>rel が、読めなかったフォルダの中にあるか</summary>
+        public bool InFailedDir(string rel)
+        {
+            foreach (string d in FailedDirs)
+                if (d.Length == 0 || PathUtil.IsSameOrInsideRel(rel, d)) return true;
+            return false;
+        }
         public long TotalBytes;
     }
 
@@ -58,6 +71,7 @@ namespace AutoCopy
                 {
                     if (rel.Length == 0) throw;
                     res.Errors.Add(rel + ": " + ex.Message);
+                    res.FailedDirs.Add(rel);
                     continue;
                 }
                 try
@@ -82,7 +96,7 @@ namespace AutoCopy
                             if (onCount != null && (++seen % 500) == 0) onCount(seen);
                             long size = fi.Length;
                             DateTime mt = fi.LastWriteTimeUtc;
-                            if (name.EndsWith(".ckpart", StringComparison.OrdinalIgnoreCase)) continue;
+                            if (name.EndsWith(SafeFs.PartSuffix, StringComparison.OrdinalIgnoreCase) || name.EndsWith(SafeFs.AsideSuffix, StringComparison.OrdinalIgnoreCase)) continue;   // コピー作業中の一時ファイル
                             if (matcher != null && matcher.ExcludeFile(childRel, name, size, mt, a))
                             {
                                 res.ExcludedCount++;
@@ -104,6 +118,7 @@ namespace AutoCopy
                 {
                     if (rel.Length == 0 && res.Files.Count == 0 && res.Dirs.Count == 0) throw;
                     res.Errors.Add((rel.Length == 0 ? "(ルート)" : rel) + ": " + ex.Message);
+                    res.FailedDirs.Add(rel);   // 途中まで読めた：この中の残りは分からない
                 }
             }
             return res;

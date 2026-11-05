@@ -47,6 +47,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit 1 }
           (Get-Item dist-next\AutoCopy.exe).VersionInfo.FileVersion
 
+      - name: Build a broken newer version for the update rollback test (version 100, exits right after update)
+        shell: pwsh
+        run: |
+          $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+          New-Item -ItemType Directory -Force dist-bad | Out-Null
+          & $csc /nologo /target:winexe /platform:anycpu /optimize+ /codepage:65001 /define:UPDATETEST`;UPDATEFAIL /win32icon:app.ico /out:dist-bad\AutoCopy.exe `
+            /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Runtime.Serialization.dll /r:System.Xml.dll /r:System.Security.dll `
+            src\*.cs
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          (Get-Item dist-bad\AutoCopy.exe).VersionInfo.FileVersion
+
       - name: Build test runner
         shell: pwsh
         run: |

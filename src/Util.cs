@@ -42,21 +42,57 @@ namespace AutoCopy
             return Deserialize<T>(text);
         }
 
-        /// <summary>一時ファイルに書いてから置き換える（途中で落ちても壊れない）</summary>
+        /// <summary>
+        /// 一時ファイル（毎回違う名前）に書いて、ディスクに確定させてから置き換える（途中で落ちても壊れない）。
+        /// 前の内容は「.bak」として残す（読めなくなったときに戻せるように）。
+        /// </summary>
         public static void Save<T>(string path, T obj)
         {
             string dir = Path.GetDirectoryName(path);
             if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            string tmp = path + ".tmp";
-            File.WriteAllText(tmp, Serialize(obj), new UTF8Encoding(false));
-            if (File.Exists(path))
+            string tmp = path + "." + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp";
+            try
             {
-                File.Replace(tmp, path, null);
+                byte[] data = new UTF8Encoding(false).GetBytes(Serialize(obj));
+                using (FileStream fs = new FileStream(tmp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    fs.Write(data, 0, data.Length);
+                    fs.Flush(true);
+                }
+                if (File.Exists(path)) File.Replace(tmp, path, path + ".bak", true);
+                else File.Move(tmp, path);
             }
-            else
+            finally
             {
-                File.Move(tmp, path);
+                try { if (File.Exists(tmp)) File.Delete(tmp); } catch (Exception) { }
             }
+        }
+
+        /// <summary>
+        /// 読み込む。壊れていたら、壊れたファイルを「.corrupt-日時」として残し、前の内容（.bak）から戻す。
+        /// どちらも読めなければ null（problem に説明）。ファイルがないときは null で problem も null。
+        /// </summary>
+        public static T LoadSafe<T>(string path, out string problem) where T : class
+        {
+            problem = null;
+            if (!File.Exists(path) && !File.Exists(path + ".bak")) return null;
+            try { T v = Load<T>(path); if (v != null) return v; }
+            catch (Exception ex)
+            {
+                problem = Path.GetFileName(path) + " を読めませんでした（" + ex.Message + "）";
+                try { File.Copy(path, path + ".corrupt-" + DateTime.Now.ToString("yyyyMMddHHmmss"), true); } catch (Exception) { }
+            }
+            try
+            {
+                T b = Load<T>(path + ".bak");
+                if (b != null)
+                {
+                    problem = (problem ?? Path.GetFileName(path) + " がありませんでした") + "。前に保存した内容から戻しました";
+                    return b;
+                }
+            }
+            catch (Exception ex2) { problem = (problem ?? "") + "。前に保存した内容（.bak）も読めませんでした（" + ex2.Message + "）"; }
+            return null;
         }
     }
 

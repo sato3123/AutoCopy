@@ -261,13 +261,18 @@ namespace AutoCopy
                 all.Font = Ui.Bold;
                 kinds.Items.Add(all);
                 if (kindFilter == null) all.Selected = true;
-                foreach (string k in PlanKind.All)
+                // 危険な操作（削除・上書き・確認待ち）を上に並べる
+                foreach (string k in KindOrder)
                 {
                     int c;
                     if (!kindCount.TryGetValue(k, out c)) continue;
-                    ListViewItem it = new ListViewItem(k);
+                    long bytes = kindBytes[k];
+                    long[] full;
+                    lock (r.Plan) { if (r.PlanCounts.TryGetValue(k, out full)) { c = (int)full[0]; bytes = full[1]; } }
+                    ListViewItem it = new ListViewItem((IsDanger(k) ? "⚠ " : "") + k);
                     it.SubItems.Add(Fmt.Count(c));
-                    it.SubItems.Add(Fmt.Size(kindBytes[k]));
+                    it.SubItems.Add(Fmt.Size(bytes));
+                    if (IsDanger(k)) it.Font = Ui.Bold;
                     it.Tag = k;
                     it.ForeColor = KindColor(k);
                     kinds.Items.Add(it);
@@ -281,6 +286,17 @@ namespace AutoCopy
                 if (kindFilter == "__none") un.Selected = true;
             }
             finally { kinds.EndUpdate(); fillingKinds = false; }
+        }
+
+        /// <summary>一覧の種類の並び：削除・上書き・確認待ちなど、確かめたいものを先に</summary>
+        private static readonly string[] KindOrder = {
+            PlanKind.Delete, PlanKind.Hold, PlanKind.SyncDelete, PlanKind.Overwrite, PlanKind.Conflict, PlanKind.DedupAsk,
+            PlanKind.Copy, PlanKind.Rename, PlanKind.SyncIn, PlanKind.Dedup, PlanKind.Skip, PlanKind.SyncNotTaken, PlanKind.SyncNotPushed,
+            PlanKind.Same, PlanKind.Deferred, PlanKind.Excluded };
+
+        private static bool IsDanger(string k)
+        {
+            return k == PlanKind.Delete || k == PlanKind.Hold || k == PlanKind.SyncDelete || k == PlanKind.Overwrite || k == PlanKind.Conflict;
         }
 
         private void ShowSummary(RunResult r)
@@ -298,8 +314,27 @@ namespace AutoCopy
                 + (r.SyncNotPushed > 0 ? "・共有へ送らない（設定）" + Fmt.Count(r.SyncNotPushed) + "件" : "")
                 + "・除外 " + Fmt.Count(r.Excluded) + "件"
                 + (r.Excluded > 5000 ? "（一覧は最初の5,000件）" : "")
+                + (r.PlanTruncated ? "　※件数が多いため、一覧は最初の " + Fmt.Count(RunResult.PlanLimit) + "件まで（左の件数・容量はすべて）" : "")
+                + DangerText(r)
                 + "　" + DateTime.Now.ToString("HH:mm") + " 時点";
-            summary.ForeColor = r.Conflicts > 0 || r.Deleted > 0 ? Ui.Warn : SystemColors.WindowText;
+            long del = Count(r, PlanKind.Delete) + Count(r, PlanKind.Hold) + Count(r, PlanKind.SyncDelete);
+            summary.ForeColor = del > 0 ? Ui.Err : r.Conflicts > 0 || Count(r, PlanKind.Overwrite) > 0 ? Ui.Warn : SystemColors.WindowText;
+        }
+
+        private static long Count(RunResult r, string k)
+        {
+            long[] c;
+            lock (r.Plan) return r.PlanCounts.TryGetValue(k, out c) ? c[0] : 0;
+        }
+
+        /// <summary>削除・上書き・確認待ちがあれば、目立つように書き足す</summary>
+        private static string DangerText(RunResult r)
+        {
+            long del = Count(r, PlanKind.Delete), hold = Count(r, PlanKind.Hold), sd = Count(r, PlanKind.SyncDelete), ow = Count(r, PlanKind.Overwrite), cf = Count(r, PlanKind.Conflict);
+            if (del + hold + sd + ow + cf == 0) return "";
+            return "\n⚠ 確かめてください：" + (del > 0 ? "削除 " + Fmt.Count(del) + "件　" : "") + (hold > 0 ? "削除の保留 " + Fmt.Count(hold) + "件　" : "")
+                + (sd > 0 ? "同期の削除の確認 " + Fmt.Count(sd) + "件　" : "") + (ow > 0 ? "上書き " + Fmt.Count(ow) + "件　" : "") + (cf > 0 ? "確認待ち " + Fmt.Count(cf) + "件　" : "")
+                + "（左の「⚠」の種類をクリックすると、そのファイルだけを表示します）";
         }
 
         private static Color KindColor(string k)

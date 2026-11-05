@@ -293,7 +293,8 @@ namespace AutoCopy
             if (!Ui.Confirm(this, rels.Count + "件（" + Fmt.Size(bytes) + "）を、「" + FolderDup.TrashFolder(result.Root) + "\\日時」へ移します。\n消さずに移すだけなので、元に戻せます。よろしいですか？")) return;
             string root = result.Root;
             int moved = 0;
-            List<string> errs = Ui.Busy<List<string>>(this, "移しています…", delegate() { int m; List<string> e = FolderDup.MoveAway(root, rels, out m); moved = m; return e; });
+            List<FolderDupGroup> groups = result.Groups;
+            List<string> errs = Ui.Busy<List<string>>(this, "中身を確かめて移しています…", delegate() { int m; List<string> e = FolderDup.MoveAway(root, groups, rels, out m); moved = m; return e; });
             // 移したものを一覧から外す
             HashSet<string> done = new HashSet<string>(rels, StringComparer.OrdinalIgnoreCase);
             foreach (string e in errs) { int k = e.IndexOf('：'); if (k > 0) done.Remove(e.Substring(0, k)); }

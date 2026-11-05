@@ -14,6 +14,11 @@ namespace AutoCopy
         public int SyncDeleteCandidates;   // 同期：削除の確認待ち
         public int SyncNotTaken;           // 同期：共有フォルダにだけあるが、設定により取り込まなかった
         public int SyncNotPushed;          // 同期：このPCにだけあるが、設定により共有フォルダへコピーしなかった
+        public int ScanFailedDirs;         // 読めなかったフォルダの数（この中は削除の対象にしない）
+        public bool RemoteScanSkipped;     // 同期：共有フォルダの詳しい確認を省略した（前回の結果を使った）
+
+        /// <summary>結果の分類：成功／一部失敗（エラー・読めないフォルダあり）。中断・失敗は呼び出し側で決める</summary>
+        public string Outcome { get { return Errors > 0 || ScanFailedDirs > 0 ? JobOutcome.Partial : JobOutcome.Success; } }
         public int SyncDeleteNew;          // うち今回新しく見つかったもの
 
         public int PlannedCopyCount, Scanned, Copied, Overwritten, Renamed, Conflicts, Deleted, Errors, Locked, Excluded, Deferred, PendingDeletes, SameAdopted;
@@ -26,6 +31,10 @@ namespace AutoCopy
         public List<string> PlannedDownloadList = new List<string>();
         /// <summary>実行したらどうなるか（コピーせずに確かめたときだけ記録する）</summary>
         public List<PlanItem> Plan = new List<PlanItem>();
+        /// <summary>予測の種類ごとの件数・容量（一覧の上限を超えた分も数える）</summary>
+        public Dictionary<string, long[]> PlanCounts = new Dictionary<string, long[]>();
+        public bool PlanTruncated;   // 一覧が上限（PlanLimit）を超えたため、一部だけ載せた
+        public const int PlanLimit = 200000;
         public int Unchanged;     // 変わっていないため何もしないファイル
         public long Bytes;
         public long DeleteBytes;
@@ -129,7 +138,14 @@ namespace AutoCopy
         private void AddPlan(PlanItem p)
         {
             if (!dryRun || current == null) return;
-            lock (current.Plan) { if (current.Plan.Count < 500000) current.Plan.Add(p); }
+            lock (current.Plan)
+            {
+                long[] c;
+                if (!current.PlanCounts.TryGetValue(p.Kind, out c)) { c = new long[2]; current.PlanCounts[p.Kind] = c; }
+                c[0]++; c[1] += Math.Max(0, p.Size >= 0 ? p.Size : p.DstSize);
+                // 一覧は上限まで（大量のファイルでもメモリを使いすぎない）。件数・容量はすべて数える
+                if (current.Plan.Count < RunResult.PlanLimit) current.Plan.Add(p); else current.PlanTruncated = true;
+            }
         }
 
         // 判定したときに予測の一覧にも載せる（結果の予測の画面で、調べている途中から順に見えるように）
@@ -219,7 +235,8 @@ namespace AutoCopy
             dst = ResolvedDest(job, app);
             tol = TimeSpan.FromSeconds(Math.Max(0, job.ToleranceSeconds)).Ticks;
 
-            string v = Validate(job, app, new JobConfig[0]);
+            // 実行の直前にも、全ジョブのコピー元・コピー先が重なっていないかを確かめる（設定ファイルを直接直した場合など）
+            string v = Validate(job, app, app.Jobs != null ? app.Jobs.ToArray() : new JobConfig[0]);
             if (v != null) throw new InvalidOperationException(v);
 
             // --- アクセス確保 ---
@@ -251,7 +268,8 @@ namespace AutoCopy
             res.ExcludedBytes = scan.ExcludedBytes;
             res.ExcludedSamples = scan.ExcludedSamples;
             if (!dryRun)
-                foreach (string e in scan.Errors) Logger.Write(job.Name, "ERROR", "読めないフォルダ: " + e, -1, -1);
+                foreach (string e in scan.Errors) Logger.Write(job.Name, "ERROR", "【" + ErrorKind.Label(ErrorKind.AccessDenied) + "】読めないフォルダ: " + e + "（この中のファイルは、なくなったとはみなさず、削除の対象にしません）", -1, -1);
+            res.ScanFailedDirs = scan.FailedDirs.Count;
 
             Dictionary<string, FileRecord> files;
             HashSet<string> skipForever;
@@ -262,7 +280,16 @@ namespace AutoCopy
             }
 
             List<string> missing = new List<string>();
-            foreach (string k in files.Keys) if (!scan.Files.ContainsKey(k)) missing.Add(k);
+            int unknown = 0;
+            foreach (string k in files.Keys)
+            {
+                if (scan.Files.ContainsKey(k)) continue;
+                // 読めなかったフォルダの中のファイルは「なくなった」とは限らない → 削除・名前変更の対象にしない（記録もそのまま）
+                if (scan.InFailedDir(k)) { unknown++; continue; }
+                missing.Add(k);
+            }
+            if (unknown > 0 && !dryRun)
+                Logger.Write(job.Name, "INFO", "読めなかったフォルダの中の " + unknown + "件は、なくなったとはみなさず、削除の対象にしませんでした", -1, -1);
             List<string> added = new List<string>();
             foreach (KeyValuePair<string, ScanItem> kv in scan.Files)
                 if (!files.ContainsKey(kv.Key) && !kv.Value.Recent) added.Add(kv.Key);
@@ -281,8 +308,25 @@ namespace AutoCopy
             if (job.Sync)
             {
                 // 同期：共有フォルダも調べて、両方向の変更を判定する
-                Progress.SetPhase("共有フォルダを調べています");
-                remote = Directory.Exists(PathUtil.Long(dst)) ? Scanner.Scan(dst, job.IncludeSubdirs, matcher, true, ct) : new ScanResult();
+                // 共有フォルダの詳しい確認は時間がかかる：前回の確認から一定時間以内で、どのPCも共有フォルダを変えていなければ
+                // （共有フォルダの「変更の印」が同じなら）、前回の確認の結果を使う
+                string stamp = SyncRemoteCache.ReadStamp(dst);
+                SyncRemoteCache.Entry ce = SyncRemoteCache.Get(job.Id, dst);
+                bool reuse = !FullVerify && job.SyncRemoteCacheMinutes > 0 && ce != null && stamp != null && stamp == ce.Stamp
+                    && (DateTime.Now - ce.FullScanAt).TotalMinutes < job.SyncRemoteCacheMinutes;
+                if (reuse)
+                {
+                    remote = ce.CopyRemote();
+                    res.RemoteScanSkipped = true;
+                    if (!dryRun) Logger.Write(job.Name, "INFO", "共有フォルダは前回の確認（" + ce.FullScanAt.ToString("HH:mm") + "）から変わっていないため、詳しい確認を省略しました", -1, -1);
+                }
+                else
+                {
+                    Progress.SetPhase("共有フォルダを調べています");
+                    remote = Directory.Exists(PathUtil.Long(dst)) ? Scanner.Scan(dst, job.IncludeSubdirs, matcher, true, ct) : new ScanResult();
+                    if (!dryRun && stamp != null && remote.FailedDirs.Count == 0) SyncRemoteCache.Put(job.Id, dst, remote, stamp);
+                    else if (!dryRun) SyncRemoteCache.Invalidate(job.Id);
+                }
                 Progress.SetPhase("変更を判定しています");
                 PlanSync(scan, remote, files, skipForever, tasks, downloads, conflicts, res);
             }
@@ -404,6 +448,7 @@ namespace AutoCopy
                 Progress.SetPhase("コピー中");
                 ExecuteCopies(tasks, res);
                 if (downloads.Count > 0) { Progress.SetPhase("共有フォルダから取り込み中"); ExecuteDownloads(downloads, res); }
+                if (job.Sync && tasks.Count > 0) AfterSyncUpload(tasks);
                 if (placeholders.Count > 0) { Progress.SetPhase("重複のテキストを置いています"); WritePlaceholders(placeholders, res); }
             }
 
@@ -413,7 +458,7 @@ namespace AutoCopy
                 // 同期：削除は伝えない。共有フォルダにまだあるものは記録を残す（このPCで消したものを取り込み直さないため）
                 if (!dryRun)
                 {
-                    lock (state) { foreach (string m in missing) if (!remote.Files.ContainsKey(m)) state.Files.Remove(m); }
+                    lock (state) { foreach (string m in missing) if (!remote.Files.ContainsKey(m) && !remote.InFailedDir(m)) state.Files.Remove(m); }
                     res.SyncDeleteNew = SyncDeleteStore.Replace(job.Id, SyncCandidates);
                 }
             }
@@ -772,7 +817,7 @@ namespace AutoCopy
                     FileRecord rec = new FileRecord();
                     rec.Size = p.Item.Size; rec.Mtime = p.Item.Mtime; rec.Hash = h; rec.CopiedByApp = true;
                     rec.PlaceholderOf = p.Target;
-                    try { rec.DestMtime = File.GetLastWriteTimeUtc(PathUtil.Long(ph)).Ticks; } catch (Exception) { }
+                    try { rec.DestMtime = File.GetLastWriteTimeUtc(PathUtil.Long(ph)).Ticks; } catch (Exception ex) { Logger.Error(job.Name, "更新日時を読めません: " + ph + "　" + ex.Message); }
                     lock (state) { state.Files[p.Rel] = rec; }
                     Logger.Write(job.Name, "DEDUP", p.Rel + " → " + p.Target + "（中身が同じため、コピーせず場所を書いたテキストを置きました）", p.Item.Size, -1);
                     res.Deduped++;
@@ -807,6 +852,8 @@ namespace AutoCopy
             {
                 ct.ThrowIfCancellationRequested();
                 if (skip.Contains(rel)) continue;
+                // どちらかで読めなかったフォルダの中は、あるかないか分からないため、何もしない（削除の候補にも、コピーにもしない）
+                if (local.InFailedDir(rel) || remote.InFailedDir(rel)) continue;
                 ScanItem L, S;
                 local.Files.TryGetValue(rel, out L);
                 remote.Files.TryGetValue(rel, out S);
@@ -879,6 +926,29 @@ namespace AutoCopy
             }
         }
 
+        /// <summary>
+        /// 同期：共有フォルダへコピーした後、前回の確認の結果（覚えている一覧）にも反映し、共有フォルダの「変更の印」を新しくする
+        /// （他のPCは印が変わったことで、次は詳しく確認する）
+        /// </summary>
+        private void AfterSyncUpload(List<CopyTask> ups)
+        {
+            List<KeyValuePair<string, ScanItem>> done = new List<KeyValuePair<string, ScanItem>>();
+            foreach (CopyTask t in ups)
+            {
+                try
+                {
+                    FileInfo fi = new FileInfo(PathUtil.Long(PathUtil.Combine(dst, t.Rel)));
+                    if (!fi.Exists) continue;
+                    ScanItem it = new ScanItem(); it.Size = fi.Length; it.Mtime = fi.LastWriteTimeUtc.Ticks; it.Attr = fi.Attributes;
+                    done.Add(new KeyValuePair<string, ScanItem>(t.Rel, it));
+                }
+                catch (Exception ex) { Logger.Error(job.Name, "共有フォルダの確認: " + t.Rel + "　" + ex.Message); SyncRemoteCache.Invalidate(job.Id); }
+            }
+            if (done.Count == 0) return;
+            string ns = SyncRemoteCache.TouchStamp(dst);
+            SyncRemoteCache.Update(job.Id, done, ns);
+        }
+
         /// <summary>同期：削除の確認待ち（今回の判定で見つかったもの）</summary>
         public readonly List<SyncDeleteItem> SyncCandidates = new List<SyncDeleteItem>();
 
@@ -938,16 +1008,15 @@ namespace AutoCopy
                 }
                 catch (SourceProtectedException) { throw; }
                 catch (OperationCanceledException) { throw; }
-                catch (IOException ex)
-                {
-                    bool locked = IsSharingViolation(ex);
-                    Logger.Write(job.Name, "ERROR", d.Rel + "　" + (locked ? "使用中のため次回に取り込みます" : "取り込めません: " + ex.Message), d.Item.Size, -1);
-                    if (locked) res.Locked++; else res.Errors++;
-                }
                 catch (Exception ex)
                 {
-                    Logger.Write(job.Name, "ERROR", d.Rel + "　取り込めません: " + ex.Message, d.Item.Size, -1);
-                    res.Errors++;
+                    string kind = ErrorKind.Classify(ex);
+                    if (kind == ErrorKind.NotFound) SyncRemoteCache.Invalidate(job.Id);   // 前回の確認の後で消えた：次は詳しく確認する
+                    bool later = kind == ErrorKind.Locked || kind == ErrorKind.Changed || kind == ErrorKind.NotFound || IsSharingViolation(ex as IOException);
+                    Logger.Write(job.Name, "ERROR", d.Rel + "　" + (later ? "【" + ErrorKind.Label(kind == ErrorKind.Changed || kind == ErrorKind.NotFound ? kind : ErrorKind.Locked) + "】次回に取り込みます" : "取り込めません: " + ErrorKind.Describe(ex)), d.Item.Size, -1);
+                    if (later) res.Locked++; else res.Errors++;
+                    if (ErrorKind.IsFatal(kind))
+                        throw new JobAbortException(kind, (kind == ErrorKind.DiskFull ? "このPCの容量が足りないため、取り込みを止めました" : "ネットワークが切断されたため、取り込みを止めました") + "（" + ex.Message + "）", ex);
                 }
             }
         }
@@ -963,7 +1032,7 @@ namespace AutoCopy
                 DateTime t;
                 if (!DateTime.TryParseExact(Path.GetFileName(dir), "yyyyMMdd-HHmmss", System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.None, out t) || t >= limit) continue;
-                try { Directory.Delete(dir, true); } catch (Exception) { }
+                try { Directory.Delete(dir, true); } catch (Exception ex) { Logger.Error(job.Name, "古い控えを片付けられません: " + dir + "　" + ex.Message); }
             }
         }
 
@@ -989,12 +1058,27 @@ namespace AutoCopy
                     string s = PathUtil.Combine(src, t.Rel), d = PathUtil.Combine(dst, t.Rel);
                     ActiveFile af = Progress.Begin(t.Rel, t.Item.Size, t.Overwrite ? "上書き" : "コピー");
                     bool fileOk = false;
+                    string backedUp = null;
                     try
                     {
                         if (t.Overwrite && job.BackupBeforeOverwrite && File.Exists(PathUtil.Long(d)))
-                            SafeFs.MoveToTrash(dst, t.Rel, "退避", batch);
-                        byte[] hash = SafeFs.CopyFile(s, d, new DateTime(t.Item.Mtime, DateTimeKind.Utc), throttle, stopAll.Token,
-                            delegate(long done) { Progress.Bytes(af, done); });
+                            backedUp = SafeFs.MoveToTrash(dst, t.Rel, "退避", batch);
+                        byte[] hash;
+                        try
+                        {
+                            hash = SafeFs.CopyFile(s, d, new DateTime(t.Item.Mtime, DateTimeKind.Utc), throttle, stopAll.Token,
+                                delegate(long done) { Progress.Bytes(af, done); });
+                        }
+                        catch
+                        {
+                            // 上書きに失敗：退避した元のファイルをコピー先に戻す（コピー先を空にしない）
+                            if (backedUp != null && !File.Exists(PathUtil.Long(d)))
+                            {
+                                try { SafeFs.Move(backedUp, d); }
+                                catch (Exception rex) { Logger.Write(job.Name, "ERROR", t.Rel + "　上書きに失敗し、元のファイルを戻せませんでした（退避に残っています: " + PathUtil.Plain(backedUp) + "）: " + rex.Message, -1, -1); }
+                            }
+                            throw;
+                        }
                         fileOk = true;
                         FileRecord old;
                         lock (state) state.Files.TryGetValue(t.Rel, out old);
@@ -1031,16 +1115,18 @@ namespace AutoCopy
                         stopAll.Cancel();
                     }
                     catch (OperationCanceledException) { }
-                    catch (IOException ex)
-                    {
-                        bool locked = IsSharingViolation(ex);
-                        Logger.Write(job.Name, "ERROR", t.Rel + "　" + (locked ? "使用中のため次回に回します" : ex.Message), t.Item.Size, -1);
-                        lock (resLock) { if (locked) res.Locked++; else res.Errors++; }
-                    }
                     catch (Exception ex)
                     {
-                        Logger.Write(job.Name, "ERROR", t.Rel + "　" + ex.Message, t.Item.Size, -1);
-                        lock (resLock) { res.Errors++; }
+                        string kind = ErrorKind.Classify(ex);
+                        bool later = kind == ErrorKind.Locked || kind == ErrorKind.Changed || IsSharingViolation(ex as IOException);
+                        Logger.Write(job.Name, "ERROR", t.Rel + "　" + (later ? "【" + ErrorKind.Label(kind == ErrorKind.Changed ? kind : ErrorKind.Locked) + "】次回に回します" : ErrorKind.Describe(ex)), t.Item.Size, -1);
+                        lock (resLock) { if (later) res.Locked++; else res.Errors++; }
+                        if (ErrorKind.IsFatal(kind))
+                        {
+                            // ネットワークの切断・容量不足：続けても失敗するだけなので、ジョブを止める
+                            lock (resLock) { if (fatal == null) fatal = new JobAbortException(kind, (kind == ErrorKind.DiskFull ? "コピー先の容量が足りないため、コピーを止めました" : "ネットワークが切断されたため、コピーを止めました") + "（" + ex.Message + "）", ex); }
+                            stopAll.Cancel();
+                        }
                     }
                     finally { Progress.End(af, fileOk); }
                 });
@@ -1055,6 +1141,7 @@ namespace AutoCopy
 
         private static bool IsSharingViolation(IOException ex)
         {
+            if (ex == null) return false;
             int code = System.Runtime.InteropServices.Marshal.GetHRForException(ex) & 0xFFFF;
             return code == 32 || code == 33; // ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION
         }
@@ -1326,7 +1413,9 @@ namespace AutoCopy
             {
                 SyncDeleteBook b;
                 if (cache.TryGetValue(jobId, out b)) return b;
-                try { if (File.Exists(PathFor(jobId))) b = Json.Load<SyncDeleteBook>(PathFor(jobId)); } catch (Exception) { }
+                string problem;
+                b = Json.LoadSafe<SyncDeleteBook>(PathFor(jobId), out problem);
+                if (problem != null) Logger.Error(null, "同期の削除の確認：" + problem + "（候補は次の実行で見つけ直します。削除はしません）");
                 if (b == null) b = new SyncDeleteBook();
                 if (b.Items == null) b.Items = new List<SyncDeleteItem>();
                 cache[jobId] = b;
@@ -1349,7 +1438,16 @@ namespace AutoCopy
         public static void Save(string jobId)
         {
             SyncDeleteBook b = Get(jobId);
-            lock (b) { try { Directory.CreateDirectory(AppPaths.StateDir); Json.Save(PathFor(jobId), b); } catch (Exception) { } }
+            // 保存できなければ例外にする（握りつぶさない）：実行はエラーとして知らせ、確認の画面ではエラーを表示する
+            lock (b)
+            {
+                try { Directory.CreateDirectory(AppPaths.StateDir); Json.Save(PathFor(jobId), b); }
+                catch (Exception ex)
+                {
+                    Logger.Error(null, "同期の削除の確認を保存できません: " + ex.Message);
+                    throw new IOException("同期の削除の確認を保存できませんでした（" + ex.Message + "）。削除・取り込みは行っていません。", ex);
+                }
+            }
         }
 
         /// <summary>今回の判定の結果で置き換える（見つけた日時は前のものを引き継ぐ）。新しく見つかった件数を返す。</summary>
@@ -1391,7 +1489,99 @@ namespace AutoCopy
         public static void Forget(string jobId)
         {
             lock (cache) cache.Remove(jobId);
-            try { File.Delete(PathFor(jobId)); } catch (Exception) { }
+            try { File.Delete(PathFor(jobId)); File.Delete(PathFor(jobId) + ".bak"); }
+            catch (Exception ex) { Logger.Error(null, "同期の削除の確認のファイルを消せません: " + ex.Message); }
+        }
+    }
+
+    /// <summary>
+    /// 同期：共有フォルダの一覧（前回の詳しい確認の結果）を覚えておき、時間のかかる確認を省略できるようにする。
+    /// 共有フォルダの「_AutoCopy\sync-stamp.txt」（変更の印）は、どのPCでも共有フォルダを変えたら新しくする。
+    /// 印が前回と同じで、前回の詳しい確認から決めた時間以内なら、前回の結果を使う。
+    /// （自動コピー以外の方法で共有フォルダを直接変えた場合は、決めた時間がたってから反映される）
+    /// </summary>
+    public static class SyncRemoteCache
+    {
+        public class Entry
+        {
+            public string Root;
+            public ScanResult Remote;
+            public DateTime FullScanAt;
+            public string Stamp;
+
+            public ScanResult CopyRemote()
+            {
+                ScanResult r = new ScanResult();
+                lock (this)
+                {
+                    foreach (KeyValuePair<string, ScanItem> kv in Remote.Files)
+                    {
+                        ScanItem it = new ScanItem(); it.Size = kv.Value.Size; it.Mtime = kv.Value.Mtime; it.Attr = kv.Value.Attr; it.Recent = false;
+                        r.Files[kv.Key] = it;
+                    }
+                    foreach (string d in Remote.Dirs) r.Dirs.Add(d);
+                }
+                return r;
+            }
+        }
+
+        private static readonly Dictionary<string, Entry> cache = new Dictionary<string, Entry>();
+        public const string StampName = "sync-stamp.txt";
+
+        private static string StampPath(string dst) { return PathUtil.Combine(PathUtil.Combine(dst, AppPaths.DestMetaFolder), StampName); }
+
+        /// <summary>共有フォルダの変更の印（ない = ""、読めない = null）</summary>
+        public static string ReadStamp(string dst)
+        {
+            try
+            {
+                string p = PathUtil.Long(StampPath(dst));
+                return File.Exists(p) ? File.ReadAllText(p).Trim() : "";
+            }
+            catch (Exception ex) { Logger.Error(null, "共有フォルダの変更の印を読めません（毎回詳しく確認します）: " + ex.Message); return null; }
+        }
+
+        /// <summary>共有フォルダを変えたので、印を新しくする（他のPCが次に詳しく確認するように）</summary>
+        public static string TouchStamp(string dst)
+        {
+            string v = Guid.NewGuid().ToString("N") + "|" + Environment.MachineName + "|" + DateTime.UtcNow.ToString("o");
+            try { SafeFs.WriteText(StampPath(dst), v); SafeFs.HideMeta(dst); return v; }
+            catch (Exception ex) { Logger.Error(null, "共有フォルダの変更の印を書けません: " + ex.Message); return null; }
+        }
+
+        public static Entry Get(string jobId, string dst)
+        {
+            lock (cache)
+            {
+                Entry e;
+                if (cache.TryGetValue(jobId, out e) && string.Equals(e.Root, dst, StringComparison.OrdinalIgnoreCase)) return e;
+                return null;
+            }
+        }
+
+        public static void Put(string jobId, string dst, ScanResult remote, string stamp)
+        {
+            Entry e = new Entry();
+            e.Root = dst; e.Remote = remote; e.FullScanAt = DateTime.Now; e.Stamp = stamp;
+            lock (cache) cache[jobId] = e;
+        }
+
+        /// <summary>自分で共有フォルダへコピーしたものを、覚えている一覧に反映する（印も自分が書いた新しいものにする）</summary>
+        public static void Update(string jobId, List<KeyValuePair<string, ScanItem>> items, string newStamp)
+        {
+            Entry e;
+            lock (cache) { if (!cache.TryGetValue(jobId, out e)) return; }
+            if (newStamp == null) { Invalidate(jobId); return; }
+            lock (e)
+            {
+                foreach (KeyValuePair<string, ScanItem> kv in items) e.Remote.Files[kv.Key] = kv.Value;
+                e.Stamp = newStamp;
+            }
+        }
+
+        public static void Invalidate(string jobId)
+        {
+            lock (cache) cache.Remove(jobId);
         }
     }
 }

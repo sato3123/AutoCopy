@@ -427,7 +427,7 @@ namespace AutoCopy
         {
             if (current == null || current.Seen || currentJob == null) return;
             current.Seen = true;
-            try { Json.Save(DupChecker.ResultPath(currentJob.Id), current); } catch (Exception) { }
+            try { Json.Save(DupChecker.ResultPath(currentJob.Id), current); } catch (Exception ex) { Logger.Error(currentJob.Name, "重複チェックの結果を保存できません: " + ex.Message); }
             AppCore.RaiseChanged();
         }
 
@@ -761,21 +761,33 @@ namespace AutoCopy
             if (sel.Count == 0) { Ui.Info(this, "削除するものにチェックを入れてください。"); return; }
             if (!Ui.Confirm(this, Fmt.Count(n) + "件（" + Fmt.Size(bytes) + "）をコピー先から削除します。\n削除したものは「_AutoCopy\\削除済み」に " + AppCore.Settings.TrashDays + "日間残ります。よろしいですか？")) return;
             JobConfig job = currentJob;
+            string busy = AppCore.BeginResolve(job);
+            if (busy != null) { Ui.Info(this, busy); return; }
+            List<string> skipped = new List<string>();
+            DupResult cur = current;
             try
             {
-                int done = Ui.Busy<int>(this, "削除しています…", delegate()
+                int done = Ui.Busy<int>(this, "中身を確かめて削除しています…", delegate()
                 {
-                    int r = DupChecker.DeleteSelected(job, AppCore.Settings, AppCore.GetState(job.Id), sel);
+                    List<DupEntry> ok = DupChecker.VerifyBeforeDelete(job, AppCore.Settings, cur, sel, skipped);
+                    int r = DupChecker.DeleteSelected(job, AppCore.Settings, AppCore.GetState(job.Id), ok);
                     AppCore.SaveState(job.Id);
                     return r;
                 });
+                if (skipped.Count > 0)
+                {
+                    HashSet<string> sk = new HashSet<string>(skipped, StringComparer.OrdinalIgnoreCase);
+                    sel.RemoveAll(delegate(DupEntry x) { return sk.Contains(x.Rel); });
+                    Ui.Info(this, skipped.Count + "件は、今の名前のファイルと中身が同じでなかったため、削除しませんでした。");
+                }
                 // 結果から消す
                 foreach (DupGroup g in current.Groups) g.Entries.RemoveAll(delegate(DupEntry x) { return sel.Contains(x); });
                 current.Groups.RemoveAll(delegate(DupGroup g) { return g.Entries.Count < 2 && g.Kind != "orphan" && g.Kind != "empty" || g.Entries.Count == 0; });
-                try { Json.Save(DupChecker.ResultPath(job.Id), current); } catch (Exception) { }
+                try { Json.Save(DupChecker.ResultPath(job.Id), current); } catch (Exception ex) { Logger.Error(job.Name, "重複チェックの結果を保存できません: " + ex.Message); }
                 Ui.Info(this, Fmt.Count(done) + "件を削除しました（削除済みフォルダへ移動）。");
             }
             catch (Exception ex) { Ui.Error(this, ex.Message); }
+            finally { AppCore.EndResolve(job); }
             LoadResult();
         }
     }

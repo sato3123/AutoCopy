@@ -224,15 +224,29 @@ namespace AutoCopy
             }
             Logger.Write(null, "UPDATE", old + " → " + c.Version + "（" + c.Path + "）", -1, -1);
             Logger.Flush();
+            System.Diagnostics.Process np;
             try
             {
-                System.Diagnostics.Process.Start(exe, "/updated " + System.Diagnostics.Process.GetCurrentProcess().Id + " " + old);
+                np = System.Diagnostics.Process.Start(exe, "/updated " + System.Diagnostics.Process.GetCurrentProcess().Id + " " + old);
             }
             catch (Exception ex)
             {
-                Logger.Error(null, "新しい版を起動できませんでした：" + ex.Message);
+                // 新しい版を起動できない：前の版に戻して、このまま動き続ける
+                string rb = Updater.Rollback(exe, c.Version.ToString(), old.ToString(), "を起動できなかった（" + ex.Message + "）");
+                Logger.Error(null, "新しい版を起動できませんでした：" + ex.Message + (rb != null ? "　" + rb : "　前の版に戻しました"));
+                AppCore.Notify(NoticeLevel.Warning, "更新できませんでした", "新しい版を起動できなかったため、前の版に戻しました。" + ex.Message, "log", null);
                 return;
             }
+            // 見張り役：前の版（.old）を起動しておき、新しい版が起動できなかったら前の版に戻してもらう
+            try
+            {
+                System.Diagnostics.ProcessStartInfo gi = new System.Diagnostics.ProcessStartInfo(exe + ".old",
+                    "/updateguard " + np.Id + " \"" + exe + "\" " + old + " " + c.Version + " " + System.Diagnostics.Process.GetCurrentProcess().Id);
+                gi.UseShellExecute = false;   // 拡張子が .old でも起動できるように
+                gi.CreateNoWindow = true;
+                System.Diagnostics.Process.Start(gi);
+            }
+            catch (Exception ex) { Logger.Error(null, "更新の見張り役を起動できませんでした（更新は続けます）: " + ex.Message); }
             AppCore.Stop();
             icon.Visible = false;
             SingleInstance.Release();

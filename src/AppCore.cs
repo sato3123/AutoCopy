@@ -75,6 +75,10 @@ namespace AutoCopy
         public bool DupStartupDone;        // 「ログオン時」の重複チェックを、今回の起動で済ませたか
         public string CatchUpNote;         // 止まっている間に予定が過ぎたため、起動後に実行するときの説明
         public bool StartupRunDone;        // 「ログオン時のみ」のジョブを、今回の起動で実行したか
+        public string Outcome = "";        // 成功／一部失敗／中断／失敗（JobOutcome）
+        public bool QueuedManual;          // 手動で実行を頼まれたが、同じフォルダを使う別のジョブが終わるのを待っている
+        public string WaitingFor;          // 待っている相手のジョブ名
+        public volatile bool Resolving;    // 確認の画面で処理している（上書き・削除の確認など）。この間は実行しない
     }
 
     /// <summary>アプリの中心。スケジュール、ジョブの実行、通知を受け持つ。</summary>
@@ -167,7 +171,20 @@ namespace AutoCopy
         private static JobState GetStateNoLock(string id)
         {
             JobState s;
-            if (!states.TryGetValue(id, out s)) { s = JobState.Load(id); states[id] = s; }
+            if (!states.TryGetValue(id, out s))
+            {
+                s = JobState.Load(id);
+                states[id] = s;
+                if (s.LoadProblem != null)
+                {
+                    // 状態ファイルが壊れていた：知らせる（ロックの外で）
+                    string msg = s.LoadProblem;
+                    JobConfig j = null;
+                    foreach (JobConfig x in Settings.Jobs) if (x.Id == id) j = x;
+                    string name = j != null ? j.Name : id;
+                    Task.Factory.StartNew(delegate() { Notify(NoticeLevel.Warning, name + "：状態ファイルを読めませんでした", msg, "log", j != null ? j.Id : null); });
+                }
+            }
             return s;
         }
 
@@ -232,6 +249,8 @@ namespace AutoCopy
                     if (rt.PausedUntil.HasValue && now >= rt.PausedUntil.Value) rt.PausedUntil = null;
                     if (!j.Enabled || IsPaused(j.Id)) continue;
                     string dupNote;
+                    // 手動で頼まれていたが、同じフォルダを使う別のジョブを待っていたもの
+                    if (rt.QueuedManual && !rt.Running && !rt.DupRunning) { RunJob(j.Id, true, false); continue; }
                     if (!rt.Running && !rt.DupRunning && now >= rt.NextRun && TimeUtil.InWindow(j, now) && !(j.StartupOnly && rt.StartupRunDone))
                     {
                         if (rt.CatchUpNote != null) { Logger.Info(j.Name, rt.CatchUpNote); rt.CatchUpNote = null; }
@@ -428,17 +447,62 @@ namespace AutoCopy
             if (rt.Cts != null) rt.Cts.Cancel();
         }
 
+        private static readonly object runGate = new object();
+
+        /// <summary>
+        /// 同じフォルダ（コピー先どうし・コピー元とコピー先）を使っていて、今動いている別のジョブ。
+        /// 同時に動くと同じファイルを書き合ったり、コピー中のファイルを読んだりするため、終わるのを待つ。
+        /// </summary>
+        public static JobConfig OverlappingRunning(JobConfig job)
+        {
+            string s = CopyEngine.ResolvedSource(job, Settings), d = CopyEngine.ResolvedDest(job, Settings);
+            foreach (JobConfig o in Settings.Jobs.ToArray())
+            {
+                if (o.Id == job.Id) continue;
+                JobRuntime ort = GetRuntime(o.Id);
+                if (!ort.Running && !ort.DupRunning && !ort.Resolving) continue;
+                string os = CopyEngine.ResolvedSource(o, Settings), od = CopyEngine.ResolvedDest(o, Settings);
+                if (Overlaps(d, od) || Overlaps(d, os) || Overlaps(s, od)) return o;
+            }
+            return null;
+        }
+
+        private static bool Overlaps(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b)) return false;
+            return PathUtil.IsSameOrInside(a, b) || PathUtil.IsSameOrInside(b, a);
+        }
+
         public static bool RunJob(string jobId, bool manual, bool fullVerify)
         {
             JobConfig job = FindJob(jobId);
             if (job == null) return false;
             JobRuntime rt = GetRuntime(job.Id);
-            lock (rt)
+            lock (runGate)
             {
-                if (rt.Running || rt.DupRunning) return false;
-                rt.Running = true;
-                rt.Phase = "コピー中";
-                rt.Cts = new CancellationTokenSource();
+                lock (rt)
+                {
+                    if (rt.Running || rt.DupRunning || rt.Resolving) return false;
+                }
+                JobConfig other = OverlappingRunning(job);
+                if (other != null)
+                {
+                    // 同じフォルダを使う別のジョブが動いている：終わってから実行する（手動の実行は覚えておく）
+                    if (rt.WaitingFor != other.Name)
+                        Logger.Info(job.Name, "ジョブ「" + other.Name + "」が同じフォルダを使っているため、終わってから実行します");
+                    rt.WaitingFor = other.Name;
+                    if (manual) rt.QueuedManual = true;
+                    RaiseChanged();
+                    return manual;
+                }
+                lock (rt)
+                {
+                    rt.Running = true;
+                    rt.Phase = "コピー中";
+                    rt.Cts = new CancellationTokenSource();
+                    rt.QueuedManual = false;
+                    rt.WaitingFor = null;
+                }
             }
             DateTime startedAt = DateTime.Now;
             rt.NextRun = startedAt.AddMinutes(Math.Max(1, job.IntervalMinutes));
@@ -450,7 +514,7 @@ namespace AutoCopy
                 JobState st = GetState(job.Id);
                 RunResult res = null;
                 string error = null;
-                bool credError = false;
+                bool credError = false, canceled = false;
                 try
                 {
                     CopyEngine eng = new CopyEngine(job, Settings, st, false, false, ct);
@@ -460,7 +524,8 @@ namespace AutoCopy
                     res = eng.Run();
                     if (res.Failed) error = res.Message;
                 }
-                catch (OperationCanceledException) { error = "中止しました"; }
+                catch (OperationCanceledException) { error = "中止しました"; canceled = true; }
+                catch (JobAbortException ex) { error = ex.Message; }
                 catch (AccessException ex) { error = ex.Message; credError = ex.IsCredentialError; }
                 catch (FolderConflictException ex) { error = ex.Message; }
                 catch (SourceProtectedException ex) { error = ex.Message + "（このジョブを停止しました）"; job.Enabled = false; }
@@ -473,8 +538,10 @@ namespace AutoCopy
                         if (error != null) rt.Progress.Phase = error == "中止しました" ? "中止しました" : "エラー";
                     }
                 rt.LastRun = startedAt;
-                rt.LastResult = error == null ? "ok" : "error";
-                rt.LastMessage = error ?? (res != null ? res.Summary() : "");
+                // 結果の分類：成功／一部失敗（一部のファイル・フォルダでエラー）／中断（中止した）／失敗
+                rt.Outcome = canceled ? JobOutcome.Canceled : error != null ? JobOutcome.Failed : res != null ? res.Outcome : JobOutcome.Success;
+                rt.LastResult = canceled ? "canceled" : error == null ? "ok" : "error";
+                rt.LastMessage = error ?? (res != null ? (rt.Outcome == JobOutcome.Partial ? JobOutcome.Partial + "（エラー " + res.Errors + "件" + (res.ScanFailedDirs > 0 ? "・読めないフォルダ " + res.ScanFailedDirs + "件" : "") + "）　" : "") + res.Summary() : "");
                 lock (st)
                 {
                     st.LastRunTicks = startedAt.ToUniversalTime().Ticks;
@@ -483,11 +550,16 @@ namespace AutoCopy
                 }
                 SaveState(job.Id);
                 if (res != null) Logger.Write(job.Name, "SUMMARY", res.Summary(), res.Bytes, res.Seconds);
-                if (error != null)
+                if (canceled)
+                    Logger.Info(job.Name, "中止しました（コピーの途中のファイルは、次の実行でコピーし直します）");
+                else if (error != null)
                 {
                     Logger.Error(job.Name, error);
                     NotifyError(job, error, credError);
                 }
+                else if (res != null && rt.Outcome == JobOutcome.Partial)
+                    Notify(NoticeLevel.Warning, job.Name + "：一部のファイルをコピーできませんでした",
+                        "エラー " + res.Errors + "件" + (res.ScanFailedDirs > 0 ? "・読めないフォルダ " + res.ScanFailedDirs + "件" : "") + "。ログで原因（ネットワーク・容量不足・アクセス拒否など）を確かめてください。", "partial", job.Id);
                 if (res != null)
                 {
                     if (res.Conflicts > 0)
@@ -510,7 +582,7 @@ namespace AutoCopy
                         Notify(NoticeLevel.Ok, job.Name + "：コピーしました", res.Summary(), "log", job.Id);
                 }
                 lock (rt) { rt.Running = false; rt.Phase = ""; }
-                if (job.Enabled == false) { try { SaveSettings(); } catch (Exception) { } }
+                if (job.Enabled == false) { try { SaveSettings(); } catch (Exception ex) { Logger.Error(job.Name, "設定を保存できません: " + ex.Message); } }
                 PublishStatus();
                 RaiseChanged();
                 Logger.Flush();
@@ -636,7 +708,32 @@ namespace AutoCopy
         public const string ActOverwrite = "overwrite", ActSkipOnce = "skiponce", ActSkipForever = "skipforever", ActTakeShared = "takeshared";
 
         /// <summary>上書き確認の結果を反映する。overwrite はコピーを行う。</summary>
+        /// <summary>確認の画面での処理の間、そのジョブを実行しない（実行中なら処理しない）。始められなければ理由</summary>
+        public static string BeginResolve(JobConfig job)
+        {
+            JobRuntime rt = GetRuntime(job.Id);
+            lock (runGate)
+            {
+                lock (rt)
+                {
+                    if (rt.Running || rt.DupRunning) return "ジョブ「" + job.Name + "」は実行中です。終わってからもう一度お試しください。";
+                    rt.Resolving = true;
+                }
+            }
+            return null;
+        }
+
+        public static void EndResolve(JobConfig job) { GetRuntime(job.Id).Resolving = false; }
+
         public static string ResolveConflict(JobConfig job, ConflictItem c, string action, bool backup)
+        {
+            string busy = BeginResolve(job);
+            if (busy != null) return busy;
+            try { return ResolveConflictCore(job, c, action, backup); }
+            finally { EndResolve(job); }
+        }
+
+        private static string ResolveConflictCore(JobConfig job, ConflictItem c, string action, bool backup)
         {
             JobState st = GetState(job.Id);
             string src = CopyEngine.ResolvedSource(job, Settings), dst = CopyEngine.ResolvedDest(job, Settings);
@@ -687,6 +784,7 @@ namespace AutoCopy
                     Logger.Write(job.Name, "SKIP", c.Rel + "　（今後も上書きしない）", c.SrcSize, -1);
                 }
                 lock (st) { st.Conflicts.RemoveAll(delegate(ConflictItem x) { return string.Equals(x.Rel, c.Rel, StringComparison.OrdinalIgnoreCase); }); }
+                if (job.Sync && action == ActOverwrite) { SyncRemoteCache.Invalidate(job.Id); SyncRemoteCache.TouchStamp(dst); }
                 SaveState(job.Id);
                 RaiseChanged();
                 return null;
@@ -703,6 +801,14 @@ namespace AutoCopy
         /// 削除しない場合は記録を消し、次回の実行で消えた側へ戻す。できなかったものを返す。
         /// </summary>
         public static List<string> ResolveSyncDeletes(JobConfig job, List<SyncDeleteItem> items, bool approve)
+        {
+            string busy = BeginResolve(job);
+            if (busy != null) return new List<string>(new string[] { busy });
+            try { return ResolveSyncDeletesCore(job, items, approve); }
+            finally { EndResolve(job); }
+        }
+
+        private static List<string> ResolveSyncDeletesCore(JobConfig job, List<SyncDeleteItem> items, bool approve)
         {
             List<string> errs = new List<string>();
             if (!job.Sync) { errs.Add("同期のジョブではありません"); return errs; }
@@ -785,6 +891,12 @@ namespace AutoCopy
                 }
             }
             SyncDeleteStore.Remove(job.Id, done);
+            if (done.Count > 0)
+            {
+                // 共有フォルダを変えた（かもしれない）：覚えている一覧を捨て、他のPCにも知らせる
+                SyncRemoteCache.Invalidate(job.Id);
+                SyncRemoteCache.TouchStamp(shared);
+            }
             SaveState(job.Id);
             RaiseChanged();
             return errs;
@@ -807,6 +919,14 @@ namespace AutoCopy
         }
 
         public static string ResolvePendingDeletes(JobConfig job, bool approve)
+        {
+            string busy = BeginResolve(job);
+            if (busy != null) return busy;
+            try { return ResolvePendingDeletesCore(job, approve); }
+            finally { EndResolve(job); }
+        }
+
+        private static string ResolvePendingDeletesCore(JobConfig job, bool approve)
         {
             JobState st = GetState(job.Id);
             List<string> rels = new List<string>();
@@ -864,7 +984,9 @@ namespace AutoCopy
                 noticesLoaded = true;
                 try
                 {
-                    NoticeBook b = Json.Load<NoticeBook>(NoticePath);
+                    string problem;
+                    NoticeBook b = Json.LoadSafe<NoticeBook>(NoticePath, out problem);
+                    if (problem != null) Logger.Error(null, "お知らせ：" + problem);
                     if (b != null && b.Items != null)
                         foreach (Notice n in b.Items) if (n != null) { if (string.IsNullOrEmpty(n.Id)) n.Id = Guid.NewGuid().ToString("N"); if (n.Count < 1) n.Count = 1; notices.Add(n); }
                 }
@@ -876,7 +998,8 @@ namespace AutoCopy
         {
             NoticeBook b = new NoticeBook();
             lock (notices) { b.Items = new List<Notice>(notices); }
-            try { Directory.CreateDirectory(AppPaths.StateDir); Json.Save(NoticePath, b); } catch (Exception) { }
+            try { Directory.CreateDirectory(AppPaths.StateDir); Json.Save(NoticePath, b); }
+            catch (Exception ex) { Logger.Error(null, "お知らせを保存できません: " + ex.Message); }
         }
 
         private static Notice AddNotice(NoticeLevel level, string title, string text, string action, string jobId)
@@ -1022,6 +1145,7 @@ namespace AutoCopy
                 case "dup": return "重複";
                 case "pending": return "ミラーの削除保留";
                 case "synccand": return "同期の削除";
+                case "partial": return "一部失敗";
             }
             if (n.Level == NoticeLevel.Error) return "エラー";
             if (n.Level == NoticeLevel.Warning) return "注意";
@@ -1054,6 +1178,15 @@ namespace AutoCopy
                 case "synccand":
                     if (j == null) return null;
                     return !j.Sync || SyncDeleteStore.Count(j.Id) == 0 ? NoticeNotes.Seen : null;
+                case "partial":
+                    {
+                        if (j == null) return null;
+                        if (!j.Enabled) return NoticeNotes.Disabled;
+                        JobRuntime rt = GetRuntime(j.Id);
+                        if (!rt.Running && rt.LastResult == "ok" && rt.LastRun >= n.Time.AddSeconds(-1) && !(rt.LastMessage ?? "").StartsWith(JobOutcome.Partial))
+                            return NoticeNotes.Recovered;
+                        return null;
+                    }
                 case "retry":
                 case "job":
                     {

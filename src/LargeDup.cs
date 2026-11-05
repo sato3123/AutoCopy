@@ -101,7 +101,9 @@ namespace AutoCopy
             {
                 DedupBook b;
                 if (cache.TryGetValue(jobId, out b)) return b;
-                try { if (File.Exists(PathFor(jobId))) b = Json.Load<DedupBook>(PathFor(jobId)); } catch (Exception) { }
+                string problem;
+                b = Json.LoadSafe<DedupBook>(PathFor(jobId), out problem);
+                if (problem != null) Logger.Error(null, "大きいファイルの重複の記録：" + problem);
                 if (b == null) b = new DedupBook();
                 cache[jobId] = b;
                 return b;
@@ -111,12 +113,17 @@ namespace AutoCopy
         public static void Save(string jobId)
         {
             DedupBook b = Get(jobId);
-            lock (b) { try { Directory.CreateDirectory(AppPaths.StateDir); Json.Save(PathFor(jobId), b); } catch (Exception) { } }
+            lock (b)
+            {
+                try { Directory.CreateDirectory(AppPaths.StateDir); Json.Save(PathFor(jobId), b); }
+                catch (Exception ex) { Logger.Error(null, "大きいファイルの重複の記録を保存できません: " + ex.Message); throw; }
+            }
         }
 
         public static void Forget(string jobId)
         {
             lock (cache) cache.Remove(jobId);
+            try { File.Delete(PathFor(jobId) + ".bak"); } catch (Exception) { }
             try { File.Delete(PathFor(jobId)); } catch (Exception) { }
         }
 
@@ -186,11 +193,32 @@ namespace AutoCopy
                     same.Value.Sort(StringComparer.OrdinalIgnoreCase);
                     LargeDupGroup grp = new LargeDupGroup();
                     grp.First = first; grp.Hash = same.Key; grp.Size = g.Key;
-                    foreach (string rel in same.Value) if (!string.Equals(rel, first, StringComparison.OrdinalIgnoreCase)) grp.Others.Add(rel);
-                    result.Add(grp);
+                    foreach (string rel in same.Value)
+                    {
+                        if (string.Equals(rel, first, StringComparison.OrdinalIgnoreCase)) continue;
+                        // MD5 が同じでも、念のため中身を1バイトずつ比べてから「重複」とする（一度確かめた組は覚えておく）
+                        if (!VerifiedSame(src, rel, first, scan)) { Logger.Error(null, "大きいファイルの重複：" + rel + " と " + first + " は MD5 が同じですが中身が違うため、重複として扱いません"); continue; }
+                        grp.Others.Add(rel);
+                    }
+                    if (grp.Others.Count > 0) result.Add(grp);
                 }
             }
             return result;
+        }
+
+        private static readonly Dictionary<string, bool> verified = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+
+        private static bool VerifiedSame(string src, string a, string b, ScanResult scan)
+        {
+            ScanItem ia, ib;
+            scan.Files.TryGetValue(a, out ia); scan.Files.TryGetValue(b, out ib);
+            string key = a + "|" + b + "|" + (ia != null ? ia.Size + ":" + ia.Mtime : "") + "|" + (ib != null ? ib.Mtime.ToString() : "");
+            lock (verified) { bool v; if (verified.TryGetValue(key, out v)) return v; }
+            bool same;
+            try { same = SafeFs.SameBytes(PathUtil.Combine(src, a), PathUtil.Combine(src, b)); }
+            catch (Exception ex) { Logger.Error(null, "中身を比べられません: " + a + "　" + ex.Message); return false; }
+            lock (verified) { if (verified.Count > 100000) verified.Clear(); verified[key] = same; }
+            return same;
         }
 
         /// <summary>
@@ -301,7 +329,7 @@ namespace AutoCopy
                     Logger.Write(job.Name, "COPY", item.Rel + "　（重複だが普通にコピーすると選びました）", fi.Length, -1);
                 }
                 else Logger.Write(job.Name, "INFO", item.Rel + "　重複だが普通にコピーしたまま残すと選びました", fi.Length, -1);
-                if (File.Exists(PathUtil.Long(ph))) { try { SafeFs.DeleteFile(ph); } catch (Exception) { } }
+                if (File.Exists(PathUtil.Long(ph))) { try { SafeFs.DeleteFile(ph); } catch (Exception ex) { Logger.Error(job.Name, "重複のテキストを片付けられません: " + ph + "　" + ex.Message); } }
             }
             lock (book) book.Decide(item.Rel, item.Hash, action);
             DedupStore.Save(job.Id);
