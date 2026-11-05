@@ -121,6 +121,7 @@ namespace AutoCopy
                 it.ForeColor = rt.Running ? Ui.Accent : !j.Enabled ? Ui.Quiet : SystemColors.WindowText;
                 it.Font = j.Id == selectedId ? Ui.Bold : Ui.Base;
             }
+            ((AcListView)jobs).Resort();   // 見出しで並べ替えている場合は、更新した後に並べ直す
             jobs.EndUpdate();
 
             // 選んだジョブの詳しい状況
@@ -174,6 +175,7 @@ namespace AutoCopy
                 }
                 for (int c = 0; c < cols.Length; c++) if (it.SubItems[c].Text != cols[c]) it.SubItems[c].Text = cols[c];
             }
+            ((AcListView)files).Resort();
             files.EndUpdate();
         }
     }
