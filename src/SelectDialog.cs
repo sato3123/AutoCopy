@@ -37,7 +37,7 @@ namespace AutoCopy
         {
             this.counter = counter;
             this.dupMode = dupMode;
-            Ui.SetupDialog(this, "条件で選ぶ - " + what, 640, 560);
+            Ui.SetupDialog(this, "条件で選ぶ - " + what, 660, 680);
             FlowLayoutPanel b = Ui.Body();
 
             tWords = Ui.T("", 260);
