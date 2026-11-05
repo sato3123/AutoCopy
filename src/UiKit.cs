@@ -662,6 +662,7 @@ namespace AutoCopy
         public AcListView()
         {
             DoubleBuffered = true;
+            ShowItemToolTips = true;   // 列が狭くて欠けた文字は、マウスを重ねると全部見える
         }
 
         internal void RememberWidths()
@@ -808,6 +809,28 @@ namespace AutoCopy
             FitColumns();
         }
 
+        /// <summary>
+        /// 縮めても残す幅：見出し（▲▼を含む）が読める幅と、短い中身（日時・サイズ・件数・種類など、最初の100行で
+        /// いちばん長いもの。ただし約160pxまで）が読める幅の大きい方。
+        /// </summary>
+        private int MinWidth(int col)
+        {
+            string h = col < headers.Count ? headers[col] : "";
+            int m = Math.Max(Ui.S(40), Ui.TextWidth(h + " ▼", Font) + 14);
+            int content = 0;
+            if (h.Contains("日時") || h.Contains("時刻")) content = Ui.TextWidth(VirtualMode ? "0000/00/00 00:00:00" : "0000/00/00 00:00", Font) + 14;
+            if (!VirtualMode)
+            {
+                int n = Math.Min(100, Items.Count);
+                for (int r = 0; r < n; r++)
+                {
+                    ListViewItem it = Items[r];
+                    if (col < it.SubItems.Count) content = Math.Max(content, Ui.TextWidth(it.SubItems[col].Text, Font) + 14);
+                }
+            }
+            return Math.Max(m, Math.Min(content, Ui.S(160)));
+        }
+
         /// <summary>列の合計が横幅を越えるときは縮め、余るときは一番広い列を広げる</summary>
         public void FitColumns()
         {
@@ -830,28 +853,31 @@ namespace AutoCopy
                 int[] w = (int[])designWidths.Clone();
                 if (sum > avail)
                 {
-                    int over = sum - avail;
-                    // 縮められる幅（見出しが読める幅より上の分）の割合で縮める
+                    // 全体を同じ割合で縮める（長い列ほど多く縮む）。ただし、見出しと短い中身（日時・サイズ・種類など）が読める幅は残す
                     int[] min = new int[w.Length];
-                    int room = 0;
                     for (int i = 0; i < w.Length; i++)
+                        if (w[i] > 0) min[i] = Math.Min(w[i], MinWidth(i));
+                    bool[] fixedCol = new bool[w.Length];
+                    for (int round = 0; round < 6; round++)
                     {
-                        if (w[i] <= 0) continue;
-                        // 見出し（並べ替えの ▲▼ を含む）が読める幅は残す
-                        min[i] = Math.Min(w[i], Math.Max(Ui.S(40), Ui.TextWidth((i < headers.Count ? headers[i] : "") + " ▼", Font) + 14));
-                        room += w[i] - min[i];
-                    }
-                    if (room > 0)
-                    {
-                        int cut = Math.Min(over, room), done = 0;
+                        int fixedSum = 0, flexSum = 0;
                         for (int i = 0; i < w.Length; i++)
                         {
-                            if (w[i] <= 0) continue;
-                            int d = (int)((long)(w[i] - min[i]) * cut / room);
-                            w[i] -= d; done += d;
+                            if (designWidths[i] <= 0) continue;
+                            if (fixedCol[i]) fixedSum += min[i]; else flexSum += designWidths[i];
                         }
-                        for (int i = 0; i < w.Length && done < cut; i++)
-                            if (w[i] > min[i]) { w[i]--; done++; }
+                        if (flexSum <= 0) break;
+                        double scale = Math.Max(0, (double)(avail - fixedSum) / flexSum);
+                        bool changed = false;
+                        for (int i = 0; i < w.Length; i++)
+                        {
+                            if (designWidths[i] <= 0) continue;
+                            if (fixedCol[i]) { w[i] = min[i]; continue; }
+                            int x = (int)Math.Floor(designWidths[i] * scale);
+                            if (x < min[i]) { fixedCol[i] = true; w[i] = min[i]; changed = true; }
+                            else w[i] = x;
+                        }
+                        if (!changed) break;
                     }
                 }
                 else if (widest >= 0) w[widest] += avail - sum;
