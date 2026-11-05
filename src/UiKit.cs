@@ -195,6 +195,7 @@ namespace AutoCopy
             b.MinimumSize = new Size(0, S(28));
             b.UseVisualStyleBackColor = true;
             if (onClick != null) b.Click += onClick;
+            Btn.AutoIcon(b);   // 文字に合うアイコン（全画面で同じ）
             return b;
         }
 
@@ -572,6 +573,7 @@ namespace AutoCopy
             progressLabel.AutoEllipsis = true;
             progressLabel.SetBounds(Ui.S(16), pb.Bottom + Ui.S(8), w, lineH + Ui.S(6));
             stop = Ui.B("中止", delegate { RequestStop(); });
+            stop.Tag = "safe";   // 調べるのを止めるだけ（ファイルは変えない）
             stop.Location = new Point(ClientSize.Width - Ui.S(16) - stop.PreferredSize.Width, progressLabel.Bottom + Ui.S(8));
             ClientSize = new Size(ClientSize.Width, stop.Location.Y + stop.PreferredSize.Height + Ui.S(14));
             CancelButton = stop;

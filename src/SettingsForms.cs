@@ -81,7 +81,7 @@ namespace AutoCopy
                 Ui.Row(cbShortcut, Ui.B("作成", delegate { MakeShortcut(); })),
                 Ui.Hint("ダブルクリックすると、動いている自動コピーに実行を指示します。")));
 
-            Button ok = Ui.B("OK", delegate { if (Save()) Close(); });
+            Button ok = Btn.MakePrimary(Ui.B("OK", delegate { if (Save()) Close(); }));
             ok.MinimumSize = new Size(Ui.S(88), Ui.S(28));
             Controls.Add(b);
             Controls.Add(Ui.Footer(Ui.B("キャンセル", delegate { Close(); }), ok, Ui.B("操作説明書を開く", delegate { Ui.OpenManual(); })));

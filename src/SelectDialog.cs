@@ -74,6 +74,8 @@ namespace AutoCopy
             Button bCheck = Ui.B("条件に合うものにチェック", delegate { Done(SelectAction.Check); });
             Button bUncheck = Ui.B("条件に合うもののチェックを外す", delegate { Done(SelectAction.Uncheck); });
             Button bOnly = Ui.B("条件に合うものだけチェック（ほかは外す）", delegate { Done(SelectAction.Only); });
+            Btn.SetIcon(bUncheck, "close", Ui.Quiet);
+            Btn.SetIcon(bOnly, "filter", Ui.Quiet);
             b.Controls.Add(Ui.WrapRow(bCheck, bUncheck, bOnly));
 
             rShort = Ui.R("パスが短いもの", true);

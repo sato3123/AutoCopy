@@ -58,7 +58,7 @@ namespace AutoCopy
             tabs.TabPages.Add(BuildExclude());
             tabs.TabPages.Add(BuildConnect());
 
-            Button ok = Ui.B("OK", delegate { if (Collect()) { DialogResult = DialogResult.OK; Close(); } });
+            Button ok = Btn.MakePrimary(Ui.B("OK", delegate { if (Collect()) { DialogResult = DialogResult.OK; Close(); } }));
             ok.MinimumSize = new Size(Ui.S(88), Ui.S(28));
             Button cancel = Ui.B("キャンセル", delegate { DialogResult = DialogResult.Cancel; Close(); });
             Button test = Ui.B("テスト（コピーせずに結果を確認）", delegate { RunTest(); });
@@ -438,7 +438,7 @@ namespace AutoCopy
                 Ui.Row(lbFolders, Ui.Column(
                     Ui.B("フォルダを選んで追加…", delegate { AddFolderByBrowse(); }),
                     Ui.B("名前で追加…", delegate { AddFolderByName(); }),
-                    Ui.B("削除", delegate { if (lbFolders.SelectedIndex >= 0) lbFolders.Items.RemoveAt(lbFolders.SelectedIndex); })))));
+                    Ui.B("一覧から外す", delegate { if (lbFolders.SelectedIndex >= 0) lbFolders.Items.RemoveAt(lbFolders.SelectedIndex); })))));
 
             tInc = Ui.T("", 460);
             b.Controls.Add(Ui.Section("例外（必ずコピー）", Ui.Row(tInc, Ui.Hint("例：会議録画\\*.mp4"))));

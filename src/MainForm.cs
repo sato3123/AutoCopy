@@ -41,9 +41,9 @@ namespace AutoCopy
             pauseMenu.Items.Add("再開する", null, delegate { AppCore.Resume(null); RefreshView(); });
             pauseBtn.Click += delegate { pauseMenu.Show(pauseBtn, new Point(0, pauseBtn.Height)); };
 
-            Button runAll = Ui.B("▶ すべて今すぐ実行", delegate { AppCore.RunAll(true); RefreshView(); });
-            runAll.BackColor = Ui.Accent; runAll.ForeColor = Color.White; runAll.UseVisualStyleBackColor = false;
-            runAll.FlatStyle = FlatStyle.Flat; runAll.FlatAppearance.BorderColor = Ui.Accent;
+            Button runAll = Btn.MakePrimary(Ui.B("すべて今すぐ実行", delegate { AppCore.RunAll(true); RefreshView(); }));
+            // 中止：コピーの途中で止めるので確認する
+            Button stopBtn = Btn.MakeCaution(Ui.B("中止", delegate { StopSelected(); }));
 
             FlowLayoutPanel bar = new FlowLayoutPanel();
             bar.Dock = DockStyle.Top;
@@ -53,20 +53,22 @@ namespace AutoCopy
             bar.Controls.AddRange(new Control[] {
                 runAll,
                 Ui.B("選んだジョブを実行", delegate { RunSelected(false); }),
-                Ui.B("中止", delegate { foreach (string id in SelectedIds()) AppCore.CancelJob(id); }),
                 pauseBtn,
+                stopBtn,
                 Sep(),
-                Ui.B("＋ ジョブを追加", delegate { AddJob(); }),
+                Ui.B("ジョブを追加", delegate { AddJob(); }),
                 Ui.B("編集", delegate { string id = FirstSelected(); if (id != null) EditJob(id); }),
                 Ui.B("複製", delegate { DuplicateJob(); }),
-                Ui.B("削除", delegate { DeleteJob(); }),
+                Btn.MakeDanger(Ui.B("削除", delegate { DeleteJob(); })),
                 Sep(),
-                DupMenuButton(),
                 Ui.B("上書きの確認", delegate { TrayApp.Instance.ShowConflicts(); }),
+                DupMenuButton(),
+                Sep(),
                 Ui.B("作業状況", delegate { TrayApp.Instance.ShowProgress(FirstSelected()); }),
                 Ui.B("結果の予測", delegate { string id = FirstSelected(); if (id == null && AppCore.Settings.Jobs.Count > 0) id = AppCore.Settings.Jobs[0].Id; if (id != null) TrayApp.Instance.ShowPreview(id); }),
                 Ui.B("ログ", delegate { TrayApp.Instance.ShowLog(); }),
                 Ui.B("容量の内訳", delegate { ShowUsage(); }),
+                Sep(),
                 Ui.B("設定", delegate { TrayApp.Instance.ShowSettings(); }),
                 Ui.B("ヘルプ", delegate { Ui.OpenManual(); })
             });
@@ -184,6 +186,7 @@ namespace AutoCopy
         private Button DupMenuButton()
         {
             Button b = Ui.B("重複チェック ▾", null);
+            Btn.SetIcon(b, "search", Ui.Quiet);
             ContextMenuStrip m = new ContextMenuStrip();
             m.Font = Ui.Base;
             m.Items.Add("ジョブの重複チェックの結果（コピー先）…", null, delegate { TrayApp.Instance.ShowDup(FirstSelected()); });
@@ -391,6 +394,17 @@ namespace AutoCopy
             List<string> l = new List<string>();
             foreach (ListViewItem it in jobs.SelectedItems) l.Add((string)it.Tag);
             return l;
+        }
+
+        /// <summary>選んだジョブを中止する（コピーの途中で止めるので確認する）</summary>
+        private void StopSelected()
+        {
+            List<string> ids = SelectedIds();
+            List<string> running = new List<string>();
+            foreach (string id in ids) { JobRuntime rt = AppCore.GetRuntime(id); if (rt.Running || rt.DupRunning) running.Add(id); }
+            if (running.Count == 0) { Ui.Info(this, ids.Count == 0 ? "中止するジョブを選んでください。" : "選んだジョブは、今は動いていません。"); return; }
+            if (!Ui.Confirm(this, "動いているジョブ " + running.Count + "件 を中止します。\nコピーの途中のファイルは、次の実行でコピーし直します。よろしいですか？")) return;
+            foreach (string id in running) AppCore.CancelJob(id);
         }
 
         private void RunSelected(bool full)

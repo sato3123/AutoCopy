@@ -56,8 +56,8 @@ namespace AutoCopy
             nMin = Ui.N(0, 1000000, 0, 80);
             cbUnit = Ui.Combo(60, "KB", "MB");
             Button search = Ui.B("検索", delegate { Search(); });
-            search.BackColor = Ui.Accent; search.ForeColor = Color.White; search.UseVisualStyleBackColor = false;
-            search.FlatStyle = FlatStyle.Flat; search.FlatAppearance.BorderColor = Ui.Accent;
+            Btn.MakePrimary(search);
+            Btn.SetIcon(fromJob, "folder", Ui.Quiet);
             summary = Ui.L("フォルダを選んで「検索」を押してください。");
             Ui.FitToForm(summary, 980);
             protectNote = Ui.L("");
@@ -90,7 +90,7 @@ namespace AutoCopy
             total = Ui.L("");
             total.Font = Ui.Bold;
             bMove = Ui.B("チェックしたものを移す（消さずに「_AutoCopy\\重複で削除」へ）…", delegate { MoveChecked(); });
-            bMove.ForeColor = Ui.Err;
+            Btn.MakeDanger(bMove);
             Label note = Ui.Hint("移したファイルは、そのフォルダの「_AutoCopy\\重複で削除\\日時」に入ります（隠しフォルダ）。元に戻すときは、そこから元の場所へ戻してください。自動コピーのコピー元のファイルは移しません。");
             Ui.FitToForm(note, 980);
             FlowLayoutPanel bottom = Ui.Column(total, note);
@@ -101,7 +101,7 @@ namespace AutoCopy
             Controls.Add(bar);
             Controls.Add(top);
             Controls.Add(bottom);
-            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), bMove,
+            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(), bMove, Btn.Gap(),
                 Ui.B("CSVに書き出す", delegate { Export(); }),
                 Ui.B("移したファイルのフォルダを開く", delegate { string r = tFolder.Text.Trim(); if (r.Length > 0) Ui.OpenFolder(FolderDup.TrashFolder(r)); })));
             bMove.Enabled = false;

@@ -53,8 +53,7 @@ namespace AutoCopy
             };
 
             Button openAll = Ui.B("確認する", delegate { Open(null, null); });
-            openAll.BackColor = Ui.Accent; openAll.ForeColor = Color.White; openAll.UseVisualStyleBackColor = false;
-            openAll.FlatStyle = FlatStyle.Flat; openAll.FlatAppearance.BorderColor = Ui.Accent;
+            Btn.MakePrimary(openAll);
             Button later = Ui.B("あとで（1時間）", delegate { if (Snoozed != null) Snoozed(); Close(); });
             FlowLayoutPanel buttons = Ui.Row(openAll, later);
             buttons.Margin = new Padding(0, Ui.S(6), 0, 0);

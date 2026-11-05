@@ -150,6 +150,9 @@ namespace AutoCopy
             }
 
             // 2) 文字の欠け
+            // 削除・上書きなど取り消しにくい操作のボタンは、赤・橙で目立たせる（押すと確認メッセージを出す）
+            if (c is Button && Btn.LooksDangerous(c.Text) && !Btn.IsDangerStyled((Button)c) && !"safe".Equals(c.Tag as string))
+                issues.Add(Name(c) + "：取り消しにくい操作のボタンなのに、赤・橙の表示になっていない");
             if (c is ButtonBase)
             {
                 Size pref = c.GetPreferredSize(Size.Empty);

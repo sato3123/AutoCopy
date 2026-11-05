@@ -34,7 +34,8 @@ namespace AutoCopy
             agree.Font = Ui.Bold;
             b.Controls.Add(agree);
 
-            Button ok = Ui.B("ミラーにする", delegate { DialogResult = DialogResult.OK; Close(); });
+            // 「内容を理解しました」にチェックしてから押せる（＝確認済み）
+            Button ok = Btn.MakeCaution(Ui.B("ミラーにする", delegate { DialogResult = DialogResult.OK; Close(); }));
             ok.Enabled = false;
             Button cancel = Ui.B("やめる", delegate { DialogResult = DialogResult.Cancel; Close(); });
             agree.CheckedChanged += delegate { ok.Enabled = agree.Checked; };
@@ -89,11 +90,14 @@ namespace AutoCopy
 
             backup = Ui.C("上書きする前に、コピー先の古いファイルを「_AutoCopy\\退避」に残す", true);
             // 画面の幅が足りないときは折り返す
+            // 似た操作を並べ、まとまりの間を空ける：置き換える（橙・確認あり）｜上書きしない｜見る
             FlowLayoutPanel actions = Ui.WrapRow(Ui.L("チェックしたファイルを"),
-                Ui.B("上書きする（このPCの方を使う）", delegate { Apply(AppCore.ActOverwrite); }),
-                Ui.B("共有フォルダの方を使う（同期のみ）", delegate { Apply(AppCore.ActTakeShared); }),
+                Btn.MakeCaution(Ui.B("上書きする（このPCの方を使う）", delegate { Apply(AppCore.ActOverwrite); })),
+                Btn.MakeCaution(Ui.B("共有フォルダの方を使う（同期のみ）", delegate { Apply(AppCore.ActTakeShared); })),
+                Btn.Gap(),
                 Ui.B("今回はスキップ", delegate { Apply(AppCore.ActSkipOnce); }),
                 Ui.B("今後も上書きしない", delegate { Apply(AppCore.ActSkipForever); }),
+                Btn.Gap(),
                 Ui.B("コピー先のフォルダを開く", delegate { OpenDest(); }),
                 Ui.B("「今後も上書きしない」にしたファイル…", delegate { using (SkipListForm f = new SkipListForm()) f.ShowDialog(this); Reload(); }));
             FlowLayoutPanel bottom = Ui.Column(actions, backup,
@@ -153,6 +157,7 @@ namespace AutoCopy
             foreach (ListViewItem it in lv.CheckedItems) rows.Add((Row)it.Tag);
             if (rows.Count == 0) { Ui.Info(this, "ファイルにチェックを入れてください。"); return; }
             if (action == AppCore.ActOverwrite && !Ui.Confirm(this, rows.Count + "件を、コピー元のファイルで上書きします。よろしいですか？")) return;
+            if (action == AppCore.ActSkipForever && !Ui.Confirm(this, rows.Count + "件を「今後も上書きしない」にします。\nこれらのファイルは、コピー元が変わってもコピーしなくなります（「「今後も上書きしない」にしたファイル…」から取り消せます）。よろしいですか？")) return;
             if (action == AppCore.ActTakeShared && !Ui.Confirm(this, rows.Count + "件を、共有フォルダのファイルでこのPCのファイルを置き換えます。\nこのPCの今のファイルは控え（" + AppPaths.SyncBackupDir + "）に残ります。よろしいですか？")) return;
             bool bk = backup.Checked;
             List<string> errors = Ui.Busy<List<string>>(this, "処理しています…", delegate()
@@ -238,7 +243,7 @@ namespace AutoCopy
                 if (err != null) Ui.Error(this, err);
                 Close();
             });
-            del.ForeColor = Ui.Err;
+            Btn.MakeDanger(del);
             Button keep = Ui.B("今回は削除しない（コピー先に残す）", delegate
             {
                 string err = AppCore.ResolvePendingDeletes(job, false);
@@ -247,7 +252,7 @@ namespace AutoCopy
             });
             Controls.Add(lv);
             Controls.Add(top);
-            Controls.Add(Ui.Footer(Ui.B("後で決める", delegate { Close(); }), keep, del));
+            Controls.Add(Ui.Footer(Ui.B("後で決める", delegate { Close(); }), Btn.Gap(), del, Btn.Gap(), keep));
         }
     }
 
@@ -270,7 +275,7 @@ namespace AutoCopy
             h.Height = Ui.S(34);
             Controls.Add(lv);
             Controls.Add(h);
-            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Ui.B("選んだものを元に戻す", delegate { Restore(); }),
+            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(), Btn.MakeCaution(Ui.B("選んだものを元に戻す", delegate { Restore(); })), Btn.Gap(),
                 Ui.B("フォルダを開く", delegate { Ui.OpenFolder(PathUtil.Combine(CopyEngine.ResolvedDest(job, AppCore.Settings), AppPaths.DestMetaFolder)); })));
             Shown += delegate { Reload(); };
         }
@@ -328,6 +333,8 @@ namespace AutoCopy
         private JobConfig currentJob;
         private bool filling;
         private bool totalPending;
+        /// <summary>画面を開くだけのボタン（取り消しにくい操作ではない）</summary>
+        private static Button SafeBtn(Button b) { b.Tag = "safe"; return b; }
         /// <summary>重複チェックの一覧に一度に出す行数の上限</summary>
         public const int MaxRows = 5000;
 
@@ -395,7 +402,7 @@ namespace AutoCopy
             total = Ui.L("");
             total.Font = Ui.Bold;
             Label note = Ui.Hint("チェックしたものを削除します。削除したものはコピー先の「_AutoCopy\\削除済み」に移り、保存日数の間は元に戻せます。各グループの「今の名前」は削除できません。");
-            bToText = Ui.B("選んだ重複をテキストにする（コピーしない）", delegate { ResolveLarge("text"); });
+            bToText = Btn.MakeCaution(Ui.B("選んだ重複をテキストにする（コピーしない）", delegate { ResolveLarge("text"); }));
             bToCopy = Ui.B("選んだ重複を普通にコピーする", delegate { ResolveLarge("copy"); });
             Label lnote = Ui.Hint("大きいファイルの重複：チェックしたものを「テキストにする」と、コピー先には1つ目の保管場所を書いたテキストを置きます（コピー済みのものは削除済みへ移し、元に戻せます）。「普通にコピー」を選ぶと、今後もそのままコピーします。");
             Ui.FitToForm(lnote, 1000);
@@ -403,14 +410,13 @@ namespace AutoCopy
             bottom.Dock = DockStyle.Bottom;
             bottom.Padding = new Padding(12, 6, 12, 6);
 
-            Button del = Ui.B("選んだものを削除…", delegate { DeleteChecked(); });
-            del.ForeColor = Ui.Err;
+            Button del = Btn.MakeDanger(Ui.B("選んだものを削除…", delegate { DeleteChecked(); }));
             Controls.Add(lv);
             Controls.Add(checkBar);
             Controls.Add(top);
             Controls.Add(bottom);
-            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), del,
-                Ui.B("元に戻す…", delegate { if (currentJob != null) using (TrashForm f = new TrashForm(currentJob)) f.ShowDialog(this); }),
+            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(), del, Btn.Gap(),
+                SafeBtn(Ui.B("元に戻す…", delegate { if (currentJob != null) using (TrashForm f = new TrashForm(currentJob)) f.ShowDialog(this); })),
                 Ui.B("削除済みフォルダを開く", delegate { if (currentJob != null) Ui.OpenFolder(PathUtil.Combine(PathUtil.Combine(CopyEngine.ResolvedDest(currentJob, AppCore.Settings), AppPaths.DestMetaFolder), "削除済み")); })));
             FillJobs();
             VisibleChanged += delegate { if (Visible) MarkSeen(); };
@@ -794,8 +800,8 @@ namespace AutoCopy
             Controls.Add(lv);
             Controls.Add(bar);
             Controls.Add(top);
-            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }),
-                Ui.B("チェックしたものを取り消す（また確認する）", delegate { Forget(); })));
+            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(),
+                Btn.MakeCaution(Ui.B("チェックしたものを取り消す（また確認する）", delegate { Forget(); }))));
             Reload();
         }
 
@@ -905,12 +911,11 @@ namespace AutoCopy
             lv.CheckBoxes = true;
             lv.Dock = DockStyle.Fill;
             Panel bar = Ui.CheckAllBar(lv, "すべてにチェック／すべて外す", null, Ui.B("条件で選ぶ…", delegate { SelectByCondition(); }));
-            Button del = Ui.B("チェックしたものを削除する…", delegate { Apply(true); });
-            del.ForeColor = Ui.Err;
+            Button del = Btn.MakeDanger(Ui.B("チェックしたものを削除する…", delegate { Apply(true); }));
             Controls.Add(lv);
             Controls.Add(bar);
             Controls.Add(top);
-            Controls.Add(Ui.Footer(Ui.B("閉じる（後で決める）", delegate { Close(); }), del,
+            Controls.Add(Ui.Footer(Ui.B("閉じる（後で決める）", delegate { Close(); }), Btn.Gap(), del, Btn.Gap(),
                 Ui.B("チェックしたものを残す（戻す）", delegate { Apply(false); })));
             Reload();
         }

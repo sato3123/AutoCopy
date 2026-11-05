@@ -41,7 +41,13 @@ namespace AutoCopy
             lSpeed = Ui.L("");
             lLast = Ui.Hint("");
             Ui.FitToForm(lLast, 800);
-            stop = Ui.B("このジョブを中止", delegate { if (selectedId != null) AppCore.CancelJob(selectedId); });
+            stop = Btn.MakeCaution(Ui.B("このジョブを中止", delegate
+            {
+                if (selectedId == null) return;
+                JobConfig sj = AppCore.FindJob(selectedId);
+                if (!Ui.Confirm(this, "「" + (sj != null ? sj.Name : "") + "」を中止します。\nコピーの途中のファイルは、次の実行でコピーし直します。よろしいですか？")) return;
+                AppCore.CancelJob(selectedId);
+            }));
             FlowLayoutPanel barRow = Ui.WrapRow(bar, stop);
             Ui.FitToForm(barRow, 860);
             foreach (Label l in new Label[] { lFiles, lBytes, lSpeed }) Ui.FitToForm(l, 860);

@@ -85,6 +85,7 @@ namespace AutoCopy
             liveLabel.ForeColor = Ui.Accent;
             liveLabel.Margin = new Padding(3, Ui.S(8), 3, 3);
             stopBtn = Ui.B("中止", delegate { StopAnalyze(); });
+            stopBtn.Tag = "safe";   // 調べるのを止めるだけ（コピーはしていない）
             FlowLayoutPanel lb = Ui.Row(bar2, liveLabel, stopBtn);
             liveBand = new Panel();
             liveBand.Dock = DockStyle.Top;
@@ -103,7 +104,7 @@ namespace AutoCopy
             Splitter sp = new Splitter();
             sp.Dock = DockStyle.Left;
 
-            runNow = Ui.B("この内容で今すぐ実行", delegate { RunNow(); });
+            runNow = Btn.MakePrimary(Ui.B("この内容で今すぐ実行", delegate { RunNow(); }));
             runNow.Visible = allowRun;
             againBtn = Ui.B("もう一度調べる", delegate { Analyze(); });
             Controls.Add(right);
@@ -111,7 +112,7 @@ namespace AutoCopy
             Controls.Add(kinds);
             Controls.Add(liveBand);
             Controls.Add(top);
-            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), runNow,
+            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(), runNow, Btn.Gap(),
                 Ui.B("一覧をCSVに書き出す", delegate { Export(); }),
                 againBtn));
             Shown += delegate { if (result == null && live == null) Analyze(); };
