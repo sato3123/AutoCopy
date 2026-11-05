@@ -310,7 +310,7 @@ namespace AutoCopy
 
             // 「今後も上書きしない」の見本
             JobState st = AppCore.GetState(j0.Id);
-            lock (st) { st.SkipForever.Add("設定\\共有_一覧（各自で編集）.csv"); st.SkipForever.Add("見積\\見積書_旧版.xlsx"); }
+            lock (st) { st.SkipForever.Add("設定\\一覧.csv"); st.SkipForever.Add("請求書\\10月_控え.pdf"); }
             Capture("39_今後も上書きしないファイル", delegate() { return new SkipListForm(); }, delegate(Form f) { CheckFirst(f); });
             lock (st) { st.SkipForever.Clear(); }
 
@@ -518,9 +518,12 @@ namespace AutoCopy
             while (DateTime.Now < until) { Application.DoEvents(); Thread.Sleep(30); }
         }
 
+        private static readonly List<string> timing = new List<string>();
+
         private static void Capture(string name, Func<Form> make, Action<Form> after)
         {
             Form f = null;
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 f = make();
@@ -548,6 +551,8 @@ namespace AutoCopy
             {
                 try { if (f != null) { f.Close(); f.Dispose(); } } catch (Exception) { }
                 Pump(200);
+                timing.Add(name + "\t" + sw.Elapsed.TotalSeconds.ToString("0.0"));
+                try { File.WriteAllLines(Path.Combine(outDir, "timing.txt"), timing.ToArray()); } catch (Exception) { }
             }
         }
 
