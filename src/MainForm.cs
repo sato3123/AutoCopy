@@ -470,8 +470,8 @@ namespace AutoCopy
                     else if (rt.LastResult == "canceled") { result = "中断　" + rt.LastMessage; color = Ui.Quiet; }
                     else if (rt.LastResult == "ok" && (rt.LastMessage ?? "").StartsWith(JobOutcome.Partial)) { result = rt.LastMessage; color = Ui.Warn; }
                     else if (rt.LastResult == "ok") { result = "正常　" + rt.LastMessage; color = Ui.Ok; }
-                    if (rt.QueuedManual || rt.WaitingFor != null) { result = "待機中（「" + rt.WaitingFor + "」が終わってから実行）　" + result; color = Ui.Accent; }
                     else result = "未実行";
+                    if (!rt.Running && (rt.QueuedManual || rt.WaitingFor != null)) { result = "待機中（「" + rt.WaitingFor + "」が終わってから実行）　" + result; color = Ui.Accent; }
                     if (conflicts > 0) result = "確認待ち " + conflicts + "件　" + result;
                     if (pending > 0) result = "削除保留 " + pending + "件　" + result;
                     if (!j.Enabled) { result = "無効"; color = Ui.Quiet; }

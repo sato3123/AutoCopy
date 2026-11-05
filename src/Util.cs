@@ -301,6 +301,11 @@ namespace AutoCopy
         {
             return n.ToString("#,0");
         }
+
+        public static string Count(long n)
+        {
+            return n.ToString("#,0");
+        }
     }
 
     public static class TimeUtil
