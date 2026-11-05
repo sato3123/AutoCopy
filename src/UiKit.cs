@@ -653,6 +653,9 @@ namespace AutoCopy
         /// <summary>仮想表示（VirtualMode）の一覧で、並べ替えを自分で行うときの通知（列, 昇順）</summary>
         public event Action<int, bool> SortRequested;
 
+        /// <summary>列を最小の幅まで縮めても一覧の幅に収まらない（横にスクロールして見る）</summary>
+        public bool MinOverflow;
+
         /// <summary>並べ替えを無効にする（順番に意味がある一覧）</summary>
         public bool Sortable = true;
 
@@ -821,14 +824,20 @@ namespace AutoCopy
             if (h.Contains("日時") || h.Contains("時刻")) content = Ui.TextWidth(VirtualMode ? "0000/00/00 00:00:00" : "0000/00/00 00:00", Font) + 14;
             if (!VirtualMode)
             {
-                int n = Math.Min(100, Items.Count);
-                for (int r = 0; r < n; r++)
+                try
                 {
-                    ListViewItem it = Items[r];
-                    if (col < it.SubItems.Count) content = Math.Max(content, Ui.TextWidth(it.SubItems[col].Text, Font) + 14);
+                    int n = Math.Min(100, Items.Count);
+                    for (int r = 0; r < n; r++)
+                    {
+                        ListViewItem it = Items[r];
+                        if (it != null && col < it.SubItems.Count && it.SubItems[col] != null)
+                            content = Math.Max(content, Ui.TextWidth(it.SubItems[col].Text, Font) + 14);
+                    }
                 }
+                catch (Exception) { }
             }
-            return Math.Max(m, Math.Min(content, Ui.S(160)));
+            int cap = h.Contains("日時") || h.Contains("時刻") ? Ui.S(170) : Ui.S(110);
+            return Math.Max(m, Math.Min(content, cap));
         }
 
         /// <summary>列の合計が横幅を越えるときは縮め、余るときは一番広い列を広げる</summary>
@@ -851,6 +860,7 @@ namespace AutoCopy
                 }
                 if (sum <= 0) return;
                 int[] w = (int[])designWidths.Clone();
+                MinOverflow = false;
                 if (sum > avail)
                 {
                     // 全体を同じ割合で縮める（長い列ほど多く縮む）。ただし、見出しと短い中身（日時・サイズ・種類など）が読める幅は残す
@@ -879,6 +889,9 @@ namespace AutoCopy
                         }
                         if (!changed) break;
                     }
+                    int minSum = 0;
+                    for (int i = 0; i < w.Length; i++) if (designWidths[i] > 0) minSum += min[i];
+                    MinOverflow = minSum > avail;   // 見出しが読める幅だけでも収まらない（横にスクロールして見る）
                 }
                 else if (widest >= 0) w[widest] += avail - sum;
                 for (int i = 0; i < w.Length; i++)

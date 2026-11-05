@@ -190,7 +190,9 @@ namespace AutoCopy
                     }
                     // 列の合計が一覧の幅を越える＝右の列が画面に収まらず、横にスクロールしないと見えない
                     int vs = lv.Items.Count > 0 || lv.VirtualListSize > 0 ? SystemInformation.VerticalScrollBarWidth : 0;
-                    if (lv.ClientSize.Width > 100 && sum > lv.ClientSize.Width + vs + 4)
+                    // （見出しが読める最小の幅まで縮めても収まらない表は、横にスクロールして見るので対象外）
+                    AcListView alv = lv as AcListView;
+                    if (lv.ClientSize.Width > 100 && sum > lv.ClientSize.Width + vs + 4 && (alv == null || !alv.MinOverflow))
                         issues.Add(Name(c) + "：列が一覧の幅に収まらない（列の合計 " + sum + "px／一覧の幅 " + lv.ClientSize.Width + "px）");
                 }
             }
