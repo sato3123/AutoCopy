@@ -2781,6 +2781,7 @@ namespace AutoCopy.Tests
             True(File.Exists(aside4) && !File.Exists(ld4) && File.Exists(j4), "動いている処理には触らない");
             CommitJournal.End(j4);
             File.Delete(j3);
+            File.Delete(aside4);   // テストで作った「置き換え中」の控え
 
             // 通常の上書きでは記録を残さない・控えも残さない
             SafeFs.SetProtectedSources(new string[0]);
