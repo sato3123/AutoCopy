@@ -13,6 +13,7 @@ namespace AutoCopy
     {
         public int SyncDeleteCandidates;   // 同期：削除の確認待ち
         public int SyncNotTaken;           // 同期：共有フォルダにだけあるが、設定により取り込まなかった
+        public int SyncNotPushed;          // 同期：このPCにだけあるが、設定により共有フォルダへコピーしなかった
         public int SyncDeleteNew;          // うち今回新しく見つかったもの
 
         public int PlannedCopyCount, Scanned, Copied, Overwritten, Renamed, Conflicts, Deleted, Errors, Locked, Excluded, Deferred, PendingDeletes, SameAdopted;
@@ -77,7 +78,8 @@ namespace AutoCopy
         public const string Excluded = "除外";
         public const string SyncDelete = "削除の確認（同期）";
         public const string SyncNotTaken = "取り込まない（同期の設定）";
-        public static readonly string[] All = { Copy, Overwrite, Conflict, Skip, Rename, Delete, Hold, Dedup, DedupAsk, SyncIn, SyncDelete, SyncNotTaken, Same, Deferred, Excluded };
+        public const string SyncNotPushed = "共有へ送らない（同期の設定）";
+        public static readonly string[] All = { Copy, Overwrite, Conflict, Skip, Rename, Delete, Hold, Dedup, DedupAsk, SyncIn, SyncDelete, SyncNotTaken, SyncNotPushed, Same, Deferred, Excluded };
     }
 
     public class FolderConflictException : Exception
@@ -817,10 +819,24 @@ namespace AutoCopy
 
                 if (L != null && S == null)
                 {
-                    if (lChanged) { AddTask(ups, new CopyTask(rel, L, false)); continue; }
-                    // 記録があり変わっていない＝共有フォルダで誰かが消した → 戻さず、このPCからも消すかを確認してもらう
-                    AddSyncCandidate(rel, SyncDeleteItem.SideLocal, L.Size, L.Mtime);
-                    Plan(PlanKind.SyncDelete, rel, L, -1, 0, "共有フォルダで削除された → このPCからも消すか確認（消す場合は控えに移す）");
+                    bool realChange = rec == null || rec.Size != L.Size || rec.Mtime != L.Mtime;
+                    if (rec != null && !realChange && !(FullVerify && job.SyncPushNew))
+                    {
+                        // 記録があり変わっていない＝共有フォルダで誰かが消した → 戻さず、このPCからも消すかを確認してもらう
+                        AddSyncCandidate(rel, SyncDeleteItem.SideLocal, L.Size, L.Mtime);
+                        Plan(PlanKind.SyncDelete, rel, L, -1, 0, "共有フォルダで削除された → このPCからも消すか確認（消す場合は控えに移す）");
+                        continue;
+                    }
+                    // このPCにだけある（共有フォルダにない）ファイル：初期値では共有フォルダへコピーしない（ジョブ設定で選べる）
+                    if (!job.SyncPushNew)
+                    {
+                        res.SyncNotPushed++;
+                        Plan(PlanKind.SyncNotPushed, rel, L, -1, 0, rec == null
+                            ? "このPCにだけある → 共有フォルダにはコピーしない（設定）"
+                            : "共有フォルダで削除された後にこのPCで更新 → 共有フォルダにはコピーしない（設定）");
+                        continue;
+                    }
+                    AddTask(ups, new CopyTask(rel, L, false));
                     continue;
                 }
                 if (L == null)

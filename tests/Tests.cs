@@ -1439,8 +1439,8 @@ namespace AutoCopy.Tests
                 App.InstanceId = "test-instance";
                 App.FolderName = "PC1";
                 App.TrashDays = 30;
-                JA = new JobConfig(); JA.Name = name + "A"; JA.Source = A; JA.Dest = S; JA.Sync = true; JA.RetryCount = 0; JA.SyncTakeNew = true;
-                JB = new JobConfig(); JB.Name = name + "B"; JB.Source = B; JB.Dest = S; JB.Sync = true; JB.RetryCount = 0; JB.SyncTakeNew = true;
+                JA = new JobConfig(); JA.Name = name + "A"; JA.Source = A; JA.Dest = S; JA.Sync = true; JA.RetryCount = 0; JA.SyncTakeNew = true; JA.SyncPushNew = true;
+                JB = new JobConfig(); JB.Name = name + "B"; JB.Source = B; JB.Dest = S; JB.Sync = true; JB.RetryCount = 0; JB.SyncTakeNew = true; JB.SyncPushNew = true;
                 App.Jobs.Add(JA); App.Jobs.Add(JB);
                 AppCore.Settings = App;
                 SafeFs.SetProtectedSources(new string[] { A, B });
@@ -2038,6 +2038,7 @@ namespace AutoCopy.Tests
         {
             JobConfig def = Json.Deserialize<JobConfig>("{\"Name\":\"v19\",\"Sync\":true}");
             True(!def.SyncTakeNew, "初期値は「コピーしない」（前の版の設定を読んだときも）");
+            True(!def.SyncPushNew && !new JobConfig().SyncPushNew, "このPCにだけあるファイルも、初期値は「共有フォルダにコピーしない」");
             True(new JobConfig().RunAtStartup && def.RunAtStartup, "ログオン時にも実行する が初期値");
 
             SyncPair p = new SyncPair("T63");
@@ -2070,6 +2071,35 @@ namespace AutoCopy.Tests
             RunResult r3 = p.Run(p.JA, "pc1");
             Eq(1, r3.Downloaded, "取り込む設定にすると入る");
             Eq("PC2が追加", Read(Path.Combine(p.A, "PC2だけ.txt")), "中身");
+
+            // このPCにだけあるファイル：初期値では共有フォルダへコピーしない（設定でコピーできる）
+            p.JA.SyncPushNew = false;
+            WriteFile(Path.Combine(p.A, "PC1だけ.txt"), "PC1が追加", 600);
+            RunResult r4 = p.Run(p.JA, "pc1");
+            Eq(0, r4.Copied, "このPCにだけあるファイルは共有フォルダへコピーしない");
+            Eq(1, r4.SyncNotPushed, "送らなかった件数");
+            True(!File.Exists(Path.Combine(p.S, "PC1だけ.txt")), "共有フォルダにはない");
+            Eq(0, r4.SyncDeleteCandidates, "削除の候補にもしない");
+            RunResult pv2 = AppCore.DryRun(p.JA, false);
+            True(pv2.Plan.Exists(delegate(PlanItem x) { return x.Kind == PlanKind.SyncNotPushed && x.Rel == "PC1だけ.txt"; }), "予測に「共有へ送らない」");
+            WriteFile(Path.Combine(p.A, "共通.txt"), "PC1が更新した", 50);
+            RunResult r5 = p.Run(p.JA, "pc1");
+            Eq(1, r5.Overwritten, "両方にあるファイルの更新は共有フォルダへ伝える");
+            p.JA.SyncPushNew = true;
+            RunResult r6 = p.Run(p.JA, "pc1");
+            Eq(1, r6.Copied, "コピーする設定にすると共有フォルダへ");
+            Eq("PC1が追加", Read(Path.Combine(p.S, "PC1だけ.txt")), "中身");
+
+            // 共有フォルダで消えたファイルを「残す」：送らない設定でも、その場で共有フォルダへ戻す
+            p.JA.SyncPushNew = false;
+            File.Delete(Path.Combine(p.S, "PC1だけ.txt"));
+            RunResult r7 = p.Run(p.JA, "pc1");
+            Eq(1, r7.SyncDeleteCandidates, "共有フォルダで消えた → 削除の確認");
+            SyncDeleteItem keep = SyncDeleteStore.GetItems(p.JA.Id).Find(delegate(SyncDeleteItem x) { return x.Rel == "PC1だけ.txt"; });
+            Eq(0, AppCore.ResolveSyncDeletes(p.JA, new List<SyncDeleteItem>(new SyncDeleteItem[] { keep }), false).Count, "残す");
+            Eq("PC1が追加", Read(Path.Combine(p.S, "PC1だけ.txt")), "すぐに共有フォルダへ戻った");
+            RunResult r8 = p.Run(p.JA, "pc1");
+            Eq(0, r8.Copied + r8.SyncDeleteCandidates + r8.SyncNotPushed, "その後は何もしない");
         }
 
         private static void T64_Schedule()

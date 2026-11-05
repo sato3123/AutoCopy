@@ -17,7 +17,7 @@ namespace AutoCopy
         // 基本
         private TextBox tName, tSrc, tDst, tStart, tEnd;
         private CheckBox cEnabled, cSub, cWindow, cDelay, cFollow, cBackup, cRunAtStartup;
-        private RadioButton rSyncNoTake, rSyncTake, rInterval, rStartupOnly;
+        private RadioButton rSyncNoTake, rSyncTake, rSyncNoPush, rSyncPush, rInterval, rStartupOnly;
         private RadioButton rDedupOff, rDedupAsk, rDedupOn;
         private CheckBox cAlwaysRename;
         private Label lSyncNote, lDedupNote;
@@ -138,7 +138,12 @@ namespace AutoCopy
             rSyncTake = Ui.R("このPCに取り込む（他のPCが追加したファイルも入ってくる）", false);
             FlowLayoutPanel syncNew = Ui.Column(Ui.Hint("共有フォルダにだけあって、このPCにないファイル："), rSyncNoTake, rSyncTake);
             syncNew.Margin = new Padding(Ui.S(22), 0, 3, 4);
-            FlowLayoutPanel modes = Ui.Column(rAppend, rMirror, mirrorLimit, rSync, lSyncNote, syncNew);
+            // このPCにだけある（共有フォルダにない）ファイルの扱い（別の入れ物＝別の選択）
+            rSyncNoPush = Ui.R("共有フォルダにはコピーしない（初期値）", true);
+            rSyncPush = Ui.R("共有フォルダへコピーする（このPCで追加したファイルも他のPCへ）", false);
+            FlowLayoutPanel syncPush = Ui.Column(Ui.Hint("このPCにだけあって、共有フォルダにないファイル："), rSyncNoPush, rSyncPush);
+            syncPush.Margin = new Padding(Ui.S(22), 0, 3, 4);
+            FlowLayoutPanel modes = Ui.Column(rAppend, rMirror, mirrorLimit, rSync, lSyncNote, syncNew, syncPush);
             b.Controls.Add(Ui.Row(Ui.L("コピーの方式", 130), modes));
 
             // 実行のタイミング：一定の間隔で（＋ログオン時）／ログオン時のみ
@@ -212,7 +217,7 @@ namespace AutoCopy
                 + "・コピー先は、同期するすべてのPCから見える共有フォルダにしてください（{フォルダ名} は使えません）。\n"
                 + "・他のPCが入れた・更新したファイルが、このPCのコピー元フォルダに入ってきます。\n"
                 + "・削除は「削除の確認」で選んでから伝えます。両方で変えたファイルは確認画面で選びます。\n"
-                + "・共有フォルダにだけあるファイルは、初期値ではこのPCにコピーしません（下で選べます）。\n"
+                + "・共有フォルダにだけあるファイルはこのPCに、このPCにだけあるファイルは共有フォルダに、初期値ではコピーしません（両方にあるファイルの更新だけを伝えます。下で選べます）。\n"
                 + "・このPCの古い版は、置き換える前に控え（" + AppPaths.SyncBackupDir + "）に残します。\n"
                 + "・重複チェックと大きいファイルの重複の省略は、同期では行いません。\n\n同期にしますか？";
             if (!Ui.Confirm(this, msg))
@@ -246,6 +251,7 @@ namespace AutoCopy
             nMirrorCount.Enabled = nMirrorPct.Enabled = mirror;
             lSyncNote.Enabled = sync;
             rSyncNoTake.Enabled = rSyncTake.Enabled = sync;
+            rSyncNoPush.Enabled = rSyncPush.Enabled = sync;
             // 実行する時間帯・起動後の待ち
             tStart.Enabled = tEnd.Enabled = cWindow.Checked;
             nDelay.Enabled = cDelay.Checked;
@@ -303,12 +309,16 @@ namespace AutoCopy
                 expect(!rDedupOn.Enabled && !nDedup.Enabled, "同期のとき重複の省略を選べる");
                 expect(!cDup.Enabled && !cbWeekday.Enabled && !tDupTime.Enabled, "同期のとき重複チェックを変えられる");
                 expect(rSyncTake.Enabled && rSyncNoTake.Enabled, "同期なのに共有フォルダにだけあるファイルの扱いを選べない");
+                expect(rSyncPush.Enabled && rSyncNoPush.Enabled, "同期なのにこのPCにだけあるファイルの扱いを選べない");
+                rSyncPush.Checked = true;
+                expect(rSyncNoTake.Checked && rSync.Checked, "共有へコピーするを選ぶと、取り込みや方式の選択が外れる（同じ入れ物に入っている）");
+                rSyncNoPush.Checked = true;
                 rSyncTake.Checked = true;
                 expect(rSync.Checked, "取り込むを選ぶと方式の選択が外れる（同じ入れ物に入っている）");
                 rSyncNoTake.Checked = true;
                 rAppend.Checked = true; UpdateEnabled();
                 expect(!rSync.Checked && !rMirror.Checked, "追加・更新を選んでも他の方式の選択が外れない");
-                expect(!rSyncTake.Enabled && !rSyncNoTake.Enabled, "同期でないのに共有フォルダにだけあるファイルの扱いを選べる");
+                expect(!rSyncTake.Enabled && !rSyncNoTake.Enabled && !rSyncPush.Enabled && !rSyncNoPush.Enabled, "同期でないのに、共有フォルダ／このPCにだけあるファイルの扱いを選べる");
                 rDedupOff.Checked = true; UpdateEnabled();
                 expect(rDedupOn.Enabled && !nDedup.Enabled, "重複の省略を使わないのに大きさを変えられる");
                 expect(!rDedupAsk.Checked && !rDedupOn.Checked, "使わないを選んでも他の選択が外れない");
@@ -585,6 +595,8 @@ namespace AutoCopy
             rAppend.Checked = !j.Mirror && !j.Sync;
             rSyncTake.Checked = j.SyncTakeNew;
             rSyncNoTake.Checked = !j.SyncTakeNew;
+            rSyncPush.Checked = j.SyncPushNew;
+            rSyncNoPush.Checked = !j.SyncPushNew;
             cRunAtStartup.Checked = j.RunAtStartup;
             rStartupOnly.Checked = j.StartupOnly;
             rInterval.Checked = !j.StartupOnly;
@@ -678,6 +690,7 @@ namespace AutoCopy
             j.Mirror = rMirror.Checked;
             j.Sync = rSync.Checked;
             j.SyncTakeNew = rSync.Checked && rSyncTake.Checked;
+            j.SyncPushNew = rSync.Checked && rSyncPush.Checked;
             j.RunAtStartup = cRunAtStartup.Checked;
             j.StartupOnly = rStartupOnly.Checked;
             j.Dedup = rDedupOff.Checked ? DedupMode.Off : rDedupOn.Checked ? DedupMode.Auto : DedupMode.Ask;

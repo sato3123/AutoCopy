@@ -764,8 +764,17 @@ namespace AutoCopy
                             lock (st) { st.Files[i.Rel] = rec; }
                             Logger.Write(job.Name, "SYNCIN", i.Rel + "　（削除せずに残すことにしたため、共有フォルダからこのPCへ戻しました）", i.Size, -1);
                         }
-                        else
-                            Logger.Write(job.Name, "SYNCIN", i.Rel + "　（削除せずに残すことにしました。次回の実行で共有フォルダへ戻します）", i.Size, -1);
+                        else if (i.Side == SyncDeleteItem.SideLocal && lEx && !sEx)
+                        {
+                            // 共有フォルダで消えたもの（このPCにある）を残す：「共有へ送らない」設定でも戻るよう、ここで共有フォルダへ戻す
+                            FileInfo lf = new FileInfo(PathUtil.Long(lp));
+                            byte[] h = SafeFs.CopyFile(lp, sp, lf.LastWriteTimeUtc, null, CancellationToken.None);
+                            FileRecord rec = new FileRecord();
+                            rec.Size = lf.Length; rec.Mtime = lf.LastWriteTimeUtc.Ticks; rec.Hash = h; rec.CopiedByApp = true;
+                            rec.DestMtime = File.GetLastWriteTimeUtc(PathUtil.Long(sp)).Ticks;
+                            lock (st) { st.Files[i.Rel] = rec; }
+                            Logger.Write(job.Name, "COPY", i.Rel + "　（削除せずに残すことにしたため、このPCから共有フォルダへ戻しました）", i.Size, -1);
+                        }
                     }
                     done.Add(i);
                 }
