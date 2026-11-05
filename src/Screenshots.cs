@@ -51,7 +51,7 @@ namespace AutoCopy
             string setup = Path.Combine(AppPaths.Local, "sample", AppPaths.SetupFileName);
             Capture("15_初回セットアップ_配布設定", delegate() { return new SetupForm(setup, Distribution.ReadEnvelope(setup), true); }, null);
             Capture("16_初回セットアップ_パスワード入力後", delegate() { return new SetupForm(setup, Distribution.ReadEnvelope(setup), true); },
-                delegate(Form f) { UnlockSetup(f, "secret"); });
+                delegate(Form f) { UnlockSetup(f, "secret-pass-2026"); });
             Capture("17_初回セットアップ_単独", delegate() { return new SetupForm(null, null, true); }, null);
             Capture("19_PCごとのコピー容量", delegate()
             {
@@ -248,7 +248,7 @@ namespace AutoCopy
             DistPayload pl = Distribution.BuildPayload(s, "経理部", 3, new List<DistCredential>());
             DistCredential cr = new DistCredential(); cr.Server = "nas01"; cr.User = "nas01\\yamada"; cr.Password = "x";
             pl.Credentials.Add(cr);
-            Distribution.Write(Path.Combine(root, AppPaths.SetupFileName), pl, "secret");
+            Distribution.Write(Path.Combine(root, AppPaths.SetupFileName), pl, "secret-pass-2026");
         }
 
         /// <summary>作業状況（コピー中の様子を作って撮る）と、実行結果の予測</summary>

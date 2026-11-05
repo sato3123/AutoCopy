@@ -96,7 +96,7 @@ namespace AutoCopy
                             if (onCount != null && (++seen % 500) == 0) onCount(seen);
                             long size = fi.Length;
                             DateTime mt = fi.LastWriteTimeUtc;
-                            if (name.EndsWith(SafeFs.PartSuffix, StringComparison.OrdinalIgnoreCase) || name.EndsWith(SafeFs.AsideSuffix, StringComparison.OrdinalIgnoreCase)) continue;   // コピー作業中の一時ファイル
+                            if (name.EndsWith(SafeFs.PartSuffix, StringComparison.OrdinalIgnoreCase) || name.EndsWith(SafeFs.AsideSuffix, StringComparison.OrdinalIgnoreCase) || name.EndsWith(SafeFs.LockSuffix, StringComparison.OrdinalIgnoreCase)) continue;   // コピー作業中の一時ファイル
                             if (matcher != null && matcher.ExcludeFile(childRel, name, size, mt, a))
                             {
                                 res.ExcludedCount++;

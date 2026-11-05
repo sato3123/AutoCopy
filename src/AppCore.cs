@@ -203,11 +203,17 @@ namespace AutoCopy
             }
         }
 
-        public static void SaveState(string id)
+        /// <summary>状態を保存する（変更中の状態と保存の内容が混ざらないよう、保存の間は状態を変えさせない）。保存できなければ理由。</summary>
+        public static string SaveState(string id)
         {
             JobState s = GetState(id);
-            try { lock (s) { s.Save(); } }
-            catch (Exception ex) { Logger.Error(null, "状態ファイルを保存できません: " + ex.Message); }
+            try { lock (s) { s.Save(); } return null; }
+            catch (Exception ex)
+            {
+                // ファイルは前回の内容のまま（一時ファイルに書いてから置き換えるため、壊れない）。覚えている内容は次の保存で書く
+                Logger.Error(null, "状態ファイルを保存できません: " + ex.Message);
+                return "状態ファイルを保存できません（前回の内容のままです。次の実行でもう一度保存します）: " + ex.Message;
+            }
         }
 
         public static void ForgetJobState(string id)
@@ -225,6 +231,12 @@ namespace AutoCopy
 
         public static void Start()
         {
+            // 前回、上書きの途中で終了していたら元に戻す（NAS の応答待ちで起動を遅らせないよう、別のスレッドで）
+            Task.Factory.StartNew(delegate()
+            {
+                try { CommitJournal.Recover(); }
+                catch (Exception ex) { Logger.Error(null, "上書きの途中で終了したファイルの確認に失敗しました: " + ex.Message); }
+            });
             timer = new Timer(delegate(object o) { Tick(); }, null, 3000, 15000);
         }
 
@@ -548,7 +560,8 @@ namespace AutoCopy
                     st.LastResult = rt.LastResult;
                     st.LastMessage = rt.LastMessage;
                 }
-                SaveState(job.Id);
+                string saveErr = SaveState(job.Id);
+                if (saveErr != null && error == null && !canceled) NotifyError(job, saveErr, false);
                 if (res != null) Logger.Write(job.Name, "SUMMARY", res.Summary(), res.Bytes, res.Seconds);
                 if (canceled)
                     Logger.Info(job.Name, "中止しました（コピーの途中のファイルは、次の実行でコピーし直します）");
@@ -744,9 +757,20 @@ namespace AutoCopy
                     string s = PathUtil.Combine(src, c.Rel), d = PathUtil.Combine(dst, c.Rel);
                     FileInfo fi = new FileInfo(PathUtil.Long(s));
                     if (!fi.Exists) return "コピー元にファイルがありません: " + c.Rel;
+                    // 確認の画面に出した後で、コピー先（同期では共有フォルダ）が変わっていたら上書きしない
+                    DestExpect expect = c.DstSize >= 0 ? DestExpect.Same(c.DstSize, c.DstMtime) : null;
+                    string why = expect != null ? expect.Check(PathUtil.Long(d)) : null;
+                    if (why != null)
+                    {
+                        if (job.Sync) SyncRemoteCache.Invalidate(job.Id);
+                        return c.Rel + "：確認の後でコピー先が変わったため（" + why + "）、上書きしませんでした。次の実行で確かめ直します";
+                    }
                     if (backup && File.Exists(PathUtil.Long(d)))
+                    {
                         SafeFs.MoveToTrash(dst, c.Rel, "退避", DateTime.Now.ToString("yyyyMMdd-HHmmss"));
-                    byte[] hash = SafeFs.CopyFile(s, d, fi.LastWriteTimeUtc, null, CancellationToken.None);
+                        expect = DestExpect.Absent();
+                    }
+                    byte[] hash = SafeFs.CopyFile(s, d, fi.LastWriteTimeUtc, null, CancellationToken.None, null, expect);
                     FileRecord old;
                     lock (st) st.Files.TryGetValue(c.Rel, out old);
                     FileRecord rec = new FileRecord();
@@ -763,8 +787,12 @@ namespace AutoCopy
                     string s = PathUtil.Combine(dst, c.Rel), l = PathUtil.Combine(src, c.Rel);
                     FileInfo fi = new FileInfo(PathUtil.Long(s));
                     if (!fi.Exists) return "共有フォルダにファイルがありません: " + c.Rel;
+                    // 確認の画面に出した後で、このPCのファイルが変わっていたら置き換えない
+                    DestExpect expect = c.SrcSize >= 0 ? DestExpect.Same(c.SrcSize, c.SrcMtime) : null;
+                    string why = expect != null ? expect.Check(PathUtil.Long(l)) : null;
+                    if (why != null) return c.Rel + "：確認の後でこのPCのファイルが変わったため（" + why + "）、取り込みませんでした。次の実行で確かめ直します";
                     string backupRoot = Path.Combine(Path.Combine(AppPaths.SyncBackupDir, job.Id), DateTime.Now.ToString("yyyyMMdd-HHmmss"));
-                    byte[] hash = SafeFs.CopyIntoSync(s, l, c.Rel, fi.LastWriteTimeUtc, backupRoot, CancellationToken.None);
+                    byte[] hash = SafeFs.CopyIntoSync(s, l, c.Rel, fi.LastWriteTimeUtc, backupRoot, CancellationToken.None, null, expect);
                     FileRecord rec = new FileRecord();
                     rec.Size = fi.Length; rec.Mtime = File.GetLastWriteTimeUtc(PathUtil.Long(l)).Ticks; rec.Hash = hash; rec.CopiedByApp = true;
                     rec.DestMtime = fi.LastWriteTimeUtc.Ticks;
@@ -890,7 +918,8 @@ namespace AutoCopy
                     errs.Add(i.Rel + "：" + ex.Message);
                 }
             }
-            SyncDeleteStore.Remove(job.Id, done);
+            try { SyncDeleteStore.Remove(job.Id, done); }
+            catch (Exception ex) { errs.Add("確認の結果を保存できませんでした（一覧は前のまま。もう一度選ぶと、すでに済んだものは何もしません）：" + ex.Message); }
             if (done.Count > 0)
             {
                 // 共有フォルダを変えた（かもしれない）：覚えている一覧を捨て、他のPCにも知らせる

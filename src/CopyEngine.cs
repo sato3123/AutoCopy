@@ -254,6 +254,7 @@ namespace AutoCopy
                 SafeFs.CreateDirectory(dst);
                 if (!job.Sync) CheckOwner();   // 同期は複数のPCで同じフォルダを使うため、持ち主の確認をしない
                 SafeFs.HideMeta(dst);
+                CommitJournal.Recover();   // 前回、上書きの途中で終了したものがあれば（つながったので）元に戻す
             }
 
             // --- 走査 ---
@@ -738,6 +739,7 @@ namespace AutoCopy
         private class SyncDown
         {
             public string Rel; public ScanItem Item; public bool Overwrite;
+            public long LocalSize = -1, LocalMtime;   // 上書きする、このPCのファイル（予定を立てたとき）
             public SyncDown(string rel, ScanItem it, bool ow) { Rel = rel; Item = it; Overwrite = ow; }
         }
 
@@ -911,8 +913,20 @@ namespace AutoCopy
                     continue;
                 }
                 if (!lChanged && !sChanged) continue;
-                if (rec != null && lChanged && !sChanged) { AddTask(ups, new CopyTask(rel, L, true)); continue; }
-                if (rec != null && !lChanged && sChanged) { AddDown(downs, new SyncDown(rel, S, true)); continue; }
+                if (rec != null && lChanged && !sChanged)
+                {
+                    CopyTask up = new CopyTask(rel, L, true);
+                    up.DstSize = S.Size; up.DstMtime = S.Mtime;   // 置き換える直前に、共有フォルダのファイルがこのままか確かめる
+                    AddTask(ups, up);
+                    continue;
+                }
+                if (rec != null && !lChanged && sChanged)
+                {
+                    SyncDown dn = new SyncDown(rel, S, true);
+                    dn.LocalSize = L.Size; dn.LocalMtime = L.Mtime;
+                    AddDown(downs, dn);
+                    continue;
+                }
 
                 // 初回、または両方で変わった：中身が同じなら記録だけ、違えば確認待ち
                 if (L.Size == S.Size && (Math.Abs(L.Mtime - S.Mtime) <= tol || SameContent(PathUtil.Combine(src, rel), PathUtil.Combine(dst, rel))))
@@ -984,8 +998,19 @@ namespace AutoCopy
                     bool okIn = false;
                     try
                     {
+                        // 置き換える直前に、このPCのファイルが予定を立てたときのままか確かめる（変わっていたら上書きしない）
+                        DestExpect expect = d.Overwrite ? (d.LocalSize >= 0 ? DestExpect.Same(d.LocalSize, d.LocalMtime) : null) : DestExpect.Absent();
+                        // 共有フォルダの一覧は前回の確認の結果のことがある：取り込む直前の実際の大きさ・更新日時を使う
+                        FileInfo fromNow = new FileInfo(PathUtil.Long(from));
+                        if (!fromNow.Exists) throw new FileNotFoundException("共有フォルダで見つかりません（前回の確認の後で消えた）: " + d.Rel);
+                        if (fromNow.Length != d.Item.Size || Math.Abs(fromNow.LastWriteTimeUtc.Ticks - d.Item.Mtime) > TimeSpan.TicksPerSecond * 2)
+                        {
+                            SyncRemoteCache.Invalidate(job.Id);
+                            ScanItem cur = new ScanItem(); cur.Size = fromNow.Length; cur.Mtime = fromNow.LastWriteTimeUtc.Ticks; cur.Attr = d.Item.Attr;
+                            d.Item = cur;
+                        }
                         hash = SafeFs.CopyIntoSync(from, to, d.Rel, new DateTime(d.Item.Mtime, DateTimeKind.Utc), backupRoot, ct,
-                            delegate(long done) { Progress.Bytes(af, done); });
+                            delegate(long done) { Progress.Bytes(af, done); }, expect);
                         okIn = true;
                     }
                     finally { Progress.End(af, okIn); }
@@ -1012,8 +1037,8 @@ namespace AutoCopy
                 {
                     string kind = ErrorKind.Classify(ex);
                     if (kind == ErrorKind.NotFound) SyncRemoteCache.Invalidate(job.Id);   // 前回の確認の後で消えた：次は詳しく確認する
-                    bool later = kind == ErrorKind.Locked || kind == ErrorKind.Changed || kind == ErrorKind.NotFound || IsSharingViolation(ex as IOException);
-                    Logger.Write(job.Name, "ERROR", d.Rel + "　" + (later ? "【" + ErrorKind.Label(kind == ErrorKind.Changed || kind == ErrorKind.NotFound ? kind : ErrorKind.Locked) + "】次回に取り込みます" : "取り込めません: " + ErrorKind.Describe(ex)), d.Item.Size, -1);
+                    bool later = kind == ErrorKind.Locked || kind == ErrorKind.Changed || kind == ErrorKind.DestChanged || kind == ErrorKind.NotFound || IsSharingViolation(ex as IOException);
+                    Logger.Write(job.Name, "ERROR", d.Rel + "　" + (later ? "【" + ErrorKind.Label(kind == ErrorKind.Changed || kind == ErrorKind.DestChanged || kind == ErrorKind.NotFound ? kind : ErrorKind.Locked) + "】次回に取り込みます" : "取り込めません: " + ErrorKind.Describe(ex)), d.Item.Size, -1);
                     if (later) res.Locked++; else res.Errors++;
                     if (ErrorKind.IsFatal(kind))
                         throw new JobAbortException(kind, (kind == ErrorKind.DiskFull ? "このPCの容量が足りないため、取り込みを止めました" : "ネットワークが切断されたため、取り込みを止めました") + "（" + ex.Message + "）", ex);
@@ -1061,13 +1086,23 @@ namespace AutoCopy
                     string backedUp = null;
                     try
                     {
+                        // 置き換える直前に、コピー先が予定を立てたときのままか確かめる（他のPC・アプリ・ジョブが書いていたら上書きしない）
+                        DestExpect expect = t.Overwrite ? (t.DstSize >= 0 ? DestExpect.Same(t.DstSize, t.DstMtime) : null) : DestExpect.Absent();
+                        if (expect != null)
+                        {
+                            string why = expect.Check(PathUtil.Long(d));
+                            if (why != null) throw new DestChangedException(d, why);
+                        }
                         if (t.Overwrite && job.BackupBeforeOverwrite && File.Exists(PathUtil.Long(d)))
+                        {
                             backedUp = SafeFs.MoveToTrash(dst, t.Rel, "退避", batch);
+                            expect = DestExpect.Absent();   // 元のファイルは退避した（退避の後にできたものは上書きしない）
+                        }
                         byte[] hash;
                         try
                         {
                             hash = SafeFs.CopyFile(s, d, new DateTime(t.Item.Mtime, DateTimeKind.Utc), throttle, stopAll.Token,
-                                delegate(long done) { Progress.Bytes(af, done); });
+                                delegate(long done) { Progress.Bytes(af, done); }, expect);
                         }
                         catch
                         {
@@ -1118,8 +1153,9 @@ namespace AutoCopy
                     catch (Exception ex)
                     {
                         string kind = ErrorKind.Classify(ex);
-                        bool later = kind == ErrorKind.Locked || kind == ErrorKind.Changed || IsSharingViolation(ex as IOException);
-                        Logger.Write(job.Name, "ERROR", t.Rel + "　" + (later ? "【" + ErrorKind.Label(kind == ErrorKind.Changed ? kind : ErrorKind.Locked) + "】次回に回します" : ErrorKind.Describe(ex)), t.Item.Size, -1);
+                        bool later = kind == ErrorKind.Locked || kind == ErrorKind.Changed || kind == ErrorKind.DestChanged || IsSharingViolation(ex as IOException);
+                        if (kind == ErrorKind.DestChanged && job.Sync) SyncRemoteCache.Invalidate(job.Id);   // 共有フォルダが変わっていた：次は詳しく確認する
+                        Logger.Write(job.Name, "ERROR", t.Rel + "　" + (later ? "【" + ErrorKind.Label(kind == ErrorKind.Changed || kind == ErrorKind.DestChanged ? kind : ErrorKind.Locked) + "】次回に回します" + (kind == ErrorKind.DestChanged ? "（" + ex.Message + "）" : "") : ErrorKind.Describe(ex)), t.Item.Size, -1);
                         lock (resLock) { if (later) res.Locked++; else res.Errors++; }
                         if (ErrorKind.IsFatal(kind))
                         {
@@ -1467,10 +1503,13 @@ namespace AutoCopy
                     list.Add(i);
                 }
                 bool same = list.Count == b.Items.Count && fresh == 0;
+                if (same) { b.Items = list; return 0; }
+                // 変更と保存をひとまとまりにする（途中で他の変更が入らない）。保存できなければ元の内容に戻す
+                List<SyncDeleteItem> before = b.Items;
                 b.Items = list;
-                if (same) return 0;
+                try { Save(jobId); }
+                catch { b.Items = before; throw; }
             }
-            Save(jobId);
             return fresh;
         }
 
@@ -1481,9 +1520,13 @@ namespace AutoCopy
             {
                 HashSet<string> keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 foreach (SyncDeleteItem i in items) keys.Add(i.Side + "|" + i.Rel);
-                b.Items.RemoveAll(delegate(SyncDeleteItem x) { return keys.Contains(x.Side + "|" + x.Rel); });
+                List<SyncDeleteItem> before = b.Items;
+                List<SyncDeleteItem> after = new List<SyncDeleteItem>(before);
+                if (after.RemoveAll(delegate(SyncDeleteItem x) { return keys.Contains(x.Side + "|" + x.Rel); }) == 0) return;
+                b.Items = after;
+                try { Save(jobId); }
+                catch { b.Items = before; throw; }   // 保存できなければ元の内容に戻す（画面と保存の内容をそろえる）
             }
-            Save(jobId);
         }
 
         public static void Forget(string jobId)

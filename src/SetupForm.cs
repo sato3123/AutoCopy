@@ -103,6 +103,8 @@ namespace AutoCopy
             try
             {
                 payload = Ui.Busy<DistPayload>(this, "配布設定を確認しています…", delegate() { return Distribution.Decrypt(env, pass); });
+                if (Distribution.IsWeakLegacyPassword(pass))
+                    Logger.Info(null, "この配布設定のパスワードは短いため（" + Distribution.MinPasswordLength + "文字未満）、配布設定を作り直すことをお勧めします（前の版で作ったものもそのまま使えます）");
             }
             catch (Distribution.WrongPasswordException ex)
             {

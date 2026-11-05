@@ -268,6 +268,7 @@ namespace AutoCopy
             r.NamePatterns.Add("~$*");
             r.NamePatterns.Add("*.ckpart");
             r.NamePatterns.Add("*.ckold");
+            r.NamePatterns.Add("*.cklock");
             r.ExcludeHidden = true;
             r.ExcludeSystem = true;
             return r;

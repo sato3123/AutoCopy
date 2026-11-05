@@ -27,9 +27,36 @@ namespace AutoCopy
             return env;
         }
 
+        /// <summary>配布用パスワードの最短の長さ（v1.15 から 12文字。前の版で作った短いパスワードの配布設定も、そのまま読める）</summary>
+        public const int MinPasswordLength = 12;
+
+        /// <summary>配布用パスワードとして使えるか。だめなら理由。</summary>
+        public static string PasswordProblem(string password)
+        {
+            if (string.IsNullOrEmpty(password) || password.Length < MinPasswordLength)
+                return "配布用パスワードは" + MinPasswordLength + "文字以上にしてください（ID・パスワードを含むため、推測されにくい長さが必要です）。";
+            bool allSame = true;
+            foreach (char c in password) if (c != password[0]) allSame = false;
+            if (allSame) return "配布用パスワードに、同じ文字のくり返しは使えません。";
+            return null;
+        }
+
+        /// <summary>短いパスワード（前の版の基準）で作られた配布設定か：作り直しを勧める</summary>
+        public static bool IsWeakLegacyPassword(string password)
+        {
+            return password != null && password.Length < MinPasswordLength;
+        }
+
         public static void Write(string path, DistPayload payload, string password)
         {
-            if (string.IsNullOrEmpty(password) || password.Length < 4) throw new ArgumentException("配布用パスワードは4文字以上にしてください。");
+            string bad = PasswordProblem(password);
+            if (bad != null) throw new ArgumentException(bad);
+            WriteCore(path, payload, password);
+        }
+
+        /// <summary>暗号化して書く（長さの確認なし：テストで前の版の配布設定を作るため）</summary>
+        internal static void WriteCore(string path, DistPayload payload, string password)
+        {
             byte[] salt = Random(16), iv = Random(16);
             byte[] encKey, macKey;
             DeriveKeys(password, salt, Iterations, out encKey, out macKey);

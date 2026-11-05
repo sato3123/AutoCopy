@@ -21,12 +21,13 @@ namespace AutoCopy
     public static class ErrorKind
     {
         public const string Network = "network", DiskFull = "diskfull", AccessDenied = "access", Locked = "locked",
-            NotFound = "notfound", TooLong = "toolong", Changed = "changed", Other = "other";
+            NotFound = "notfound", TooLong = "toolong", Changed = "changed", DestChanged = "destchanged", Other = "other";
 
         public static string Classify(Exception ex)
         {
             if (ex == null) return Other;
             if (ex is SourceChangedException) return Changed;
+            if (ex is DestChangedException) return DestChanged;
             if (ex is UnauthorizedAccessException) return AccessDenied;
             if (ex is PathTooLongException) return TooLong;
             if (ex is FileNotFoundException || ex is DirectoryNotFoundException) return NotFound;
@@ -64,6 +65,7 @@ namespace AutoCopy
                 case NotFound: return "見つからない";
                 case TooLong: return "パスが長すぎる";
                 case Changed: return "コピー中に変更";
+                case DestChanged: return "コピー先が変更された";
             }
             return "その他";
         }
@@ -89,6 +91,35 @@ namespace AutoCopy
     public class SourceChangedException : IOException
     {
         public SourceChangedException(string path) : base("コピー中にコピー元が変わったため、次回コピーします（保存中の可能性）: " + PathUtil.Plain(path)) { }
+    }
+
+    /// <summary>確かめた後にコピー先が変わった（別のPC・アプリ・ジョブが書いた）：上書きせず、次回に判断し直す</summary>
+    public class DestChangedException : IOException
+    {
+        public DestChangedException(string path, string why) : base("確認した後にコピー先が変わったため、上書きしませんでした（" + why + "）。次回、確かめ直します: " + PathUtil.Plain(path)) { }
+    }
+
+    /// <summary>
+    /// 置き換える直前に確かめる、コピー先の状態（予定を立てたときの状態）。
+    /// MustBeAbsent：新しくコピーする（コピー先にまだない）はず。Size ≥ 0：上書きする元のファイルの大きさ・更新日時。
+    /// </summary>
+    public class DestExpect
+    {
+        public bool MustBeAbsent;
+        public long Size = -1, Mtime;
+        public static DestExpect Absent() { DestExpect e = new DestExpect(); e.MustBeAbsent = true; return e; }
+        public static DestExpect Same(long size, long mtime) { DestExpect e = new DestExpect(); e.Size = size; e.Mtime = mtime; return e; }
+
+        /// <summary>今のコピー先が予定どおりか。違えば理由。</summary>
+        public string Check(string ld)
+        {
+            FileInfo fi = new FileInfo(ld);
+            if (MustBeAbsent) return fi.Exists ? "同じ名前のファイルができていた" : null;
+            if (Size < 0) return null;
+            if (!fi.Exists) return null;   // 消えていた：上書きの元がない（新しく置くだけ）
+            if (fi.Length != Size || Math.Abs(fi.LastWriteTimeUtc.Ticks - Mtime) > TimeSpan.TicksPerSecond * 2) return "大きさか更新日時が変わっていた";
+            return null;
+        }
     }
 
     public class SourceProtectedException : Exception
@@ -167,6 +198,11 @@ namespace AutoCopy
 
         public static byte[] CopyIntoSync(string from, string toLocal, string rel, DateTime mtimeUtc, string backupRoot, CancellationToken ct, Action<long> onBytes)
         {
+            return CopyIntoSync(from, toLocal, rel, mtimeUtc, backupRoot, ct, onBytes, null);
+        }
+
+        public static byte[] CopyIntoSync(string from, string toLocal, string rel, DateTime mtimeUtc, string backupRoot, CancellationToken ct, Action<long> onBytes, DestExpect expect)
+        {
             if (!IsInSyncRoot(toLocal))
             {
                 if (Blocked != null) Blocked(PathUtil.Normalize(toLocal));
@@ -184,7 +220,7 @@ namespace AutoCopy
                 File.Copy(lto, lb, false);
                 if (!SameBytes(lto, lb)) { TryDelete(lb); throw new IOException("控えを正しく作れなかったため、取り込みを止めました: " + rel); }
             }
-            return CopyVerifiedAndCommit(from, toLocal, mtimeUtc, null, ct, onBytes);
+            return CopyVerifiedAndCommit(from, toLocal, mtimeUtc, null, ct, onBytes, expect);
         }
 
         /// <summary>一時ファイルの名前（同じファイルへ同時に書いてもぶつからないよう、毎回違う名前にする）</summary>
@@ -193,7 +229,10 @@ namespace AutoCopy
             return dst + "." + Guid.NewGuid().ToString("N").Substring(0, 12) + PartSuffix;
         }
 
-        public const string PartSuffix = ".ckpart", AsideSuffix = ".ckold";
+        public const string PartSuffix = ".ckpart", AsideSuffix = ".ckold", LockSuffix = ".cklock";
+
+        /// <summary>この時間以内に更新されたファイル・書き込み中のファイルは、コピーの後で中身（MD5）を確かめ直す</summary>
+        public static TimeSpan RecentForHashCheck = TimeSpan.FromHours(1);
 
         /// <summary>
         /// コピーの本体（CopyFile・CopyIntoSync 共通）：
@@ -202,7 +241,7 @@ namespace AutoCopy
         /// 3) 中止されたら、置き換える直前でも止める（コピー先は元のまま）
         /// 4) 置き換えは元のファイルを失わない方法で行う（失敗したら元のファイルに戻す）
         /// </summary>
-        private static byte[] CopyVerifiedAndCommit(string src, string dst, DateTime srcMtimeUtc, Throttle throttle, CancellationToken ct, Action<long> onBytes)
+        private static byte[] CopyVerifiedAndCommit(string src, string dst, DateTime srcMtimeUtc, Throttle throttle, CancellationToken ct, Action<long> onBytes, DestExpect expect)
         {
             string ls = PathUtil.Long(src), ld = PathUtil.Long(dst);
             for (int attempt = 1; ; attempt++)
@@ -217,7 +256,15 @@ namespace AutoCopy
                     byte[] hash = CopyCore(ls, lt, throttle, ct, onBytes, out copied);
                     FileInfo after = new FileInfo(ls);
                     after.Refresh();
-                    if (!after.Exists || after.Length != bs || after.LastWriteTimeUtc.Ticks != bm || copied != bs)
+                    bool changed = !after.Exists || after.Length != bs || after.LastWriteTimeUtc.Ticks != bm || copied != bs;
+                    // 大きさ・更新日時が同じでも中身が変わることがある（書き込み中・更新日時を戻すアプリ）：
+                    // 更新されたばかり・他のアプリが書き込みのために開いている ときは、中身を読み直して確かめる
+                    if (!changed && NeedsHashCheck(ls, bm))
+                    {
+                        byte[] again = HashOf(ls, ct);
+                        if (!SameHash(hash, again)) changed = true;
+                    }
+                    if (changed)
                     {
                         TryDelete(lt);
                         if (attempt >= 3) throw new SourceChangedException(src);
@@ -226,7 +273,15 @@ namespace AutoCopy
                     }
                     ct.ThrowIfCancellationRequested();   // 中止：置き換える前に止める（コピー先は元のまま）
                     File.SetLastWriteTimeUtc(lt, srcMtimeUtc);
-                    Commit(lt, ld);
+                    using (DestLock.Acquire(ld, ct))   // 同じコピー先へ同時に書かない（このPCの他のジョブ・他のPC）
+                    {
+                        if (expect != null)
+                        {
+                            string why = expect.Check(ld);
+                            if (why != null) throw new DestChangedException(dst, why);
+                        }
+                        Commit(lt, ld);
+                    }
                     try { File.SetLastWriteTimeUtc(ld, srcMtimeUtc); } catch (Exception ex) { Logger.Error(null, "更新日時を設定できません: " + PathUtil.Plain(dst) + "　" + ex.Message); }
                     return hash;
                 }
@@ -236,6 +291,44 @@ namespace AutoCopy
                     throw;
                 }
             }
+        }
+
+        /// <summary>コピーの後で中身を確かめ直すか：更新されたばかり、または他のアプリが書き込みのために開いている</summary>
+        public static bool NeedsHashCheck(string ls, long mtimeTicks)
+        {
+            if (DateTime.UtcNow.Ticks - mtimeTicks < RecentForHashCheck.Ticks) return true;
+            try
+            {
+                // 書き込みを許さずに開けなければ、誰かが書き込みのために開いている
+                using (new FileStream(ls, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 1)) { }
+                return false;
+            }
+            catch (IOException) { return true; }
+            catch (UnauthorizedAccessException) { return false; }
+        }
+
+        public static byte[] HashOf(string ls, CancellationToken ct)
+        {
+            byte[] buf = new byte[1024 * 1024];
+            using (MD5 md5 = MD5.Create())
+            using (FileStream fin = new FileStream(ls, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, buf.Length, FileOptions.SequentialScan))
+            {
+                int n;
+                while ((n = fin.Read(buf, 0, buf.Length)) > 0)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    md5.TransformBlock(buf, 0, n, null, 0);
+                }
+                md5.TransformFinalBlock(buf, 0, 0);
+                return md5.Hash;
+            }
+        }
+
+        private static bool SameHash(byte[] a, byte[] b)
+        {
+            if (a == null || b == null || a.Length != b.Length) return false;
+            for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
+            return true;
         }
 
         private static byte[] CopyCore(string ls, string lt, Throttle throttle, CancellationToken ct, Action<long> onBytes, out long copied)
@@ -270,36 +363,55 @@ namespace AutoCopy
         /// </summary>
         public static void Commit(string lt, string ld)
         {
-            if (!File.Exists(ld)) { File.Move(lt, ld); return; }
+            if (!File.Exists(ld)) { File.Move(lt, ld); return; }   // 新しく置く：すでにあれば例外（上書きしない）
             FileAttributes a = File.GetAttributes(ld);
-            if ((a & FileAttributes.ReadOnly) != 0) File.SetAttributes(ld, a & ~FileAttributes.ReadOnly);
+            bool ro = (a & FileAttributes.ReadOnly) != 0;
+            if (ro) File.SetAttributes(ld, a & ~FileAttributes.ReadOnly);
             string aside = ld + "." + Guid.NewGuid().ToString("N").Substring(0, 12) + AsideSuffix;
+            // 強制終了・電源断に備えて、置き換えの途中であることを記録する（次の起動で元に戻す）
+            string journal = CommitJournal.Begin(ld, aside, lt);
+            bool replaced = false;
             try
             {
-                File.Replace(lt, ld, aside, true);
-                TryDelete(aside);
-                return;
-            }
-            catch (Exception ex)
-            {
-                // Replace の途中で失敗：元のファイルが控えの名前になっていれば戻す
-                if (!File.Exists(ld) && File.Exists(aside))
+                try
+                {
+                    File.Replace(lt, ld, aside, true);
+                    replaced = true;
+                    TryDelete(aside);
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    // Replace の途中で失敗：元のファイルが控えの名前になっていれば戻す
+                    if (!File.Exists(ld) && File.Exists(aside))
+                    {
+                        try { File.Move(aside, ld); }
+                        catch (Exception ex2) { journal = null; throw new IOException("上書きに失敗し、元のファイルを " + PathUtil.Plain(aside) + " に残しました（次の起動で戻します）: " + ex2.Message, ex); }
+                    }
+                    if (!File.Exists(lt)) throw;   // 一時ファイルがない：これ以上はしない（元のファイルはそのまま）
+                }
+                // Replace が使えない場所（一部の NAS など）：元を横へ移してから入れ替える
+                File.Move(ld, aside);   // 失敗したら例外（元のファイルはそのまま）
+                try { File.Move(lt, ld); }
+                catch
                 {
                     try { File.Move(aside, ld); }
-                    catch (Exception ex2) { throw new IOException("上書きに失敗し、元のファイルを " + PathUtil.Plain(aside) + " に残しました: " + ex2.Message, ex); }
+                    catch (Exception ex3) { journal = null; Logger.Error(null, "上書きに失敗しました。元のファイルは " + PathUtil.Plain(aside) + " に残っています（次の起動で戻します）: " + ex3.Message); }
+                    throw;
                 }
-                if (!File.Exists(lt)) throw;   // 一時ファイルがない：これ以上はしない（元のファイルはそのまま）
+                replaced = true;
+                TryDelete(aside);
             }
-            // Replace が使えない場所（一部の NAS など）：元を横へ移してから入れ替える
-            File.Move(ld, aside);   // 失敗したら例外（元のファイルはそのまま）
-            try { File.Move(lt, ld); }
-            catch
+            finally
             {
-                try { File.Move(aside, ld); }
-                catch (Exception ex3) { Logger.Error(null, "上書きに失敗しました。元のファイルは " + PathUtil.Plain(aside) + " に残っています: " + ex3.Message); }
-                throw;
+                // 失敗して元のファイルが残っている：読み取り専用などの属性を元に戻す
+                if (!replaced && ro)
+                {
+                    try { if (File.Exists(ld)) File.SetAttributes(ld, File.GetAttributes(ld) | FileAttributes.ReadOnly); }
+                    catch (Exception ex4) { Logger.Error(null, "読み取り専用の属性を戻せません: " + PathUtil.Plain(ld) + "　" + ex4.Message); }
+                }
+                CommitJournal.End(journal);   // 元に戻せなかったとき（journal = null）は記録を残し、次の起動で戻す
             }
-            TryDelete(aside);
         }
 
         /// <summary>2つのファイルの中身が同じか（大きさ → 1バイトずつ）</summary>
@@ -510,11 +622,17 @@ namespace AutoCopy
         /// <summary>onBytes：コピーできたバイト数（進み具合の表示用）</summary>
         public static byte[] CopyFile(string src, string dst, DateTime srcMtimeUtc, Throttle throttle, CancellationToken ct, Action<long> onBytes)
         {
+            return CopyFile(src, dst, srcMtimeUtc, throttle, ct, onBytes, null);
+        }
+
+        /// <summary>expect：置き換える直前に確かめるコピー先の状態（違えば DestChangedException。上書きしない）</summary>
+        public static byte[] CopyFile(string src, string dst, DateTime srcMtimeUtc, Throttle throttle, CancellationToken ct, Action<long> onBytes, DestExpect expect)
+        {
             Guard(dst);
             Guard(dst + PartSuffix);
             string parent = Path.GetDirectoryName(PathUtil.Plain(dst));
             CreateDirectory(parent);
-            return CopyVerifiedAndCommit(src, dst, srcMtimeUtc, throttle, ct, onBytes);
+            return CopyVerifiedAndCommit(src, dst, srcMtimeUtc, throttle, ct, onBytes, expect);
         }
     }
 
@@ -539,6 +657,205 @@ namespace AutoCopy
                 waitMs = (int)(expectedMs - sw.ElapsedMilliseconds);
             }
             if (waitMs > 0) ct.WaitHandle.WaitOne(Math.Min(waitMs, 5000));
+        }
+    }
+
+    /// <summary>
+    /// 同じコピー先のファイルへ、同時に書かない（置き換えの直前〜直後だけ）。
+    /// ・このPCの中：パスごとのロック（ジョブ・確認の画面の操作どうし）
+    /// ・他のアプリ・他のPC：コピー先に「〜.cklock」を他から開けない形で作る（閉じると自動で消える。強制終了しても OS が閉じる）
+    /// 待っても空かなければ「使用中」として次回に回す（上書きしない）。
+    /// </summary>
+    public static class DestLock
+    {
+        public static int WaitSeconds = 60;
+
+        private class Holder { public int Refs; }
+        private static readonly Dictionary<string, Holder> held = new Dictionary<string, Holder>(StringComparer.OrdinalIgnoreCase);
+
+        private class Releaser : IDisposable
+        {
+            public string Key; public Holder H; public FileStream LockFile;
+            public void Dispose()
+            {
+                if (LockFile != null) { try { LockFile.Dispose(); } catch (Exception ex) { Logger.Error(null, "ロックのファイルを閉じられません: " + ex.Message); } LockFile = null; }
+                if (H == null) return;
+                lock (held)
+                {
+                    Monitor.Exit(H);
+                    if (--H.Refs == 0) held.Remove(Key);
+                }
+                H = null;
+            }
+        }
+
+        public static IDisposable Acquire(string ld, CancellationToken ct)
+        {
+            string key = PathUtil.Plain(ld).TrimEnd('\\');
+            Holder h;
+            lock (held)
+            {
+                if (!held.TryGetValue(key, out h)) { h = new Holder(); held[key] = h; }
+                h.Refs++;
+            }
+            DateTime limit = DateTime.UtcNow.AddSeconds(WaitSeconds);
+            bool entered = false;
+            try
+            {
+                while (!(entered = Monitor.TryEnter(h, 200)))
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (DateTime.UtcNow > limit) throw Busy(ld);
+                }
+                Releaser r = new Releaser(); r.Key = key; r.H = h;
+                try { r.LockFile = OpenLockFile(ld, limit, ct); }
+                catch { r.Dispose(); entered = false; h = null; throw; }
+                return r;
+            }
+            catch
+            {
+                if (h != null)
+                {
+                    lock (held)
+                    {
+                        if (entered) Monitor.Exit(h);
+                        if (--h.Refs == 0) held.Remove(key);
+                    }
+                }
+                throw;
+            }
+        }
+
+        private static IOException Busy(string ld)
+        {
+            return new IOException("同じファイルに別の処理（他のジョブ・他のPC）が書き込み中のため、上書きしませんでした: " + PathUtil.Plain(ld), unchecked((int)0x80070020));
+        }
+
+        /// <summary>他のアプリ・他のPC と取り合うためのファイル（上書きのときだけ。新しく置くときは名前がぶつかれば失敗するので不要）</summary>
+        private static FileStream OpenLockFile(string ld, DateTime limit, CancellationToken ct)
+        {
+            if (!File.Exists(ld)) return null;
+            string lf = ld + SafeFs.LockSuffix;
+            while (true)
+            {
+                try { return new FileStream(lf, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose); }
+                catch (IOException ex)
+                {
+                    int code = ErrorKind.Win32Code(ex);
+                    if (code != 32 && code != 33) return null;   // ロックのファイルを作れない場所（読み取り専用の共有など）：このPCの中のロックだけで続ける
+                    ct.ThrowIfCancellationRequested();
+                    if (DateTime.UtcNow > limit) throw Busy(ld);
+                    if (ct.WaitHandle.WaitOne(300)) ct.ThrowIfCancellationRequested();
+                }
+                catch (UnauthorizedAccessException) { return null; }
+            }
+        }
+    }
+
+    /// <summary>
+    /// 上書き（置き換え）の途中で強制終了・電源断があったときのための記録（local\commit-journal\*.txt）。
+    /// 置き換えの前に「コピー先・元のファイルの控えの名前・一時ファイル」を書き、終わったら消す。
+    /// 次の起動（とジョブの実行の前）に残っている記録を調べ、コピー先がなくなっていれば控えから元に戻す。
+    /// </summary>
+    public static class CommitJournal
+    {
+        public static string Dir { get { return Path.Combine(AppPaths.Local, "commit-journal"); } }
+        private static readonly object recoverLock = new object();
+        private static long myStart = -1;
+
+        private static long MyStart()
+        {
+            if (myStart < 0) { try { myStart = Process.GetCurrentProcess().StartTime.ToUniversalTime().Ticks; } catch (Exception) { myStart = 0; } }
+            return myStart;
+        }
+
+        public static string Begin(string ld, string aside, string lt)
+        {
+            try
+            {
+                Directory.CreateDirectory(Dir);
+                string f = Path.Combine(Dir, Guid.NewGuid().ToString("N") + ".txt");
+                byte[] b = Encoding.UTF8.GetBytes(string.Join("\n", new string[] { ld, aside, lt, Process.GetCurrentProcess().Id.ToString(), MyStart().ToString(), DateTime.UtcNow.Ticks.ToString() }));
+                using (FileStream fs = new FileStream(f, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
+                {
+                    fs.Write(b, 0, b.Length);
+                    fs.Flush(true);
+                }
+                return f;
+            }
+            catch (Exception ex)
+            {
+                Logger.Error(null, "上書きの途中の記録を書けません（強制終了したときに自動で戻せない場合があります）: " + ex.Message);
+                return null;
+            }
+        }
+
+        public static void End(string journal)
+        {
+            if (journal == null) return;
+            try { File.Delete(journal); }
+            catch (Exception ex) { Logger.Error(null, "上書きの途中の記録を消せません: " + ex.Message); }
+        }
+
+        /// <summary>中断された置き換えを元に戻す。戻した件数を返す。</summary>
+        public static int Recover()
+        {
+            int restored = 0;
+            lock (recoverLock)
+            {
+                string[] files;
+                try { if (!Directory.Exists(Dir)) return 0; files = Directory.GetFiles(Dir, "*.txt"); }
+                catch (Exception ex) { Logger.Error(null, "上書きの途中の記録を読めません: " + ex.Message); return 0; }
+                foreach (string f in files)
+                {
+                    try
+                    {
+                        string[] v = File.ReadAllText(f, Encoding.UTF8).Split('\n');
+                        if (v.Length < 5) { Logger.Error(null, "上書きの途中の記録が壊れています（消します）: " + f); File.Delete(f); continue; }
+                        string ld = v[0], aside = v[1], lt = v[2];
+                        int pid; long start;
+                        int.TryParse(v[3], out pid); long.TryParse(v[4], out start);
+                        if (StillRunning(pid, start)) continue;   // 動いている処理の記録（今まさに置き換え中）
+                        string parent = Path.GetDirectoryName(ld);
+                        if (!Directory.Exists(parent))
+                        {
+                            // NAS につながっていない など：次の機会に（30日たったらあきらめる）
+                            long at; if (v.Length > 5 && long.TryParse(v[5], out at) && DateTime.UtcNow.Ticks - at > TimeSpan.TicksPerDay * 30) { Logger.Error(null, "上書きの途中の記録を、30日つながらなかったため消しました: " + PathUtil.Plain(ld)); File.Delete(f); }
+                            continue;
+                        }
+                        bool hasDst = File.Exists(ld), hasAside = File.Exists(aside);
+                        if (hasAside && !hasDst)
+                        {
+                            File.Move(aside, ld);
+                            restored++;
+                            Logger.Info(null, "上書きの途中で終了していたため、元のファイルに戻しました: " + PathUtil.Plain(ld));
+                        }
+                        else if (hasAside && hasDst)
+                        {
+                            File.Delete(aside);   // 置き換えは終わっていた：元のファイルの控えを片付ける
+                        }
+                        if (File.Exists(lt)) File.Delete(lt);   // 使われなかった一時ファイル
+                        File.Delete(f);
+                    }
+                    catch (Exception ex) { Logger.Error(null, "上書きの途中で終了したファイルを戻せません（次の起動でもう一度試します）: " + ex.Message); }
+                }
+            }
+            return restored;
+        }
+
+        private static bool StillRunning(int pid, long start)
+        {
+            if (pid <= 0) return false;
+            if (pid == Process.GetCurrentProcess().Id && start == MyStart()) return true;
+            try
+            {
+                using (Process p = Process.GetProcessById(pid))
+                {
+                    if (p.HasExited) return false;
+                    return start != 0 && p.StartTime.ToUniversalTime().Ticks == start;
+                }
+            }
+            catch (Exception) { return false; }
         }
     }
 }

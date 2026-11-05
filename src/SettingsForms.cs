@@ -376,7 +376,7 @@ namespace AutoCopy
             tPass = Ui.T("", 220); tPass.UseSystemPasswordChar = true;
             tPass2 = Ui.T("", 220); tPass2.UseSystemPasswordChar = true;
             b.Controls.Add(Ui.Section("配布用パスワード（各PCの初回セットアップで1回入力します）",
-                Ui.Row(Ui.L("パスワード", 130), tPass, Ui.Hint("4文字以上")),
+                Ui.Row(Ui.L("パスワード", 130), tPass, Ui.Hint(Distribution.MinPasswordLength + "文字以上（推測されにくいもの）")),
                 Ui.Row(Ui.L("もう一度", 130), tPass2)));
 
             servers = Distribution.ServersUsed(s, true);
@@ -428,7 +428,8 @@ namespace AutoCopy
             AppSettings s = AppCore.Settings;
             string name = tName.Text.Trim();
             if (name.Length == 0) { Ui.Error(this, "配布設定の名前を入力してください。"); return; }
-            if (tPass.Text.Length < 4) { Ui.Error(this, "配布用パスワードは4文字以上にしてください。"); return; }
+            string weak = Distribution.PasswordProblem(tPass.Text);
+            if (weak != null) { Ui.Error(this, weak); return; }
             if (tPass.Text != tPass2.Text) { Ui.Error(this, "パスワードが一致しません。"); return; }
             bool anyDist = false;
             foreach (JobConfig j in s.Jobs) if (j.Scope == JobScope.Dist) anyDist = true;

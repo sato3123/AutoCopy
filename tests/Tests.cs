@@ -103,6 +103,14 @@ namespace AutoCopy.Tests
             Add("T74", "自動更新：前の版に戻す（関連ファイルも）・失敗した版は使わない", T74_UpdateRollback);
             Add("T75", "同期：共有フォルダの詳しい確認を一定時間省略・他のPCが変えたらすぐ確認し直す", T75_SyncRemoteCache);
             Add("T76", "性能：大量ファイル（既定10万件）の確認の時間とメモリ（100万件に換算）", T76_ManyFiles);
+            Add("T77", "同期の削除の確認：変更と保存をひとまとまりに・保存できなければ元の内容のまま", T77_SyncDeleteSaveAtomic);
+            Add("T78", "上書きの途中で強制終了：次の起動で元のファイルに戻す", T78_CommitRecovery);
+            Add("T79", "大きさ・更新日時が同じまま中身が変わったら、やり直す（更新されたばかり・書き込み中のファイル）", T79_SameStampContentChange);
+            Add("T80", "同じコピー先へ同時に書かない（他のPC・アプリが書き込み中なら待つ・上書きしない）", T80_DestLock);
+            Add("T81", "上書きに失敗したら、読み取り専用などの属性を元に戻す", T81_ReadOnlyRestore);
+            Add("T82", "自動更新：期限切れ・コード署名用でない証明書は使わない・正式な証明書の作り直しに対応", T82_CertStrict);
+            Add("T83", "配布用パスワードは12文字以上（前の版で作った短いパスワードの配布設定も読める）", T83_DistPassword);
+            Add("T84", "同期：共有フォルダの確認を省略していても、上書きの直前に実際の状態を確かめる", T84_SyncCacheFresh);
 
             int ng = 0;
             foreach (TestCase t in cases)
@@ -845,14 +853,14 @@ namespace AutoCopy.Tests
             DistPayload p = Distribution.BuildPayload(b.App, "経理部", 3, creds);
             Eq(1, p.Jobs.Count, "配布するジョブはこのPCだけのものを含まない");
             string file = Path.Combine(b.Root, "AutoCopy.setup");
-            Distribution.Write(file, p, "secret-pass");
+            Distribution.Write(file, p, "secret-pass-2026");
             string raw = File.ReadAllText(file);
             True(!raw.Contains("p@ss") && !raw.Contains("yamada") && !raw.Contains("nas01"), "ファイルに平文が含まれない");
 
             DistEnvelope env = Distribution.ReadEnvelope(file);
             Eq(3, env.Version, "版");
             Throws<Distribution.WrongPasswordException>(delegate { Distribution.Decrypt(env, "wrong"); }, "パスワード誤り");
-            DistPayload back = Distribution.Decrypt(env, "secret-pass");
+            DistPayload back = Distribution.Decrypt(env, "secret-pass-2026");
             Eq("p@ss-日本語", back.Credentials[0].Password, "パスワードの復号");
             Eq(b.Job.Dest, back.Jobs[0].Dest, "ジョブの復号");
 
@@ -860,7 +868,7 @@ namespace AutoCopy.Tests
             char[] data = bad.Data.ToCharArray();
             data[10] = data[10] == 'A' ? 'B' : 'A';
             bad.Data = new string(data);
-            Throws<Distribution.WrongPasswordException>(delegate { Distribution.Decrypt(bad, "secret-pass"); }, "改ざん検知");
+            Throws<Distribution.WrongPasswordException>(delegate { Distribution.Decrypt(bad, "secret-pass-2026"); }, "改ざん検知");
 
             AppSettings target = new AppSettings();
             target.FolderName = "鈴木_総務";
@@ -875,7 +883,7 @@ namespace AutoCopy.Tests
                 True(target.Jobs.Find(delegate(JobConfig j) { return j.Name == "自分用"; }).Enabled, "このPCのジョブの有効/無効は変えない");
                 // 有効にしてから次の版を取り込んでも、このPCで決めた有効/無効を引き継ぐ
                 target.Jobs.Find(delegate(JobConfig j) { return j.Scope == JobScope.Dist; }).Enabled = true;
-                DistPayload again = Distribution.Decrypt(Distribution.ReadEnvelope(file), "secret-pass");
+                DistPayload again = Distribution.Decrypt(Distribution.ReadEnvelope(file), "secret-pass-2026");
                 Eq(0, Distribution.Apply(target, again), "2回目は新しいジョブなし");
                 True(target.Jobs.Find(delegate(JobConfig j) { return j.Scope == JobScope.Dist; }).Enabled, "有効にしたジョブは有効のまま");
                 Eq("鈴木_総務", target.FolderName, "フォルダ名は残る");
@@ -2668,6 +2676,344 @@ namespace AutoCopy.Tests
             long[] v;
             if (r.PlanCounts != null && r.PlanCounts.TryGetValue(kind, out v)) return v[0];
             return r.Plan.FindAll(delegate(PlanItem p) { return p.Kind == kind; }).Count;
+        }
+
+        private static void T77_SyncDeleteSaveAtomic()
+        {
+            string id = "t77-" + Guid.NewGuid().ToString("N").Substring(0, 6);
+            List<SyncDeleteItem> one = new List<SyncDeleteItem>();
+            SyncDeleteItem a = new SyncDeleteItem(); a.Rel = "a.txt"; a.Side = SyncDeleteItem.SideShared; a.Size = 1; a.Mtime = 1; one.Add(a);
+            Eq(1, SyncDeleteStore.Replace(id, one), "新しく1件");
+            string path = SyncDeleteStore.PathFor(id);
+            True(File.Exists(path), "保存された");
+            // 保存できない状態にする（保存先をフォルダにする）
+            File.Delete(path);
+            Directory.CreateDirectory(path);
+            try
+            {
+                List<SyncDeleteItem> two = new List<SyncDeleteItem>(one);
+                SyncDeleteItem b = new SyncDeleteItem(); b.Rel = "b.txt"; b.Side = SyncDeleteItem.SideLocal; b.Size = 2; b.Mtime = 2; two.Add(b);
+                bool threw = false;
+                try { SyncDeleteStore.Replace(id, two); } catch (IOException) { threw = true; }
+                True(threw, "保存できないときは例外");
+                Eq(1, SyncDeleteStore.Count(id), "保存できなければ元の内容のまま（画面と保存の内容がそろう）");
+                threw = false;
+                try { SyncDeleteStore.Remove(id, one); } catch (IOException) { threw = true; }
+                True(threw, "取り除きも保存できなければ例外");
+                Eq(1, SyncDeleteStore.Count(id), "元の内容のまま");
+            }
+            finally { Directory.Delete(path); }
+            SyncDeleteStore.Remove(id, one);
+            Eq(0, SyncDeleteStore.Count(id), "保存できれば取り除ける");
+            // 同時に変更しても、件数が壊れない
+            List<Thread> ths = new List<Thread>();
+            for (int t = 0; t < 4; t++)
+            {
+                int k = t;
+                Thread th = new Thread(delegate()
+                {
+                    for (int n = 0; n < 20; n++)
+                    {
+                        List<SyncDeleteItem> l = new List<SyncDeleteItem>();
+                        for (int m = 0; m <= (k + n) % 5; m++) { SyncDeleteItem x = new SyncDeleteItem(); x.Rel = "f" + m; x.Side = SyncDeleteItem.SideShared; l.Add(x); }
+                        SyncDeleteStore.Replace(id, l);
+                    }
+                });
+                th.Start(); ths.Add(th);
+            }
+            foreach (Thread th in ths) th.Join();
+            int mem = SyncDeleteStore.Count(id);
+            SyncDeleteBook disk = Json.Load<SyncDeleteBook>(path);
+            Eq(mem, disk.Items.Count, "覚えている内容と保存した内容が同じ");
+            SyncDeleteStore.Forget(id);
+
+            // 状態ファイルを保存できないときは理由を返す（ファイルは前回の内容のまま）
+            string sid = "t77s-" + Guid.NewGuid().ToString("N").Substring(0, 6);
+            JobState st = AppCore.GetState(sid);
+            lock (st) st.LastMessage = "1回目";
+            True(AppCore.SaveState(sid) == null, "保存できる");
+            string sp = JobState.PathFor(sid);
+            File.Delete(sp); if (File.Exists(sp + ".bak")) File.Delete(sp + ".bak");
+            Directory.CreateDirectory(sp);
+            try { True(AppCore.SaveState(sid) != null, "保存できないときは理由"); }
+            finally { Directory.Delete(sp); }
+            AppCore.ForgetJobState(sid);
+        }
+
+        private static string Journal(string ld, string aside, string lt, int pid)
+        {
+            Directory.CreateDirectory(CommitJournal.Dir);
+            string f = Path.Combine(CommitJournal.Dir, Guid.NewGuid().ToString("N") + ".txt");
+            File.WriteAllText(f, string.Join("\n", new string[] { ld, aside, lt, pid.ToString(), "0", DateTime.UtcNow.Ticks.ToString() }), Encoding.UTF8);
+            return f;
+        }
+
+        private static void T78_CommitRecovery()
+        {
+            string root = Path.Combine(baseDir, "T78");
+            Directory.CreateDirectory(root);
+            // 1) 元のファイルを控えの名前にした直後に強制終了（コピー先の名前がない）
+            string ld = Path.Combine(root, "a.txt"), aside = ld + ".0123456789ab" + SafeFs.AsideSuffix, lt = ld + ".ba9876543210" + SafeFs.PartSuffix;
+            File.WriteAllText(aside, "元の内容");
+            File.WriteAllText(lt, "途中の新しい内容");
+            string j1 = Journal(ld, aside, lt, 0);
+            // 2) 置き換えは終わったが、控えを片付ける前に終了
+            string ld2 = Path.Combine(root, "b.txt"), aside2 = ld2 + ".0123456789ab" + SafeFs.AsideSuffix;
+            File.WriteAllText(ld2, "新しい内容");
+            File.WriteAllText(aside2, "古い内容");
+            string j2 = Journal(ld2, aside2, ld2 + ".x" + SafeFs.PartSuffix, 0);
+            // 3) NAS につながっていない（フォルダがない）：記録を残して次の機会に
+            string j3 = Journal(Path.Combine(root, "ない\\c.txt"), Path.Combine(root, "ない\\c.txt.1" + SafeFs.AsideSuffix), Path.Combine(root, "ない\\c.txt.2" + SafeFs.PartSuffix), 0);
+            // 4) 今動いている処理の記録（置き換え中）には触らない
+            string ld4 = Path.Combine(root, "d.txt"), aside4 = ld4 + ".1" + SafeFs.AsideSuffix;
+            File.WriteAllText(aside4, "置き換え中");
+            string j4 = CommitJournal.Begin(ld4, aside4, ld4 + ".2" + SafeFs.PartSuffix);
+            True(j4 != null, "記録を書ける");
+
+            int n = CommitJournal.Recover();
+            Eq(1, n, "1件戻した");
+            Eq("元の内容", Read(ld), "元のファイルに戻した");
+            True(!File.Exists(lt) && !File.Exists(aside), "一時ファイル・控えを片付けた");
+            True(!File.Exists(j1), "記録を消した");
+            Eq("新しい内容", Read(ld2), "置き換え済みのものはそのまま");
+            True(!File.Exists(aside2) && !File.Exists(j2), "古い控えを片付けた");
+            True(File.Exists(j3), "つながらない場所の記録は残す");
+            True(File.Exists(aside4) && !File.Exists(ld4) && File.Exists(j4), "動いている処理には触らない");
+            CommitJournal.End(j4);
+            File.Delete(j3);
+
+            // 通常の上書きでは記録を残さない・控えも残さない
+            SafeFs.SetProtectedSources(new string[0]);
+            string src = Path.Combine(root, "src.txt");
+            WriteFile(src, "コピー元", 7200);
+            File.WriteAllText(ld, "上書きされる");
+            SafeFs.CopyFile(src, ld, File.GetLastWriteTimeUtc(src), null, CancellationToken.None);
+            Eq("コピー元", Read(ld), "上書きできた");
+            Eq(0, Directory.GetFiles(CommitJournal.Dir).Length, "記録は残らない");
+            Eq(0, PartFiles(root), "一時ファイル・控えは残らない");
+            True(!File.Exists(ld + SafeFs.LockSuffix), "ロックのファイルは残らない");
+        }
+
+        private static void T79_SameStampContentChange()
+        {
+            string root = Path.Combine(baseDir, "T79");
+            SafeFs.SetProtectedSources(new string[0]);
+            string src = Path.Combine(root, "src\\a.txt"), dst = Path.Combine(root, "dst\\a.txt");
+            WriteFile(src, "AAAAAAAAAA", 60);   // 更新されたばかり
+            DateTime mt = File.GetLastWriteTimeUtc(src);
+            True(SafeFs.NeedsHashCheck(PathUtil.Long(src), mt.Ticks), "更新されたばかりは中身を確かめる");
+            int calls = 0;
+            SafeFs.CopyFile(src, dst, mt, null, CancellationToken.None, delegate(long n)
+            {
+                if (calls++ == 0)
+                {
+                    // 同じ大きさで中身だけ変え、更新日時を元に戻す
+                    using (FileStream w = new FileStream(src, FileMode.Open, FileAccess.Write, FileShare.ReadWrite)) { byte[] b = Encoding.ASCII.GetBytes("BBBBBBBBBB"); w.Write(b, 0, b.Length); }
+                    File.SetLastWriteTimeUtc(src, mt);
+                }
+            });
+            Eq("BBBBBBBBBB", Read(dst), "変わった後の中身でコピーし直した");
+            True(calls >= 2, "やり直した");
+            WriteFile(dst, "元の内容です", 900);
+            int k = 0;
+            Throws<SourceChangedException>(delegate()
+            {
+                SafeFs.CopyFile(src, dst, mt, null, CancellationToken.None, delegate(long n)
+                {
+                    using (FileStream w = new FileStream(src, FileMode.Open, FileAccess.Write, FileShare.ReadWrite)) { byte[] b = Encoding.ASCII.GetBytes((k++ % 2 == 0 ? "CCCCCCCCCC" : "DDDDDDDDDD")); w.Write(b, 0, b.Length); }
+                    File.SetLastWriteTimeUtc(src, mt);
+                });
+            }, "変わり続けるときはコピーしない");
+            Eq("元の内容です", Read(dst), "コピー先は元のまま");
+            // 古いファイル：読み直さない。ただし他のアプリが書き込みのために開いていれば確かめる
+            WriteFile(src, "old", 7200);
+            DateTime om = File.GetLastWriteTimeUtc(src);
+            True(!SafeFs.NeedsHashCheck(PathUtil.Long(src), om.Ticks), "古いファイルは読み直さない");
+            using (new FileStream(src, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite))
+                True(SafeFs.NeedsHashCheck(PathUtil.Long(src), om.Ticks), "書き込み中のファイルは確かめる");
+        }
+
+        private static void T80_DestLock()
+        {
+            string root = Path.Combine(baseDir, "T80");
+            SafeFs.SetProtectedSources(new string[0]);
+            string src = Path.Combine(root, "src\\a.txt"), dst = Path.Combine(root, "dst\\a.txt");
+            WriteFile(src, "新しい内容", 7200);
+            WriteFile(dst, "元の内容", 9000);
+            int keep = DestLock.WaitSeconds;
+            try
+            {
+                // 他のPC・アプリが書き込み中（ロックのファイルを開いている）→ 待っても空かなければ上書きしない
+                DestLock.WaitSeconds = 1;
+                using (new FileStream(dst + SafeFs.LockSuffix, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+                {
+                    Exception got = null;
+                    try { SafeFs.CopyFile(src, dst, File.GetLastWriteTimeUtc(src), null, CancellationToken.None); }
+                    catch (Exception ex) { got = ex; }
+                    True(got is IOException, "上書きしない（例外）");
+                    Eq(ErrorKind.Locked, ErrorKind.Classify(got), "「使用中」として次回に回す");
+                }
+                File.Delete(dst + SafeFs.LockSuffix);
+                Eq("元の内容", Read(dst), "コピー先は元のまま");
+                Eq(0, PartFiles(Path.Combine(root, "dst")), "一時ファイルを残さない");
+                // 少し待てば空く → 待ってから上書き
+                DestLock.WaitSeconds = 20;
+                FileStream hold = new FileStream(dst + SafeFs.LockSuffix, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose);
+                Thread rel = new Thread(delegate() { Thread.Sleep(1500); hold.Dispose(); });
+                rel.Start();
+                Stopwatch sw = Stopwatch.StartNew();
+                SafeFs.CopyFile(src, dst, File.GetLastWriteTimeUtc(src), null, CancellationToken.None);
+                rel.Join();
+                Eq("新しい内容", Read(dst), "空いてから上書き");
+                True(sw.ElapsedMilliseconds >= 1000, "待った: " + sw.ElapsedMilliseconds + "ms");
+                True(!File.Exists(dst + SafeFs.LockSuffix), "ロックのファイルは消える");
+                // このPCの中で、同じコピー先へ同時に書く → どちらかの内容がそのまま入る（混ざらない）
+                string s1 = Path.Combine(root, "src\\x1.bin"), s2 = Path.Combine(root, "src\\x2.bin"), d = Path.Combine(root, "dst\\x.bin");
+                File.WriteAllBytes(s1, Fill(3 << 20, 1)); File.WriteAllBytes(s2, Fill(3 << 20, 2));
+                File.SetLastWriteTimeUtc(s1, DateTime.UtcNow.AddHours(-3)); File.SetLastWriteTimeUtc(s2, DateTime.UtcNow.AddHours(-3));
+                File.WriteAllBytes(d, new byte[] { 0 });
+                List<Exception> errs = new List<Exception>();
+                List<Thread> ths = new List<Thread>();
+                for (int t = 0; t < 6; t++)
+                {
+                    string from = t % 2 == 0 ? s1 : s2;
+                    Thread th = new Thread(delegate()
+                    {
+                        try { SafeFs.CopyFile(from, d, File.GetLastWriteTimeUtc(from), null, CancellationToken.None); }
+                        catch (Exception ex) { lock (errs) errs.Add(ex); }
+                    });
+                    th.Start(); ths.Add(th);
+                }
+                foreach (Thread th in ths) th.Join();
+                Eq(0, errs.Count, "同時でもエラーにならない" + (errs.Count > 0 ? "：" + errs[0].Message : ""));
+                True(SafeFs.SameBytes(d, s1) || SafeFs.SameBytes(d, s2), "どちらかの内容がそのまま入っている");
+                Eq(0, PartFiles(Path.Combine(root, "dst")), "一時ファイル・控えを残さない");
+                True(!File.Exists(d + SafeFs.LockSuffix), "ロックのファイルは残らない");
+                // 予定を立てた後でコピー先が変わった → 上書きしない
+                WriteFile(dst, "誰かが書いた", 10);
+                Throws<DestChangedException>(delegate() { SafeFs.CopyFile(src, dst, File.GetLastWriteTimeUtc(src), null, CancellationToken.None, null, DestExpect.Same(4, 0)); }, "大きさ・日時が違う");
+                Throws<DestChangedException>(delegate() { SafeFs.CopyFile(src, dst, File.GetLastWriteTimeUtc(src), null, CancellationToken.None, null, DestExpect.Absent()); }, "新しく置くはずがファイルがある");
+                Eq("誰かが書いた", Read(dst), "上書きしていない");
+                Eq(ErrorKind.DestChanged, ErrorKind.Classify(new DestChangedException(dst, "x")), "種類");
+                FileInfo fi = new FileInfo(dst);
+                SafeFs.CopyFile(src, dst, File.GetLastWriteTimeUtc(src), null, CancellationToken.None, null, DestExpect.Same(fi.Length, fi.LastWriteTimeUtc.Ticks));
+                Eq("新しい内容", Read(dst), "予定どおりなら上書き");
+                // 走査はロックのファイルを数えない
+                File.WriteAllText(Path.Combine(root, "dst\\y.txt" + SafeFs.LockSuffix), "");
+                ScanResult sr = Scanner.Scan(Path.Combine(root, "dst"), true, new ExcludeMatcher(new ExcludeRules()), true, CancellationToken.None);
+                True(!sr.Files.ContainsKey("y.txt" + SafeFs.LockSuffix), "ロックのファイルは一覧に入れない");
+            }
+            finally { DestLock.WaitSeconds = keep; }
+        }
+
+        private static byte[] Fill(int n, byte v) { byte[] b = new byte[n]; for (int i = 0; i < n; i++) b[i] = (byte)(v + i % 7); return b; }
+
+        private static void T81_ReadOnlyRestore()
+        {
+            string root = Path.Combine(baseDir, "T81");
+            SafeFs.SetProtectedSources(new string[0]);
+            string src = Path.Combine(root, "src\\a.txt"), dst = Path.Combine(root, "dst\\a.txt");
+            WriteFile(src, "新しい内容", 7200);
+            WriteFile(dst, "元の内容", 9000);
+            File.SetAttributes(dst, FileAttributes.ReadOnly | FileAttributes.Archive);
+            using (new FileStream(dst, FileMode.Open, FileAccess.Read, FileShare.Read))   // 置き換えられない
+            {
+                bool failed = false;
+                try { SafeFs.CopyFile(src, dst, File.GetLastWriteTimeUtc(src), null, CancellationToken.None); }
+                catch (IOException) { failed = true; }
+                catch (UnauthorizedAccessException) { failed = true; }
+                True(failed, "上書きできない");
+            }
+            Eq("元の内容", Read(dst), "元のまま");
+            True((File.GetAttributes(dst) & FileAttributes.ReadOnly) != 0, "読み取り専用に戻した");
+            Eq(0, PartFiles(Path.Combine(root, "dst")), "一時ファイル・控えを残さない");
+            File.SetAttributes(dst, FileAttributes.Normal);
+        }
+
+        private static System.Security.Cryptography.X509Certificates.X509Certificate2 MakeCert(DateTime from, DateTime to, string eku)
+        {
+            using (RSA rsa = RSA.Create(2048))
+            {
+                System.Security.Cryptography.X509Certificates.CertificateRequest req = new System.Security.Cryptography.X509Certificates.CertificateRequest(
+                    "CN=テスト証明書", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+                OidCollection oids = new OidCollection();
+                oids.Add(new Oid(eku));
+                req.CertificateExtensions.Add(new System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension(oids, false));
+                return req.CreateSelfSigned(new DateTimeOffset(from), new DateTimeOffset(to));
+            }
+        }
+
+        private static void T82_CertStrict()
+        {
+            DateTime now = DateTime.Now;
+            string codeSign = "1.3.6.1.5.5.7.3.3", serverAuth = "1.3.6.1.5.5.7.3.1";
+            string e1 = Updater.CertProblem(MakeCert(now.AddDays(-30), now.AddDays(-1), codeSign), now);
+            True(e1 != null && e1.Contains("期限"), "期限切れは使わない: " + e1);
+            string e2 = Updater.CertProblem(MakeCert(now.AddDays(5), now.AddDays(30), codeSign), now);
+            True(e2 != null && e2.Contains("まだ有効"), "まだ有効でないものは使わない: " + e2);
+            string e3 = Updater.CertProblem(MakeCert(now.AddDays(-1), now.AddDays(30), serverAuth), now);
+            True(e3 != null && e3.Contains("コード署名"), "コード署名用でないものは使わない: " + e3);
+            True(Updater.CertProblem(MakeCert(now.AddDays(-1), now.AddDays(30), codeSign), now) == null, "有効なコード署名の証明書は使える");
+            // どの証明書の版を使うか
+            string official = Updater.OfficialThumbprint, other = "1111111111111111111111111111111111111111", mine = "2222222222222222222222222222222222222222";
+            True(Updater.SignerAllowed(official, null) == null, "署名なしで動いている：正式な証明書は使う");
+            True(Updater.SignerAllowed(other, null) != null, "署名なしで動いている：ほかの証明書は使わない");
+            True(Updater.SignerAllowed(mine, mine) == null, "同じ証明書は使う");
+            True(Updater.SignerAllowed(other, mine) != null, "違う証明書は使わない");
+            True(Updater.SignerAllowed(official, mine) == null, "正式な証明書（作り直した新しい証明書を含む）は使う");
+            True(Updater.IsTrustedThumbprint(official.ToLowerInvariant()), "拇印の大文字・小文字は区別しない");
+            // 署名のない exe
+            string sig; bool unsigned, trusted;
+            string err = Updater.CheckSignature(System.Reflection.Assembly.GetExecutingAssembly().Location, out sig, out unsigned, out trusted);
+            True(unsigned && err != null && !trusted, "署名なし");
+        }
+
+        private static void T83_DistPassword()
+        {
+            True(Distribution.PasswordProblem("1234") != null, "4文字は使えない");
+            True(Distribution.PasswordProblem("abcdefghijk") != null, "11文字は使えない");
+            True(Distribution.PasswordProblem("aaaaaaaaaaaaaa") != null, "同じ文字のくり返しは使えない");
+            True(Distribution.PasswordProblem("経理部の配布-2026秋") == null, "12文字以上は使える");
+            string file = Path.Combine(baseDir, "T83\\" + AppPaths.SetupFileName);
+            Directory.CreateDirectory(Path.GetDirectoryName(file));
+            DistPayload p = new DistPayload(); p.Name = "T83"; p.Version = 1; p.Jobs = new List<JobConfig>();
+            Throws<ArgumentException>(delegate() { Distribution.Write(file, p, "short-pass"); }, "短いパスワードでは作らない");
+            // 前の版で作った（短いパスワードの）配布設定も、そのまま読める
+            Distribution.WriteCore(file, p, "1234");
+            DistPayload back = Distribution.Decrypt(Distribution.ReadEnvelope(file), "1234");
+            Eq("T83", back.Name, "前の版の配布設定を読める");
+            True(Distribution.IsWeakLegacyPassword("1234"), "作り直しを勧める");
+            Distribution.Write(file, p, "long-enough-pass");
+            Eq("T83", Distribution.Decrypt(Distribution.ReadEnvelope(file), "long-enough-pass").Name, "12文字以上で作って読める");
+            True(!Distribution.IsWeakLegacyPassword("long-enough-pass"), "勧めない");
+        }
+
+        private static void T84_SyncCacheFresh()
+        {
+            SyncPair p = new SyncPair("T84");
+            p.JA.SyncRemoteCacheMinutes = 30; p.JB.SyncRemoteCacheMinutes = 30;
+            WriteFile(Path.Combine(p.A, "a.txt"), "PC1 1回目", 600);
+            RunResult r1 = p.Run(p.JA, "pc1");
+            Eq(1, r1.Copied, "共有へ a");
+            // 自動コピーを使わずに共有フォルダを直接変える（変更の印は変わらない）
+            WriteFile(Path.Combine(p.S, "a.txt"), "直接変えた（大事な変更）", 120);
+            WriteFile(Path.Combine(p.S, "b.txt"), "直接置いた", 120);
+            // このPCでも変える → 予定（前回の一覧）では「共有へ上書き」「共有へ新しく置く」
+            WriteFile(Path.Combine(p.A, "a.txt"), "PC1 2回目", 300);
+            WriteFile(Path.Combine(p.A, "b.txt"), "PC1 の b", 300);
+            RunResult r2 = p.Run(p.JA, "pc1");
+            True(r2.RemoteScanSkipped, "共有フォルダの詳しい確認は省略した");
+            Eq("直接変えた（大事な変更）", Read(Path.Combine(p.S, "a.txt")), "直前に確かめて、上書きしない");
+            Eq("直接置いた", Read(Path.Combine(p.S, "b.txt")), "直前に確かめて、新しく置かない（同じ名前を上書きしない）");
+            True(r2.Locked >= 2, "次回に回した: " + r2.Locked);
+            Eq(0, r2.Overwritten, "上書きしていない");
+            // 次は詳しく確認し、両方で変わったものとして確認待ちになる
+            RunResult r3 = p.Run(p.JA, "pc1");
+            True(!r3.RemoteScanSkipped, "次は詳しく確認する");
+            True(AppCore.GetState(p.JA.Id).Conflicts.Count >= 1, "確認待ちにする（どちらも消さない）");
+            Eq("直接変えた（大事な変更）", Read(Path.Combine(p.S, "a.txt")), "共有フォルダはそのまま");
+            Eq("PC1 2回目", Read(Path.Combine(p.A, "a.txt")), "このPCもそのまま");
+            SyncRemoteCache.Invalidate(p.JA.Id); SyncRemoteCache.Invalidate(p.JB.Id);
         }
 
         private static void T42_Performance()

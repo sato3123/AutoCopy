@@ -46,28 +46,61 @@ namespace AutoCopy
             TRUST_E_BAD_DIGEST = 0x80096010, TRUST_E_SUBJECT_NOT_TRUSTED = 0x800B0004, CERT_E_EXPIRED = 0x800B0101;
 
         /// <summary>
-        /// 署名を調べる。戻り値：null = 署名があり中身も改ざんされていない（証明書が PC に登録されていなくてもよい）、
-        /// それ以外 = 理由。signer に証明書の拇印。署名がないときは unsigned = true。
+        /// 署名を調べる。戻り値：null = 署名があり、中身が改ざんされておらず、証明書も使える状態、それ以外 = 理由。
+        /// signer に証明書の拇印。署名がないときは unsigned = true。
+        /// chainTrusted：PC が信頼している証明書（ルートまでたどれる）か。false なら、自己署名など PC に登録されていない証明書
+        /// （その場合、更新に使ってよいのは、拇印が決まっている証明書＝ Acceptable で確かめる だけ）。
+        /// 期限切れ・まだ有効でない・コード署名用でない証明書は、どんな場合も使わない。
         /// </summary>
         public static string CheckSignature(string path, out string signer, out bool unsigned)
         {
-            signer = null; unsigned = false;
+            bool trusted;
+            return CheckSignature(path, out signer, out unsigned, out trusted);
+        }
+
+        public static string CheckSignature(string path, out string signer, out bool unsigned, out bool chainTrusted)
+        {
+            signer = null; unsigned = false; chainTrusted = false;
             uint r = WinVerify(path);
             if (r == TRUST_E_NOSIGNATURE || r == 0x800B0003 /* TRUST_E_SUBJECT_FORM_UNKNOWN */) { unsigned = true; return "デジタル署名がありません"; }
-            // 0 = 信頼できる発行元、UNTRUSTEDROOT/CHAINING = 自己署名など（中身の確認は済んでいる）
-            if (r != 0 && r != CERT_E_UNTRUSTEDROOT && r != CERT_E_CHAINING && r != CERT_E_EXPIRED)
-                return r == TRUST_E_BAD_DIGEST ? "署名のあとで中身が変えられています（改ざんの可能性）"
-                    : "デジタル署名を確認できません（0x" + r.ToString("X8") + "）";
-            try
-            {
-                X509Certificate c = X509Certificate.CreateFromSignedFile(path);
-                signer = new X509Certificate2(c).Thumbprint;
-            }
+            if (r == TRUST_E_BAD_DIGEST) return "署名のあとで中身が変えられています（改ざんの可能性）";
+            if (r == CERT_E_EXPIRED) return "署名の証明書の有効期限が切れています";
+            // 0 = 信頼できる発行元。UNTRUSTEDROOT = 自己署名で PC に登録されていない（中身の確認は済んでいる）
+            if (r != 0 && r != CERT_E_UNTRUSTEDROOT)
+                return "デジタル署名を確認できません（0x" + r.ToString("X8") + "）";
+            X509Certificate2 cert;
+            try { cert = new X509Certificate2(X509Certificate.CreateFromSignedFile(path)); }
             catch (Exception ex) { return "署名の証明書を読めません: " + ex.Message; }
+            string bad = CertProblem(cert, DateTime.Now);
+            if (bad != null) return bad;
+            if (r == CERT_E_UNTRUSTEDROOT)
+            {
+                // 登録されていない証明書は、証明書そのものが署名した（自己署名）ものだけ。途中の証明書が欠けているもの（CHAINING）は使わない
+                if (!string.Equals(cert.Subject, cert.Issuer, StringComparison.Ordinal)) return "署名の証明書を発行元までたどれません";
+            }
+            chainTrusted = r == 0;
+            signer = cert.Thumbprint;
             return null;
         }
 
-        /// <summary>今動いている exe の署名の拇印（署名なし = null）</summary>
+        /// <summary>証明書が今、コードの署名に使える状態か（期限・用途）。だめなら理由。</summary>
+        public static string CertProblem(X509Certificate2 cert, DateTime now)
+        {
+            if (cert == null) return "署名の証明書がありません";
+            if (now > cert.NotAfter) return "署名の証明書の有効期限が切れています（" + cert.NotAfter.ToString("yyyy/MM/dd") + " まで）";
+            if (now < cert.NotBefore) return "署名の証明書がまだ有効になっていません（" + cert.NotBefore.ToString("yyyy/MM/dd") + " から）";
+            foreach (X509Extension e in cert.Extensions)
+            {
+                X509EnhancedKeyUsageExtension eku = e as X509EnhancedKeyUsageExtension;
+                if (eku == null) continue;
+                bool code = false;
+                foreach (System.Security.Cryptography.Oid o in eku.EnhancedKeyUsages) if (o.Value == "1.3.6.1.5.5.7.3.3") code = true;
+                if (!code) return "コード署名用の証明書ではありません";
+            }
+            return null;
+        }
+
+        /// <summary>今動いている exe の署名の拇印（署名なし・使えない署名 = null）</summary>
         public static string CurrentSigner()
         {
             string s; bool u;
@@ -78,9 +111,21 @@ namespace AutoCopy
         public const string OfficialThumbprint = "E8F609B1AEE069E00891E639CBB03B3CEECB9AC7";
 
         /// <summary>
+        /// 更新に使ってよい証明書の拇印（正式な証明書）。
+        /// 証明書を作り直すとき：新しい拇印をここに足した版を、今の証明書で署名して配る → 以後は新しい証明書で署名した版も使える。
+        /// </summary>
+        public static readonly string[] TrustedThumbprints = { OfficialThumbprint };
+
+        public static bool IsTrustedThumbprint(string t)
+        {
+            foreach (string x in TrustedThumbprints) if (string.Equals(x, t, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        /// <summary>
         /// 更新版として使ってよいか。だめなら理由。
-        /// ・署名がない版・署名の後で中身が変えられた版は、どんな場合も使わない
-        /// ・今の版が署名付きなら、同じ証明書で署名された版だけ
+        /// ・署名がない版・署名の後で中身が変えられた版・証明書が期限切れなどの版は、どんな場合も使わない
+        /// ・今の版が署名付きなら、同じ証明書か、正式な証明書（TrustedThumbprints：証明書の作り直しに対応）で署名された版だけ
         /// ・今の版に署名がない（自分でビルドした など）なら、正式な「自動コピー」の証明書で署名された版だけ
         /// ・前に更新に失敗した版（起動できなかった版）は使わない
         /// </summary>
@@ -92,20 +137,25 @@ namespace AutoCopy
             if (ver <= CurrentVersion) return "新しい版ではありません（" + ver + "）";
             string blocked = BlockedVersion();
             if (blocked != null && blocked == ver.ToString()) return "前にこの版（" + ver + "）への更新に失敗して元に戻したため、使いません（もっと新しい版を置いてください）";
-            bool unsigned;
-            string err = CheckSignature(path, out signer, out unsigned);
+            bool unsigned, trusted;
+            string err = CheckSignature(path, out signer, out unsigned, out trusted);
             if (unsigned) return "デジタル署名がない版には更新しません（" + ver + "）";
             if (err != null) return err;
-            string mine = CurrentSigner();
+            return SignerAllowed(signer, CurrentSigner());
+        }
+
+        /// <summary>署名した証明書（拇印）が更新に使えるか。mine = 今の版の署名（なし = null）</summary>
+        public static string SignerAllowed(string signer, string mine)
+        {
+            if (IsTrustedThumbprint(signer)) return null;   // 正式な証明書（作り直した新しい証明書も含む）
             if (mine != null)
             {
                 // 署名付きで動いているときは、同じ証明書で署名された更新版だけを使う
                 if (!string.Equals(signer, mine, StringComparison.OrdinalIgnoreCase))
                     return "今の版と違う証明書で署名されています（拇印 " + signer + "）";
+                return null;
             }
-            else if (!string.Equals(signer, OfficialThumbprint, StringComparison.OrdinalIgnoreCase))
-                return "正式な「自動コピー」の証明書で署名されていない版には更新しません（拇印 " + signer + "）";
-            return null;
+            return "正式な「自動コピー」の証明書で署名されていない版には更新しません（拇印 " + signer + "）";
         }
 
         // ---------------- 更新の失敗から戻す ----------------
