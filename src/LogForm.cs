@@ -178,7 +178,7 @@ namespace AutoCopy
                         ListViewItem it = new ListViewItem(st.FolderName ?? "");
                         it.SubItems.Add(st.ComputerName ?? ""); it.SubItems.Add(st.Updated ?? ""); it.SubItems.Add(""); it.SubItems.Add(""); it.SubItems.Add("");
                         it.SubItems[2].Tag = upKey;
-                        it.Tag = new string[] { Logger.PcLabel(st.FolderName, st.ComputerName), null };
+                        it.Tag = new string[] { LogStats.PcLabel(st.FolderName, st.ComputerName), null };
                         pcs.Items.Add(it);
                         continue;
                     }
@@ -191,7 +191,7 @@ namespace AutoCopy
                         it.SubItems.Add(j.Result == "ok" ? "正常" : j.Result == "error" ? "エラー" : j.Result == "running" ? "実行中" : "");
                         it.SubItems.Add(j.Message ?? "");
                         it.SubItems[2].Tag = upKey;
-                        it.Tag = new string[] { Logger.PcLabel(st.FolderName, st.ComputerName), j.Name };
+                        it.Tag = new string[] { LogStats.PcLabel(st.FolderName, st.ComputerName), j.Name };
                         if (j.Result == "error") it.ForeColor = Ui.Err;
                         pcs.Items.Add(it);
                     }
@@ -204,7 +204,7 @@ namespace AutoCopy
             if (note != null) status.Text = note + "　" + status.Text;
         }
 
-        private static string DeviceOf(LogLine l) { return Logger.PcLabel(l.Folder, l.Pc); }
+        private static string DeviceOf(LogLine l) { return LogStats.PcLabel(l.Folder, l.Pc); }
 
         /// <summary>読み込んだログに出てくる設備（PC）とジョブを、絞り込みの選択肢にする</summary>
         private void FillChoices()
@@ -282,7 +282,7 @@ namespace AutoCopy
             }
             string q = tSearch.Text.Trim();
             if (q.Length > 0 && (l.Detail ?? "").IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0
-                && Logger.TypeLabel(l.Type).IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0) return false;
+                && LogStats.TypeLabel(l.Type).IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0) return false;
             return true;
         }
 
@@ -310,7 +310,7 @@ namespace AutoCopy
                 case 0: cmp = delegate(LogLine a, LogLine b) { return a.Time.CompareTo(b.Time); }; break;
                 case 1: cmp = delegate(LogLine a, LogLine b) { return string.Compare(DeviceOf(a), DeviceOf(b), StringComparison.CurrentCultureIgnoreCase); }; break;
                 case 2: cmp = delegate(LogLine a, LogLine b) { return string.Compare(a.Job, b.Job, StringComparison.CurrentCultureIgnoreCase); }; break;
-                case 3: cmp = delegate(LogLine a, LogLine b) { return string.CompareOrdinal(Logger.TypeLabel(a.Type), Logger.TypeLabel(b.Type)); }; break;
+                case 3: cmp = delegate(LogLine a, LogLine b) { return string.CompareOrdinal(LogStats.TypeLabel(a.Type), LogStats.TypeLabel(b.Type)); }; break;
                 case 4: cmp = delegate(LogLine a, LogLine b) { return string.Compare(a.Detail, b.Detail, StringComparison.CurrentCultureIgnoreCase); }; break;
                 case 5: cmp = delegate(LogLine a, LogLine b) { return a.Size.CompareTo(b.Size); }; break;
                 default: cmp = delegate(LogLine a, LogLine b) { return a.Seconds.CompareTo(b.Seconds); }; break;
@@ -336,7 +336,7 @@ namespace AutoCopy
             ListViewItem it = new ListViewItem(l.Time.ToString("yyyy/MM/dd HH:mm:ss"));
             it.SubItems.Add((l.Folder ?? "") + (string.IsNullOrEmpty(l.Pc) ? "" : "（" + l.Pc + "）"));
             it.SubItems.Add(l.Job ?? "");
-            it.SubItems.Add(Logger.TypeLabel(l.Type));
+            it.SubItems.Add(LogStats.TypeLabel(l.Type));
             it.SubItems.Add(l.Detail ?? "");
             it.SubItems.Add(l.Size >= 0 ? Fmt.Size(l.Size) : "");
             it.SubItems.Add(l.Seconds >= 0 ? l.Seconds.ToString("0.0") + "秒" : "");
@@ -374,7 +374,7 @@ namespace AutoCopy
                 foreach (LogLine l in shown)
                 {
                     sb.AppendLine(string.Join(",", new string[] {
-                        Csv(l.Time.ToString("yyyy/MM/dd HH:mm:ss")), Csv(l.Pc), Csv(l.User), Csv(l.Folder), Csv(l.Job), Csv(l.Type), Csv(Logger.TypeJa(l.Type)), Csv(l.Detail),
+                        Csv(l.Time.ToString("yyyy/MM/dd HH:mm:ss")), Csv(l.Pc), Csv(l.User), Csv(l.Folder), Csv(l.Job), Csv(l.Type), Csv(LogStats.TypeJa(l.Type)), Csv(l.Detail),
                         l.Size >= 0 ? l.Size.ToString() : "", l.Seconds >= 0 ? l.Seconds.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) : "" }));
                 }
                 // Excel が文字化けしないよう BOM 付き UTF-8
