@@ -788,7 +788,10 @@ namespace AutoCopy
                     it.SubItems.Add(Fmt.Size(i.Size));
                     it.SubItems.Add(Fmt.LocalTime(i.Mtime));
                     it.SubItems[4].Tag = i.Mtime;
-                    it.SubItems.Add(i.Detected ?? "");
+                    DateTime det;
+                    bool hasDet = DateTime.TryParse(i.Detected ?? "", out det);
+                    it.SubItems.Add(hasDet ? det.ToString("yyyy/MM/dd HH:mm") : (i.Detected ?? ""));
+                    if (hasDet) it.SubItems[5].Tag = det;
                     it.ForeColor = i.Side == SyncDeleteItem.SideLocal ? Ui.Warn : SystemColors.WindowText;
                     Row r = new Row(); r.Job = j; r.Item = i;
                     it.Tag = r;

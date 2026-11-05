@@ -962,13 +962,25 @@ namespace AutoCopy
             Margin = new Padding(Ui.S(1), Ui.S(1), 0, Ui.S(1));
             TabStop = true;
             Cursor = Cursors.Hand;
-            lv.ItemChecked += delegate { Refresh2(); };
+            // 1件ごとに数え直すと、件数が多い一覧で行を足すたびに全件を読むことになり固まるため、まとめて1回数える
+            lv.ItemChecked += delegate { RefreshLater(); };
             // 一覧のハンドルを作っている最中は行を読めない（読むと一覧が壊れる）ため、作り終えてから数える
             lv.HandleCreated += delegate { try { lv.BeginInvoke(new Action(Refresh2)); } catch (Exception) { } };
             VisibleChanged += delegate { if (Visible) Refresh2(); };
         }
 
         public CheckState State { get { return state; } }
+
+        private bool pending;
+
+        private void RefreshLater()
+        {
+            if (pending) return;
+            if (!lv.IsHandleCreated) { Refresh2(); return; }
+            pending = true;
+            try { lv.BeginInvoke(new Action(delegate() { pending = false; Refresh2(); })); }
+            catch (Exception) { pending = false; }
+        }
 
         /// <summary>一覧のチェックの状態から、アイコンを ☑（すべて）・■（一部）・□（なし）に変える</summary>
         public void Refresh2()
