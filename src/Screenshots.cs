@@ -100,6 +100,7 @@ namespace AutoCopy
             {
                 AttentionForm af = new AttentionForm();
                 af.SetItems(AppCore.AttentionItems());
+                af.SetAutoClose(60);
                 return af;
             }, delegate(Form f) { ((AttentionForm)f).PlaceBottomRight(); });
             SaveIcons();
@@ -357,6 +358,20 @@ namespace AutoCopy
             catch (Exception ex) { errors.Add("件数の多い重複チェック: " + ex); }
 
             Capture("42_ログ_ジョブと時刻で絞り込み", delegate() { return new LogForm(j0.Name, DateTime.Today); }, null);
+            Capture("43_ログ_エラー・確認の対応状況", delegate() { return new LogForm(); }, delegate(Form f) { ((LogForm)f).ShowStatusTab(); });
+
+            // フォルダ内の重複ファイル検索（コピーと関係なく）
+            try
+            {
+                string share = Path.Combine(Path.Combine(AppPaths.Local, "sample"), "共有ドライブ");
+                string[] names = { "営業\\提案書_A社.pptx", "営業\\提案書_A社 - コピー.pptx", "営業\\過去分\\提案書_A社.pptx", "総務\\規程集.pdf", "総務\\旧\\規程集.pdf", "総務\\会議.mp4", "個人\\山田\\会議.mp4", "総務\\名簿.xlsx" };
+                long[] sizes = { 3200000, 3200000, 3200000, 820000, 820000, 48000000, 48000000, 51000 };
+                int[] seeds = { 1, 1, 1, 2, 2, 3, 3, 4 };
+                for (int i = 0; i < names.Length; i++) Sized(Path.Combine(share, names[i]), sizes[i], 30 + i, seeds[i]);
+                FolderDupResult fr = FolderDup.Find(share, true, 0, CancellationToken.None, null);
+                Capture("44_フォルダ内の重複ファイル検索", delegate() { FolderDupForm f = new FolderDupForm(share); f.SetResult(fr); return f; }, null);
+            }
+            catch (Exception ex) { errors.Add("フォルダ内の重複ファイル検索: " + ex); }
         }
 
         /// <summary>
@@ -474,7 +489,7 @@ namespace AutoCopy
                 sf = new SettingsForm();
                 sf.Show(); Pump(800);
                 List<string> bad = sf.SelfTestEnabled();
-                if (bad.Count == 0) lines.Add("| アプリ設定 | OK | 6項目 |");
+                if (bad.Count == 0) lines.Add("| アプリ設定 | OK | 9項目 |");
                 foreach (string x in bad) { lines.Add("| アプリ設定 | NG | " + x + " |"); ng++; }
             }
             catch (Exception ex) { errors.Add("操作できる項目の確認（アプリ設定）: " + ex); }
@@ -503,6 +518,19 @@ namespace AutoCopy
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             using (FileStream fs = new FileStream(path, FileMode.Create, FileAccess.Write)) fs.SetLength(size);
             File.SetLastWriteTime(path, DateTime.Now.AddDays(-ageDays).AddMinutes(-ageDays * 37 % 600));
+        }
+
+        /// <summary>seed が同じなら中身も同じになる（先頭に seed を書く）</summary>
+        private static void Sized(string path, long size, int ageDays, int seed)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            using (FileStream fs = new FileStream(path, FileMode.Create, FileAccess.Write))
+            {
+                fs.SetLength(size);
+                byte[] head = System.Text.Encoding.ASCII.GetBytes("seed-" + seed + "-" + size);
+                fs.Write(head, 0, head.Length);
+            }
+            File.SetLastWriteTime(path, DateTime.Now.AddDays(-ageDays));
         }
 
         private static void W(string path, string content, int ageSec)

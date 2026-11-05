@@ -61,7 +61,7 @@ namespace AutoCopy
                 Ui.B("複製", delegate { DuplicateJob(); }),
                 Ui.B("削除", delegate { DeleteJob(); }),
                 Sep(),
-                Ui.B("重複チェック", delegate { TrayApp.Instance.ShowDup(FirstSelected()); }),
+                DupMenuButton(),
                 Ui.B("上書きの確認", delegate { TrayApp.Instance.ShowConflicts(); }),
                 Ui.B("作業状況", delegate { TrayApp.Instance.ShowProgress(FirstSelected()); }),
                 Ui.B("結果の予測", delegate { string id = FirstSelected(); if (id == null && AppCore.Settings.Jobs.Count > 0) id = AppCore.Settings.Jobs[0].Id; if (id != null) TrayApp.Instance.ShowPreview(id); }),
@@ -178,6 +178,18 @@ namespace AutoCopy
             timer.Tick += delegate { RefreshView(); };
             timer.Start();
             RefreshView();
+        }
+
+        /// <summary>「重複チェック ▾」：ジョブの重複チェックの結果／フォルダを指定して探す（コピーと関係なく）</summary>
+        private Button DupMenuButton()
+        {
+            Button b = Ui.B("重複チェック ▾", null);
+            ContextMenuStrip m = new ContextMenuStrip();
+            m.Font = Ui.Base;
+            m.Items.Add("ジョブの重複チェックの結果（コピー先）…", null, delegate { TrayApp.Instance.ShowDup(FirstSelected()); });
+            m.Items.Add("フォルダを指定して重複ファイルを探す（コピーと関係なく）…", null, delegate { TrayApp.Instance.ShowFolderDup(null); });
+            b.Click += delegate { m.Show(b, new Point(0, b.Height)); };
+            return b;
         }
 
         private static Control Sep()
@@ -451,9 +463,10 @@ namespace AutoCopy
                     if (!j.Enabled) next = "—";
                     else if (AppCore.IsPaused(j.Id)) next = "停止中";
                     else if (rt.Running) next = "—";
+                    else if (j.StartupOnly && rt.StartupRunDone) next = "ログオン時";
                     else next = rt.NextRun.Date == DateTime.Today ? rt.NextRun.ToString("HH:mm") : rt.NextRun.ToString("M/d HH:mm");
 
-                    string interval = j.IntervalMinutes % 60 == 0 ? (j.IntervalMinutes / 60) + "時間" : j.IntervalMinutes + "分";
+                    string interval = j.StartupOnly ? "ログオン時" : j.IntervalMinutes % 60 == 0 ? (j.IntervalMinutes / 60) + "時間" : j.IntervalMinutes + "分";
                     string last = rt.LastRun == DateTime.MinValue ? "—" : (rt.LastRun.Date == DateTime.Today ? rt.LastRun.ToString("HH:mm") : rt.LastRun.ToString("M/d HH:mm"));
                     string paths = CopyEngine.ResolvedSource(j, s) + (j.Sync ? "  ⇄  " : "  →  ") + CopyEngine.ResolvedDest(j, s);
                     string[] cols = new string[] { j.Name + (j.Scope == JobScope.Dist ? "" : "（このPCだけ）"), j.ModeLabel, paths, interval, last, result, next };

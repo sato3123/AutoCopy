@@ -156,6 +156,7 @@ namespace AutoCopy
                 attentionForm.Snoozed += delegate { nextRemind = DateTime.Now.AddHours(1); };
             }
             attentionForm.SetItems(items);
+            attentionForm.SetAutoClose(AppCore.Settings.AttentionPopup && AppCore.Settings.AttentionAutoClose ? AppCore.Settings.AttentionCloseSeconds : 0);
             if (!attentionForm.Visible) attentionForm.Show();
             System.Media.SystemSounds.Exclamation.Play();
             // メイン画面を開いていれば、タスクバーのボタンも点滅させる
@@ -395,7 +396,9 @@ namespace AutoCopy
             int sdel = AppCore.TotalSyncDeletes();
             if (sdel > 0) menu.Items.Add("同期：削除の確認（" + sdel + "件）", null, delegate { ShowSyncDeletes(null); });
             menu.Items.Add("重複チェック結果", null, delegate { ShowDup(null); });
+            menu.Items.Add("フォルダ内の重複ファイルを探す…", null, delegate { ShowFolderDup(null); });
             menu.Items.Add("ログを見る", null, delegate { ShowLog(); });
+            menu.Items.Add("エラー・確認の対応状況", null, delegate { ShowLog(); if (logForm != null && !logForm.IsDisposed) logForm.ShowStatusTab(); });
             menu.Items.Add("設定", null, delegate { ShowSettings(); });
             menu.Items.Add("操作説明書", null, delegate { Ui.OpenManual(); });
             menu.Items.Add("更新を確認（今の版 " + Updater.CurrentVersion + "）", null, delegate { CheckUpdate(true); });
@@ -473,6 +476,13 @@ namespace AutoCopy
                 f.TopMost = top;
             }
             catch (Exception ex) { Logger.Error(null, "画面を開けませんでした：" + ex.Message); }
+        }
+
+        public void ShowFolderDup(string folder)
+        {
+            FolderDupForm f = new FolderDupForm(folder);
+            f.Show();
+            Bring(f);
         }
 
         public void ShowSyncDeletes(string jobId)

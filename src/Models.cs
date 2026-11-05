@@ -24,6 +24,8 @@ namespace AutoCopy
         [DataMember] public bool AttentionBlink;      // 確認が必要なときはアイコンを点滅させる
         [DataMember] public bool AttentionPopup;      // 確認が必要なときはメッセージ画面を出す
         [DataMember] public int AttentionRemindMinutes; // 確認が済むまで、メッセージ画面を出し直す間隔
+        [DataMember] public bool AttentionAutoClose;    // メッセージ画面を自動で閉じる
+        [DataMember] public int AttentionCloseSeconds;  // 自動で閉じるまでの秒数
         [DataMember] public bool ShortcutRenamed;     // 旧名のショートカットを「強制データ送信」に変えた
         [DataMember] public int DistVersion;          // 取り込んだ配布設定の版
         [DataMember] public string DistName;
@@ -49,6 +51,8 @@ namespace AutoCopy
             AttentionBlink = true;
             AttentionPopup = true;
             AttentionRemindMinutes = 120;
+            AttentionAutoClose = true;
+            AttentionCloseSeconds = 60;
             Jobs = new List<JobConfig>();
         }
 
@@ -57,6 +61,7 @@ namespace AutoCopy
         {
             if (Jobs == null) Jobs = new List<JobConfig>();
             if (AttentionRemindMinutes <= 0) AttentionRemindMinutes = 120;
+            if (AttentionCloseSeconds < 5) AttentionCloseSeconds = 60;
         }
     }
 
@@ -121,6 +126,8 @@ namespace AutoCopy
         [DataMember] public bool SyncTakeNew;
         // ログオン時（アプリの起動時）にも実行する。false なら、止まっている間に予定の時刻が過ぎたときだけ起動後に実行する
         [DataMember] public bool RunAtStartup;
+        // ログオン時（アプリの起動時）だけ実行する（一定の間隔では実行しない）
+        [DataMember] public bool StartupOnly;
         // 大きいファイルの重複（コピー元の中で中身が同じ）の扱い：off = 使わない / ask = 見つけたら毎回選ぶ（初期値） / auto = 自動でテキストにする
         [DataMember(Name = "DedupMode")] public string Dedup;
         // v1.7 の「使う・使わない」（使う = 自動でテキスト）。読み込んだら DedupMode に移す

@@ -156,6 +156,7 @@ namespace AutoCopy
                 case "RETRY": return "再試行";
                 case "UPDATE": return "プログラムの更新";
                 case "INFO": return "お知らせ";
+                case "HANDLED": return "対応状況";
                 default: return "";
             }
         }

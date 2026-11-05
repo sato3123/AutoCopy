@@ -36,7 +36,7 @@ namespace AutoCopy
             cbDevice = Ui.Combo(200, "すべて");
             cbJob = Ui.Combo(160, "すべて");
             foreach (JobConfig j in AppCore.Settings.Jobs) cbJob.Items.Add(j.Name);
-            cbType = Ui.Combo(130, "すべて", "エラーのみ", "コピー・上書き", "名前変更", "削除・復元", "確認待ち", "集計");
+            cbType = Ui.Combo(130, "すべて", "エラーのみ", "コピー・上書き", "名前変更", "削除・復元", "確認待ち", "集計", "エラー・確認と対応状況", "対応状況のみ");
             tSearch = Ui.T("", 140);
             cbDevice.SelectedIndexChanged += delegate { if (!quiet) ApplyFilter(); };
             cbJob.SelectedIndexChanged += delegate { if (!quiet) ApplyFilter(); };
@@ -85,8 +85,18 @@ namespace AutoCopy
             status.Padding = new Padding(8, 4, 8, 0);
             status.BackColor = Color.FromArgb(243, 243, 243);
 
-            Controls.Add(lv);
-            Controls.Add(pcs);
+            // タブ：ログ／エラー・確認の対応状況
+            tabs = new TabControl();
+            tabs.Dock = DockStyle.Fill;
+            TabPage tLog = new TabPage("ログ");
+            tLog.Controls.Add(lv);
+            tLog.Controls.Add(pcs);
+            TabPage tState = new TabPage("エラー・確認の対応状況");
+            BuildStatusTab(tState);
+            tabs.TabPages.Add(tLog);
+            tabs.TabPages.Add(tState);
+            tabs.SelectedIndexChanged += delegate { if (tabs.SelectedIndex == 1) FillStatus(); };
+            Controls.Add(tabs);
             Controls.Add(top);
             Controls.Add(status);
 
@@ -99,6 +109,127 @@ namespace AutoCopy
             }
             quiet = false;
             Shown += delegate { LoadLogs(); };
+        }
+
+        // ---------- エラー・確認の対応状況 ----------
+
+        private TabControl tabs;
+        private AcListView stateList;
+        private CheckBox sOpen, sDone;
+        private ComboBox sKind;
+        private Label sSummary;
+
+        /// <summary>対応状況のタブを開いた状態にする</summary>
+        public void ShowStatusTab() { tabs.SelectedIndex = 1; FillStatus(); }
+
+        private void BuildStatusTab(TabPage page)
+        {
+            sOpen = Ui.C("未対応", true);
+            sDone = Ui.C("対応済み", true);
+            sKind = Ui.Combo(140, "すべて", "エラー", "上書きの確認", "重複", "ミラーの削除保留", "同期の削除", "注意");
+            sOpen.CheckedChanged += delegate { FillStatus(); };
+            sDone.CheckedChanged += delegate { FillStatus(); };
+            sKind.SelectedIndexChanged += delegate { FillStatus(); };
+            sSummary = Ui.L("");
+            sSummary.ForeColor = Ui.Warn;
+            sSummary.Font = Ui.Bold;
+            Ui.FitToForm(sSummary, 1000);
+            FlowLayoutPanel head = Ui.Column(sSummary,
+                Ui.WrapRow(Ui.L("表示："), sOpen, sDone, Ui.L("種類"), sKind, Ui.B("最新にする", delegate { FillStatus(); }),
+                    Ui.Hint("（このPCの記録。上の期間・ジョブでも絞り込みます。ダブルクリックで該当の画面、右クリックで対応済みにできます。全PCの対応状況は「ログ」タブの種類「対応状況のみ」で見られます）")));
+            head.Dock = DockStyle.Top;
+            head.Padding = new Padding(6, 4, 6, 2);
+            page.Resize += delegate { foreach (Control c in head.Controls) c.MaximumSize = new Size(Math.Max(Ui.S(300), page.ClientSize.Width - Ui.S(20)), 0); };
+            stateList = (AcListView)Ui.List("状態|76", "発生日時|130", "対応日時|130", "ジョブ|130", "種類|110", "内容|360", "どう対応したか|200", "回数|50");
+            stateList.Dock = DockStyle.Fill;
+            stateList.MultiSelect = true;
+            stateList.SetSort(1, false);
+            stateList.DoubleClick += delegate
+            {
+                if (stateList.SelectedItems.Count == 0 || TrayApp.Instance == null) return;
+                Notice n = stateList.SelectedItems[0].Tag as Notice;
+                if (n != null) { TrayApp.Instance.OpenNotice(n); FillStatus(); }
+            };
+            ContextMenuStrip m = new ContextMenuStrip();
+            m.Font = Ui.Base;
+            m.Items.Add("対応済みにする", null, delegate { AppCore.SetNoticeHandled(SelectedStatus(), true); FillStatus(); });
+            m.Items.Add("未対応に戻す", null, delegate { AppCore.SetNoticeHandled(SelectedStatus(), false); FillStatus(); });
+            stateList.ContextMenuStrip = m;
+            page.Controls.Add(stateList);
+            page.Controls.Add(head);
+        }
+
+        private List<Notice> SelectedStatus()
+        {
+            List<Notice> l = new List<Notice>();
+            foreach (ListViewItem it in stateList.SelectedItems) { Notice n = it.Tag as Notice; if (n != null) l.Add(n); }
+            return l;
+        }
+
+        /// <summary>いま残っている確認（上書きの確認・重複・ミラー・同期・エラー）の件数</summary>
+        private static string PendingSummary()
+        {
+            int conf = AppCore.TotalConflicts(), pend = AppCore.TotalPendingDeletes(), sdel = AppCore.TotalSyncDeletes(), dedup = 0, dupc = 0, err = 0;
+            foreach (JobConfig j in AppCore.Settings.Jobs.ToArray())
+            {
+                if (j.DedupOn) dedup += DedupStore.PendingCount(j.Id);
+                DupResult r = DupChecker.LoadResult(j.Id);
+                if (r != null) dupc += r.DeleteCandidateCount();
+            }
+            foreach (Notice n in AppCore.RecentNotices()) if (!n.Handled && n.Level == NoticeLevel.Error) err++;
+            return "いま残っている確認：上書きの確認 " + conf + "件・大きいファイルの重複の扱い " + dedup + "件・重複チェックの削除候補 " + dupc + "件・ミラーの削除保留 " + pend + "件・同期の削除 " + sdel + "件・未対応のエラー " + err + "件";
+        }
+
+        private void FillStatus()
+        {
+            if (stateList == null) return;
+            AppCore.RefreshNoticeStates();
+            try { sSummary.Text = PendingSummary(); } catch (Exception) { sSummary.Text = ""; }
+            DateTime f = dFrom.Value, t = dTo.Value;
+            if (t < f) { DateTime x = f; f = t; t = x; }
+            t = t.AddMinutes(1);
+            string job = cbJob.SelectedIndex > 0 ? (string)cbJob.SelectedItem : null;
+            string kind = sKind.SelectedIndex > 0 ? (string)sKind.SelectedItem : null;
+            stateList.BeginUpdate();
+            try
+            {
+                stateList.Items.Clear();
+                List<ListViewItem> buf = new List<ListViewItem>();
+                foreach (Notice n in AppCore.RecentNotices())
+                {
+                    if (!n.NeedsAction) continue;   // 「コピーしました」などのお知らせは対象外
+                    if (n.Handled ? !sDone.Checked : !sOpen.Checked) continue;
+                    DateTime first = n.First == DateTime.MinValue ? n.Time : n.First;
+                    // 期間：発生から最後までのどこかが期間に入っていれば表示（未対応のものは期間に関係なく表示）
+                    if (n.Handled && (n.Time < f || first >= t)) continue;
+                    JobConfig jc = n.JobId != null ? AppCore.FindJob(n.JobId) : null;
+                    string jn = jc != null ? jc.Name : "";
+                    if (job != null && !string.Equals(jn, job, StringComparison.OrdinalIgnoreCase)) continue;
+                    string k = AppCore.NoticeKind(n);
+                    if (kind != null && k != kind) continue;
+                    ListViewItem it = new ListViewItem(n.StateText);
+                    it.UseItemStyleForSubItems = false;
+                    it.SubItems.Add(first.ToString("yyyy/MM/dd HH:mm"));
+                    it.SubItems[1].Tag = first;
+                    it.SubItems.Add(n.Handled && n.HandledAt != DateTime.MinValue ? n.HandledAt.ToString("yyyy/MM/dd HH:mm") : "");
+                    if (n.Handled) it.SubItems[2].Tag = n.HandledAt;
+                    it.SubItems.Add(jn);
+                    it.SubItems.Add(k);
+                    it.SubItems.Add((n.Title ?? "") + (string.IsNullOrEmpty(n.Text) ? "" : "　" + n.Text));
+                    it.SubItems.Add(n.Handled ? (n.HandledNote ?? "") : "");
+                    it.SubItems.Add(n.Count > 1 ? n.Count + "回" : "");
+                    it.SubItems[7].Tag = (long)n.Count;
+                    Color c = n.Level == NoticeLevel.Error ? Ui.Err : Ui.Warn;
+                    for (int x = 1; x < it.SubItems.Count; x++) it.SubItems[x].ForeColor = n.Handled ? Ui.Quiet : c;
+                    it.SubItems[0].ForeColor = n.Handled ? Ui.Ok : Color.White;
+                    it.SubItems[0].BackColor = n.Handled ? stateList.BackColor : c;
+                    it.Tag = n;
+                    buf.Add(it);
+                }
+                stateList.Items.AddRange(buf.ToArray());
+                stateList.Resort();
+            }
+            finally { stateList.EndUpdate(); }
         }
 
         private static DateTimePicker TimePicker()
@@ -279,6 +410,8 @@ namespace AutoCopy
                 case 4: if (l.Type != "DELETE" && l.Type != "RESTORE" && l.Type != "PURGE" && l.Type != "SYNCDEL") return false; break;
                 case 5: if (l.Type != "CONFLICT" && l.Type != "HOLD") return false; break;
                 case 6: if (l.Type != "SUMMARY" && l.Type != "DUPCHECK") return false; break;
+                case 7: if (l.Type != "ERROR" && l.Type != "BLOCKED" && l.Type != "CONFLICT" && l.Type != "HOLD" && l.Type != "HANDLED" && l.Type != "DUPCHECK" && l.Type != "DEDUP" && l.Type != "SYNCDEL") return false; break;
+                case 8: if (l.Type != "HANDLED") return false; break;
             }
             string q = tSearch.Text.Trim();
             if (q.Length > 0 && (l.Detail ?? "").IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0
@@ -288,6 +421,7 @@ namespace AutoCopy
 
         private void ApplyFilter()
         {
+            if (tabs != null && tabs.SelectedIndex == 1) FillStatus();
             shown = all.FindAll(delegate(LogLine l) { return Match(l); });
             SortShown(lv.SortColumn, lv.SortAscending);
             lv.VirtualListSize = 0;

@@ -91,6 +91,7 @@ namespace AutoCopy.Tests
             Add("T62", "お知らせ：未対応・対応済み（自動・手動）・同じお知らせはまとめる・保存される", T62_NoticeStates);
             Add("T63", "同期：共有フォルダにだけあるファイルは、初期値ではこのPCにコピーしない（設定で取り込める）", T63_SyncTakeNew);
             Add("T64", "実行の予定：重複チェックの毎月・毎年・ログオン時、止まっている間に過ぎた予定は起動後に実行", T64_Schedule);
+            Add("T65", "フォルダ内の重複ファイル検索：コピーと関係なく探す・1つ残す候補・移す（戻せる）・コピー元は移さない", T65_FolderDup);
 
             int ng = 0;
             foreach (TestCase t in cases)
@@ -2130,6 +2131,60 @@ namespace AutoCopy.Tests
             Eq(gate, AppCore.FirstRunAfterStart(c, gate.AddHours(-9), gate, true, out cu), "止まっている間に予定が過ぎた：起動後すぐ");
             True(cu != null, "取りこぼしの記録");
             Eq(gate, AppCore.FirstRunAfterStart(c, DateTime.MinValue, gate, true, out cu), "一度も実行していない：起動後すぐ");
+            c.StartupOnly = true;
+            Eq(gate, AppCore.FirstRunAfterStart(c, gate.AddHours(-1), gate, true, out cu), "ログオン時のみ：起動後すぐ（予定の時刻を待たない）");
+            True(!Json.Deserialize<JobConfig>("{\"Name\":\"v110\"}").StartupOnly, "ログオン時のみ は初期値ではない（前の版の設定も）");
+        }
+
+        private static void T65_FolderDup()
+        {
+            string root = Path.Combine(baseDir, "T65");
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+            WriteFile(Path.Combine(root, "a.txt"), "同じ中身です", 600);
+            WriteFile(Path.Combine(root, "sub\\a のコピー.txt"), "同じ中身です", 300);
+            WriteFile(Path.Combine(root, "sub\\深い\\a.txt"), "同じ中身です", 100);
+            WriteFile(Path.Combine(root, "b.txt"), "同じ大きさ違う", 600);   // 大きさは同じでも中身が違う
+            WriteFile(Path.Combine(root, "c.txt"), "同じ大きさ違ウ", 600);
+            string big = new string('x', 300000);
+            WriteFile(Path.Combine(root, "大\\1.bin"), big + "1", 600);
+            WriteFile(Path.Combine(root, "大\\2.bin"), big + "1", 600);
+            WriteFile(Path.Combine(root, "大\\3.bin"), big + "2", 600);   // 先頭と末尾の一部だけ違う
+            Dictionary<string, string> before = Snapshot(root);
+
+            FolderDupResult r = FolderDup.Find(root, true, 0, CancellationToken.None, null);
+            Eq(2, r.Groups.Count, "中身が同じまとまり 2つ（大きさが同じだけのものは入れない）");
+            FolderDupGroup g = r.Groups.Find(delegate(FolderDupGroup x) { return x.Files.Count == 3; });
+            True(g != null, "3つの同じファイル");
+            Eq("a.txt", g.Files[0], "残す候補はパスが短いもの");
+            True(r.Groups.Exists(delegate(FolderDupGroup x) { return x.Files.Count == 2 && x.Files.Contains("大\\1.bin") && x.Files.Contains("大\\2.bin"); }), "大きいファイルは全体で比べる");
+            Eq(3, r.WastedFiles, "1つずつ残すと消せる件数");
+            Eq(before.Count, Snapshot(root).Count, "探すだけでは何も変えない");
+            foreach (KeyValuePair<string, string> kv in before) Eq(kv.Value, Snapshot(root)[kv.Key], "中身も変えない " + kv.Key);
+
+            FolderDupResult r2 = FolderDup.Find(root, false, 0, CancellationToken.None, null);
+            Eq(0, r2.Groups.Count, "サブフォルダを含めない");
+            FolderDupResult r3 = FolderDup.Find(root, true, 100 * 1024, CancellationToken.None, null);
+            Eq(1, r3.Groups.Count, "大きさの下限");
+
+            // 移す：消さずに「_AutoCopy\重複で削除」へ
+            SafeFs.SetProtectedSources(new string[0]);
+            int moved;
+            List<string> errs = FolderDup.MoveAway(root, new List<string>(new string[] { "sub\\a のコピー.txt" }), out moved);
+            Eq(0, errs.Count, "移せる");
+            Eq(1, moved, "1件");
+            True(!File.Exists(Path.Combine(root, "sub\\a のコピー.txt")), "元の場所からなくなる");
+            True(Directory.GetFiles(FolderDup.TrashFolder(root), "a のコピー.txt", SearchOption.AllDirectories).Length == 1, "重複で削除のフォルダに残る（戻せる）");
+            FolderDupResult r4 = FolderDup.Find(root, true, 0, CancellationToken.None, null);
+            FolderDupGroup g4 = r4.Groups.Find(delegate(FolderDupGroup x) { return x.Files.Contains("a.txt"); });
+            Eq(2, g4.Files.Count, "移したもの（_AutoCopy の中）は次の検索に出ない");
+
+            // 自動コピーのコピー元のファイルは移さない
+            SafeFs.SetProtectedSources(new string[] { Path.Combine(root, "大") });
+            errs = FolderDup.MoveAway(root, new List<string>(new string[] { "大\\2.bin" }), out moved);
+            Eq(1, errs.Count, "コピー元のファイルは移さない");
+            True(File.Exists(Path.Combine(root, "大\\2.bin")), "コピー元のファイルは残る");
+            True(SafeFs.IsProtected(Path.Combine(root, "大\\x")) && !SafeFs.IsProtected(Path.Combine(root, "sub")), "コピー元かどうか");
+            SafeFs.SetProtectedSources(new string[0]);
         }
 
         private static void T42_Performance()

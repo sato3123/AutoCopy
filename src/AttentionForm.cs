@@ -15,6 +15,9 @@ namespace AutoCopy
         private readonly Label head;
         public event Action<string, string> OpenRequested;   // action, jobId
         public event Action Snoozed;
+        private readonly System.Windows.Forms.Timer closeTimer = new System.Windows.Forms.Timer();
+        private readonly Label closeNote;
+        private int remain;   // 自動で閉じるまでの秒数（0 = 閉じない）
 
         public AttentionForm()
         {
@@ -37,6 +40,17 @@ namespace AutoCopy
             head.ForeColor = Ui.Warn;
             list = Ui.Column();
             Label note = Ui.Hint("確認が済むまで、画面右下のアイコンが点滅します。");
+            closeNote = Ui.Hint("");
+            closeTimer.Interval = 1000;
+            closeTimer.Tick += delegate
+            {
+                if (remain <= 0) return;
+                // マウスを重ねている間は閉じない（読んでいる途中で消えないように）
+                if (Bounds.Contains(Cursor.Position)) { ShowRemain(); return; }
+                remain--;
+                if (remain <= 0) { closeTimer.Stop(); Close(); return; }
+                ShowRemain();
+            };
 
             Button openAll = Ui.B("確認する", delegate { Open(null, null); });
             openAll.BackColor = Ui.Accent; openAll.ForeColor = Color.White; openAll.UseVisualStyleBackColor = false;
@@ -45,12 +59,37 @@ namespace AutoCopy
             FlowLayoutPanel buttons = Ui.Row(openAll, later);
             buttons.Margin = new Padding(0, Ui.S(6), 0, 0);
 
-            FlowLayoutPanel body = Ui.Column(head, list, note, buttons);
+            FlowLayoutPanel body = Ui.Column(head, list, note, closeNote, buttons);
             body.Padding = new Padding(Ui.S(14), Ui.S(10), Ui.S(14), Ui.S(12));
             body.Location = new Point(stripe.Width, 0);
             Controls.Add(body);
             Controls.Add(stripe);
             CancelButton = later;
+        }
+
+        /// <summary>指定した秒数で自動的に閉じる（0 = 閉じない）。出し直すたびに数え直す</summary>
+        public void SetAutoClose(int seconds)
+        {
+            remain = Math.Max(0, seconds);
+            closeNote.Visible = remain > 0;
+            ShowRemain();
+            if (remain > 0) closeTimer.Start(); else closeTimer.Stop();
+        }
+
+        public int RemainSeconds { get { return remain; } }
+
+        private void ShowRemain()
+        {
+            if (remain <= 0) return;
+            bool hover = Bounds.Contains(Cursor.Position);
+            string t = hover ? "（マウスを重ねている間は閉じません）" : "（あと " + remain + "秒で自動的に閉じます）";
+            if (closeNote.Text != t) closeNote.Text = t;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) closeTimer.Dispose();
+            base.Dispose(disposing);
         }
 
         /// <summary>入力を奪わずに表示する</summary>

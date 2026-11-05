@@ -17,7 +17,7 @@ namespace AutoCopy
         // 基本
         private TextBox tName, tSrc, tDst, tStart, tEnd;
         private CheckBox cEnabled, cSub, cWindow, cDelay, cFollow, cBackup, cRunAtStartup;
-        private RadioButton rSyncNoTake, rSyncTake;
+        private RadioButton rSyncNoTake, rSyncTake, rInterval, rStartupOnly;
         private RadioButton rDedupOff, rDedupAsk, rDedupOn;
         private CheckBox cAlwaysRename;
         private Label lSyncNote, lDedupNote;
@@ -141,9 +141,25 @@ namespace AutoCopy
             FlowLayoutPanel modes = Ui.Column(rAppend, rMirror, mirrorLimit, rSync, lSyncNote, syncNew);
             b.Controls.Add(Ui.Row(Ui.L("コピーの方式", 130), modes));
 
+            // 実行のタイミング：一定の間隔で（＋ログオン時）／ログオン時のみ
             nInterval = Ui.N(1, 1440, 30, 72);
             cbUnit = Ui.Combo(80, "分", "時間");
-            b.Controls.Add(Ui.Row(Ui.L("実行間隔", 130), nInterval, cbUnit, Ui.Hint("1分〜24時間")));
+            rInterval = Ui.R("一定の間隔で", true);
+            rStartupOnly = Ui.R("ログオン時（アプリの起動時）のみ", false);
+            // 別々の入れ物に入るため、片方を選んだらもう片方を外す
+            rInterval.CheckedChanged += delegate { if (rInterval.Checked) rStartupOnly.Checked = false; };
+            rStartupOnly.CheckedChanged += delegate { if (rStartupOnly.Checked) rInterval.Checked = false; };
+            cRunAtStartup = Ui.C("ログオン時（アプリの起動時）にも実行する", true);
+            cRunAtStartup.Margin = new Padding(Ui.S(22), 3, 3, 3);
+            Label lStartupNote = Ui.Wrap("チェックしない場合も、PCが止まっている間に予定の時刻（前回＋実行間隔）が過ぎていれば、起動後に実行します。", 540);
+            lStartupNote.ForeColor = Ui.Quiet;
+            lStartupNote.Margin = new Padding(Ui.S(40), 0, 3, 4);
+            Label lOnlyNote = Ui.Wrap("Windows にサインインしてアプリが起動したときに1回だけ実行します（下の「起動後の初回」の待ち時間の後）。その後は、次にログオンするまで自動では実行しません（手動の実行・強制データ送信はいつでもできます）。", 540);
+            lOnlyNote.ForeColor = Ui.Quiet;
+            lOnlyNote.Margin = new Padding(Ui.S(22), 0, 3, 4);
+            b.Controls.Add(Ui.Row(Ui.L("実行のタイミング", 130), Ui.Column(
+                Ui.Row(rInterval, nInterval, cbUnit, Ui.Hint("ごと（1分〜24時間）")),
+                cRunAtStartup, lStartupNote, rStartupOnly, lOnlyNote)));
 
             cWindow = Ui.C("時間帯を限定する", false);
             tStart = Ui.T("08:00", 60);
@@ -153,10 +169,7 @@ namespace AutoCopy
             cDelay = Ui.C("PC起動後", true);
             nDelay = Ui.N(0, 120, 1, 56);
             b.Controls.Add(Ui.Row(Ui.L("起動後の初回", 130), cDelay, nDelay, Ui.L("分待ってから実行する")));
-            cRunAtStartup = Ui.C("ログオン時（アプリの起動時）にも実行する", true);
-            Label lStartupNote = Ui.Wrap("チェックしない場合も、PCが止まっている間に予定の時刻（前回＋実行間隔）が過ぎていれば、起動後に実行します。", 560);
-            lStartupNote.ForeColor = Ui.Quiet;
-            b.Controls.Add(Ui.Row(Ui.L("ログオン時", 130), Ui.Column(cRunAtStartup, lStartupNote)));
+
 
             cFollow = Ui.C("名前やフォルダ名を変えたら、コピー先も同じ名前に変える（再コピーしない）", true);
             rAsk = Ui.R("毎回確認する（推奨）", true);
@@ -218,7 +231,7 @@ namespace AutoCopy
         {
             EventHandler h = delegate { UpdateEnabled(); };
             foreach (CheckBox c in new CheckBox[] { cWindow, cDelay, cMax, cOlder, cDup }) c.CheckedChanged += h;
-            foreach (RadioButton r in new RadioButton[] { rAppend, rMirror, rSync, rAsk, rSkip, rOver, rStartupDup, rDaily, rWeekly, rMonthly, rYearly, rManual, rDedupOff, rDedupAsk, rDedupOn }) r.CheckedChanged += h;
+            foreach (RadioButton r in new RadioButton[] { rInterval, rStartupOnly, rAppend, rMirror, rSync, rAsk, rSkip, rOver, rStartupDup, rDaily, rWeekly, rMonthly, rYearly, rManual, rDedupOff, rDedupAsk, rDedupOn }) r.CheckedChanged += h;
             nRetry.ValueChanged += h;
         }
 
@@ -236,6 +249,8 @@ namespace AutoCopy
             // 実行する時間帯・起動後の待ち
             tStart.Enabled = tEnd.Enabled = cWindow.Checked;
             nDelay.Enabled = cDelay.Checked;
+            // 実行のタイミング：ログオン時のみなら、間隔と「ログオン時にも」は使わない
+            nInterval.Enabled = cbUnit.Enabled = cRunAtStartup.Enabled = rInterval.Checked;
             // 上書きのルール：常に上書き・確認のときだけ「退避」に意味がある（上書きしないなら不要）
             cBackup.Enabled = !rSkip.Checked;
             // 大きいファイルの重複：同期では使えない。使うときだけ大きさを決められる
@@ -305,6 +320,10 @@ namespace AutoCopy
                 expect(!tStart.Enabled && !tEnd.Enabled, "時間帯を限定しないのに時刻を変えられる");
                 cWindow.Checked = true; UpdateEnabled();
                 expect(tStart.Enabled && tEnd.Enabled, "時間帯を限定するのに時刻を変えられない");
+                rStartupOnly.Checked = true; UpdateEnabled();
+                expect(!rInterval.Checked && !nInterval.Enabled && !cbUnit.Enabled && !cRunAtStartup.Enabled, "ログオン時のみなのに間隔を変えられる（または一定の間隔の選択が外れない）");
+                rInterval.Checked = true; UpdateEnabled();
+                expect(!rStartupOnly.Checked && nInterval.Enabled && cRunAtStartup.Enabled, "一定の間隔なのに間隔を変えられない（またはログオン時のみの選択が外れない）");
                 cDelay.Checked = false; UpdateEnabled();
                 expect(!nDelay.Enabled, "起動後に待たないのに分を変えられる");
                 rSkip.Checked = true; UpdateEnabled();
@@ -567,6 +586,8 @@ namespace AutoCopy
             rSyncTake.Checked = j.SyncTakeNew;
             rSyncNoTake.Checked = !j.SyncTakeNew;
             cRunAtStartup.Checked = j.RunAtStartup;
+            rStartupOnly.Checked = j.StartupOnly;
+            rInterval.Checked = !j.StartupOnly;
             rDedupOff.Checked = j.Dedup == DedupMode.Off;
             rDedupAsk.Checked = j.Dedup == DedupMode.Ask;
             rDedupOn.Checked = j.Dedup == DedupMode.Auto;
@@ -658,6 +679,7 @@ namespace AutoCopy
             j.Sync = rSync.Checked;
             j.SyncTakeNew = rSync.Checked && rSyncTake.Checked;
             j.RunAtStartup = cRunAtStartup.Checked;
+            j.StartupOnly = rStartupOnly.Checked;
             j.Dedup = rDedupOff.Checked ? DedupMode.Off : rDedupOn.Checked ? DedupMode.Auto : DedupMode.Ask;
             j.DedupMinMB = (int)nDedup.Value;
             j.MirrorMaxCount = (int)nMirrorCount.Value;

@@ -184,6 +184,18 @@ namespace AutoCopy
             catch (Exception) { }
         }
 
+        /// <summary>自動コピーのコピー元（またはその中）か（調べるだけ。記録は残さない）</summary>
+        public static bool IsProtected(string path)
+        {
+            string n = PathUtil.Normalize(path);
+            string unc = PathUtil.Normalize(NetAccess.ToUncIfMapped(n));
+            List<string> roots;
+            lock (sync) { roots = protectedRoots; }
+            foreach (string r in roots)
+                if (PathUtil.IsSameOrInside(n, r) || PathUtil.IsSameOrInside(unc, r)) return true;
+            return false;
+        }
+
         public static void Guard(string path)
         {
             string n = PathUtil.Normalize(path);

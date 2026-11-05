@@ -74,6 +74,7 @@ namespace AutoCopy
         public DateTime StartGate;         // 起動後、これより前には実行しない（ネットワークの準備を待つ）
         public bool DupStartupDone;        // 「ログオン時」の重複チェックを、今回の起動で済ませたか
         public string CatchUpNote;         // 止まっている間に予定が過ぎたため、起動後に実行するときの説明
+        public bool StartupRunDone;        // 「ログオン時のみ」のジョブを、今回の起動で実行したか
     }
 
     /// <summary>アプリの中心。スケジュール、ジョブの実行、通知を受け持つ。</summary>
@@ -231,7 +232,7 @@ namespace AutoCopy
                     if (rt.PausedUntil.HasValue && now >= rt.PausedUntil.Value) rt.PausedUntil = null;
                     if (!j.Enabled || IsPaused(j.Id)) continue;
                     string dupNote;
-                    if (!rt.Running && !rt.DupRunning && now >= rt.NextRun && TimeUtil.InWindow(j, now))
+                    if (!rt.Running && !rt.DupRunning && now >= rt.NextRun && TimeUtil.InWindow(j, now) && !(j.StartupOnly && rt.StartupRunDone))
                     {
                         if (rt.CatchUpNote != null) { Logger.Info(j.Name, rt.CatchUpNote); rt.CatchUpNote = null; }
                         RunJob(j.Id, false, false);
@@ -277,7 +278,7 @@ namespace AutoCopy
         public static DateTime FirstRunAfterStart(JobConfig j, DateTime lastRun, DateTime gate, bool startup, out string catchUp)
         {
             catchUp = null;
-            if (!startup || j.RunAtStartup || lastRun == DateTime.MinValue) return gate;
+            if (j.StartupOnly || !startup || j.RunAtStartup || lastRun == DateTime.MinValue) return gate;
             DateTime due = lastRun.AddMinutes(Math.Max(1, j.IntervalMinutes));
             if (due <= gate)
             {
@@ -441,6 +442,7 @@ namespace AutoCopy
             }
             DateTime startedAt = DateTime.Now;
             rt.NextRun = startedAt.AddMinutes(Math.Max(1, job.IntervalMinutes));
+            if (job.StartupOnly && !manual) rt.StartupRunDone = true;   // ログオン時のみ：次のログオンまで自動では実行しない
             RaiseChanged();
             CancellationToken ct = rt.Cts.Token;
             Task.Factory.StartNew(delegate()
@@ -932,6 +934,7 @@ namespace AutoCopy
                     n.ManualOpen = !handled;
                     n.HandledNote = handled ? (n.NeedsAction ? NoticeNotes.Manual : NoticeNotes.NotNeeded) : null;
                     n.HandledAt = handled ? DateTime.Now : DateTime.MinValue;
+                    if (n.NeedsAction) LogHandled(n);
                 }
             }
             SaveNotices();
@@ -958,7 +961,7 @@ namespace AutoCopy
             {
                 foreach (Notice n in notices)
                     if (!n.Handled && n.Level == NoticeLevel.Error && (jobId == null || n.JobId == jobId))
-                    { n.Handled = true; n.HandledNote = NoticeNotes.Seen; n.HandledAt = DateTime.Now; n.ManualOpen = false; any = true; }
+                    { n.Handled = true; n.HandledNote = NoticeNotes.Seen; n.HandledAt = DateTime.Now; n.ManualOpen = false; any = true; LogHandled(n); }
             }
             if (any) { SaveNotices(); RaiseChanged(); }
         }
@@ -980,10 +983,40 @@ namespace AutoCopy
                 try { why = AutoResolved(n); } catch (Exception) { }
                 if (why == null) continue;
                 lock (notices) { n.Handled = true; n.HandledNote = why; n.HandledAt = DateTime.Now; }
+                LogHandled(n);
                 changed = true;
             }
             if (changed) SaveNotices();
             return changed;
+        }
+
+        /// <summary>対応状況をログにも残す（ログ保管先に送られ、全PCの対応状況をログ画面で見られる）</summary>
+        private static void LogHandled(Notice n)
+        {
+            try
+            {
+                JobConfig j = n.JobId != null ? FindJob(n.JobId) : null;
+                string what = (n.Title ?? "") + (string.IsNullOrEmpty(n.Text) ? "" : "　" + n.Text);
+                if (what.Length > 160) what = what.Substring(0, 160) + "…";
+                Logger.Write(j != null ? j.Name : null, "HANDLED",
+                    (n.Handled ? "対応済み［" + (n.HandledNote ?? "") + "］" : "未対応に戻しました") + "：" + what + "（" + n.First.ToString("M/d HH:mm") + " 発生" + (n.Count > 1 ? "・" + n.Count + "回" : "") + "）", -1, -1);
+            }
+            catch (Exception) { }
+        }
+
+        /// <summary>お知らせの種類（画面用）</summary>
+        public static string NoticeKind(Notice n)
+        {
+            switch (n.Action)
+            {
+                case "conflicts": return "上書きの確認";
+                case "dup": return "重複";
+                case "pending": return "ミラーの削除保留";
+                case "synccand": return "同期の削除";
+            }
+            if (n.Level == NoticeLevel.Error) return "エラー";
+            if (n.Level == NoticeLevel.Warning) return "注意";
+            return "お知らせ";
         }
 
         private static string AutoResolved(Notice n)

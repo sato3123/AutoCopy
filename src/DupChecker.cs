@@ -488,7 +488,7 @@ namespace AutoCopy
             try { Json.Save(ResultPath(r.JobId), r); } catch (Exception) { }
         }
 
-        private static string Fingerprint(string path)
+        internal static string Fingerprint(string path)
         {
             try
             {
@@ -511,7 +511,7 @@ namespace AutoCopy
             catch (Exception) { return null; }
         }
 
-        private static string FullHash(string path)
+        internal static string FullHash(string path)
         {
             try
             {
@@ -675,6 +675,139 @@ namespace AutoCopy
             }
             catch (Exception) { }
             return list;
+        }
+    }
+
+    /// <summary>フォルダ内の重複（中身が同じファイル）のまとまり</summary>
+    public class FolderDupGroup
+    {
+        public long Size;
+        public string Hash;
+        public List<string> Files = new List<string>();   // 相対パス（残すものの候補順：パスが短い → 更新日時が古い）
+        public List<long> Mtimes = new List<long>();
+    }
+
+    public class FolderDupResult
+    {
+        public string Root;
+        public int Scanned;
+        public long ScannedBytes;
+        public List<FolderDupGroup> Groups = new List<FolderDupGroup>();
+        public long WastedBytes;   // 1つ残して消したら空く容量
+        public int WastedFiles;
+        public List<string> Errors = new List<string>();
+    }
+
+    /// <summary>
+    /// コピーとは関係なく、指定したフォルダの中で中身が同じファイルを探す（読むだけ。何も変えない）。
+    /// 大きさ → 先頭と末尾 → 全体のMD5 の順に絞り込む。
+    /// </summary>
+    public static class FolderDup
+    {
+        public static FolderDupResult Find(string root, bool includeSubdirs, long minBytes, CancellationToken ct, Action<string> progress)
+        {
+            FolderDupResult res = new FolderDupResult();
+            res.Root = root;
+            if (!Directory.Exists(PathUtil.Long(root))) throw new DirectoryNotFoundException("フォルダが見つかりません: " + root);
+            ScanResult sc = Scanner.Scan(root, includeSubdirs, null, true, ct, delegate(int n) { if (progress != null) progress("ファイルを数えています（" + Fmt.Count(n) + "件）"); });
+            res.Scanned = sc.Files.Count;
+            res.Errors.AddRange(sc.Errors);
+            Dictionary<long, List<string>> bySize = new Dictionary<long, List<string>>();
+            foreach (KeyValuePair<string, ScanItem> kv in sc.Files)
+            {
+                res.ScannedBytes += kv.Value.Size;
+                if (kv.Value.Size <= 0 || kv.Value.Size < minBytes) continue;
+                List<string> l;
+                if (!bySize.TryGetValue(kv.Value.Size, out l)) { l = new List<string>(); bySize[kv.Value.Size] = l; }
+                l.Add(kv.Key);
+            }
+            int cand = 0;
+            foreach (List<string> l in bySize.Values) if (l.Count > 1) cand += l.Count;
+            int done = 0;
+            foreach (KeyValuePair<long, List<string>> g in bySize)
+            {
+                if (g.Value.Count < 2) continue;
+                ct.ThrowIfCancellationRequested();
+                Dictionary<string, List<string>> byFp = new Dictionary<string, List<string>>();
+                foreach (string r in g.Value)
+                {
+                    done++;
+                    if (progress != null && (done & 15) == 0) progress("中身を比べています（" + Fmt.Count(done) + " / " + Fmt.Count(cand) + "件）");
+                    string fp = g.Key <= 131072 ? DupChecker.FullHash(PathUtil.Combine(root, r)) : DupChecker.Fingerprint(PathUtil.Combine(root, r));
+                    if (fp == null) { res.Errors.Add("読めません: " + r); continue; }
+                    List<string> l;
+                    if (!byFp.TryGetValue(fp, out l)) { l = new List<string>(); byFp[fp] = l; }
+                    l.Add(r);
+                }
+                foreach (KeyValuePair<string, List<string>> f in byFp)
+                {
+                    if (f.Value.Count < 2) continue;
+                    Dictionary<string, List<string>> byHash = new Dictionary<string, List<string>>();
+                    if (g.Key <= 131072) byHash[f.Key] = f.Value;   // 小さいファイルはもう全体を比べた
+                    else
+                        foreach (string r in f.Value)
+                        {
+                            ct.ThrowIfCancellationRequested();
+                            if (progress != null) progress("中身を比べています（" + Fmt.Count(done) + " / " + Fmt.Count(cand) + "件）　" + r);
+                            string h = DupChecker.FullHash(PathUtil.Combine(root, r));
+                            if (h == null) { res.Errors.Add("読めません: " + r); continue; }
+                            List<string> l;
+                            if (!byHash.TryGetValue(h, out l)) { l = new List<string>(); byHash[h] = l; }
+                            l.Add(r);
+                        }
+                    foreach (KeyValuePair<string, List<string>> hh in byHash)
+                    {
+                        if (hh.Value.Count < 2) continue;
+                        FolderDupGroup grp = new FolderDupGroup();
+                        grp.Size = g.Key; grp.Hash = hh.Key;
+                        List<string> files = new List<string>(hh.Value);
+                        // 残す候補を先頭に：パスが短い → 更新日時が古い → 名前の順
+                        files.Sort(delegate(string a, string b)
+                        {
+                            int c = a.Length.CompareTo(b.Length);
+                            if (c == 0) c = sc.Files[a].Mtime.CompareTo(sc.Files[b].Mtime);
+                            if (c == 0) c = string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
+                            return c;
+                        });
+                        grp.Files = files;
+                        foreach (string x in files) grp.Mtimes.Add(sc.Files[x].Mtime);
+                        res.Groups.Add(grp);
+                        res.WastedBytes += g.Key * (files.Count - 1);
+                        res.WastedFiles += files.Count - 1;
+                    }
+                }
+            }
+            // 無駄な容量の大きいまとまりから
+            res.Groups.Sort(delegate(FolderDupGroup a, FolderDupGroup b) { return (b.Size * (b.Files.Count - 1)).CompareTo(a.Size * (a.Files.Count - 1)); });
+            return res;
+        }
+
+        /// <summary>
+        /// 選んだファイルを、そのフォルダの「_AutoCopy\重複で削除\日時」へ移す（消さない。戻せる）。
+        /// 自動コピーのコピー元のファイルは移さない（元データは削除しない）。できなかったものを返す。
+        /// </summary>
+        public static List<string> MoveAway(string root, List<string> rels, out int moved)
+        {
+            List<string> errs = new List<string>();
+            moved = 0;
+            string batch = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+            foreach (string r in rels)
+            {
+                try
+                {
+                    SafeFs.MoveToTrash(root, r, "重複で削除", batch);
+                    moved++;
+                    Logger.Write(null, "DELETE", PathUtil.Combine(root, r) + "　（フォルダ内の重複検索で「_AutoCopy\\重複で削除」へ移動）", -1, -1);
+                }
+                catch (SourceProtectedException) { errs.Add(r + "：自動コピーのコピー元のファイルのため、移しませんでした"); }
+                catch (Exception ex) { errs.Add(r + "：" + ex.Message); }
+            }
+            return errs;
+        }
+
+        public static string TrashFolder(string root)
+        {
+            return PathUtil.Combine(PathUtil.Combine(root, AppPaths.DestMetaFolder), "重複で削除");
         }
     }
 }

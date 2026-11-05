@@ -12,8 +12,8 @@ namespace AutoCopy
     {
         private readonly Label lFolder, lDist;
         private readonly TextBox tLogRoot, tUpdate;
-        private readonly CheckBox cAuto, cErr, cConf, cDone, cBlink, cPopup, cAutoUpdate;
-        private readonly NumericUpDown nLocal, nNet, nTrash, nRemind;
+        private readonly CheckBox cAuto, cErr, cConf, cDone, cBlink, cPopup, cAutoUpdate, cAutoClose;
+        private readonly NumericUpDown nLocal, nNet, nTrash, nRemind, nCloseSec;
         private readonly ComboBox cbShortcut;
         private Button bLogCred, bCheckUpdate;
 
@@ -48,10 +48,14 @@ namespace AutoCopy
             cBlink = Ui.C("アイコンを点滅させる（確認が済むまで）", s.AttentionBlink);
             cPopup = Ui.C("画面右下に「確認が必要です」のメッセージを出す", s.AttentionPopup);
             nRemind = Ui.N(5, 1440, s.AttentionRemindMinutes, 64);
+            cAutoClose = Ui.C("メッセージを自動で閉じる", s.AttentionAutoClose);
+            nCloseSec = Ui.N(5, 3600, s.AttentionCloseSeconds, 72);
             b.Controls.Add(Ui.Section("通知", cErr, cConf, cDone,
                 Ui.L("確認が必要なとき（上書きの確認・ミラーの保留・重複チェックの結果・エラー）"),
                 cBlink, cPopup,
-                Ui.Row(Ui.L("　確認が済むまで", 140), nRemind, Ui.L("分ごとにメッセージを出し直す"))));
+                Ui.Row(Ui.L("　", 140), cAutoClose, nCloseSec, Ui.L("秒たったら（マウスを重ねている間は閉じない）")),
+                Ui.Row(Ui.L("　確認が済むまで", 140), nRemind, Ui.L("分ごとにメッセージを出し直す")),
+                Ui.Hint("自動で閉じても、確認が済むまでアイコンの点滅は続きます。画面右下の Windows の通知（吹き出し）は、Windows が数秒で自動的に閉じます。")));
 
             tUpdate = Ui.T(s.UpdateFolder, 300);
             cAutoUpdate = Ui.C("新しい版があれば自動で更新する（1時間ごとに確認。コピー中・画面を開いている間は待ちます）", s.AutoUpdate);
@@ -83,6 +87,7 @@ namespace AutoCopy
             Controls.Add(Ui.Footer(Ui.B("キャンセル", delegate { Close(); }), ok, Ui.B("操作説明書を開く", delegate { Ui.OpenManual(); })));
             EventHandler h = delegate { UpdateEnabled(); };
             cPopup.CheckedChanged += h;
+            cAutoClose.CheckedChanged += h;
             tUpdate.TextChanged += h;
             tLogRoot.TextChanged += h;
             UpdateEnabled();
@@ -141,6 +146,8 @@ namespace AutoCopy
         public void UpdateEnabled()
         {
             nRemind.Enabled = cPopup.Checked;
+            cAutoClose.Enabled = cPopup.Checked;
+            nCloseSec.Enabled = cPopup.Checked && cAutoClose.Checked;
             bool up = tUpdate.Text.Trim().Length > 0;
             cAutoUpdate.Enabled = bCheckUpdate.Enabled = up;
             bLogCred.Enabled = PathUtil.IsUnc(NetAccess.ToUncIfMapped(tLogRoot.Text.Trim()));
@@ -151,8 +158,13 @@ namespace AutoCopy
         {
             List<string> bad = new List<string>();
             string u = tUpdate.Text, l = tLogRoot.Text; bool pop = cPopup.Checked;
+            bool ac = cAutoClose.Checked;
             cPopup.Checked = false; if (nRemind.Enabled) bad.Add("メッセージを出さないのに間隔を変えられる");
+            if (cAutoClose.Enabled || nCloseSec.Enabled) bad.Add("メッセージを出さないのに自動で閉じる設定を変えられる");
             cPopup.Checked = true; if (!nRemind.Enabled) bad.Add("メッセージを出すのに間隔を変えられない");
+            cAutoClose.Checked = false; if (nCloseSec.Enabled) bad.Add("自動で閉じないのに秒数を変えられる");
+            cAutoClose.Checked = true; if (!nCloseSec.Enabled) bad.Add("自動で閉じるのに秒数を変えられない");
+            cAutoClose.Checked = ac;
             tUpdate.Text = ""; if (cAutoUpdate.Enabled || bCheckUpdate.Enabled) bad.Add("置き場所がないのに自動更新を選べる");
             tUpdate.Text = "\\\\nas01\\配布"; if (!cAutoUpdate.Enabled) bad.Add("置き場所があるのに自動更新を選べない");
             tLogRoot.Text = "C:\\logs"; if (bLogCred.Enabled) bad.Add("ネットワークでないログ保管先なのに ID・パスワードを押せる");
@@ -173,6 +185,8 @@ namespace AutoCopy
             s.AttentionBlink = cBlink.Checked;
             s.AttentionPopup = cPopup.Checked;
             s.AttentionRemindMinutes = (int)nRemind.Value;
+            s.AttentionAutoClose = cAutoClose.Checked;
+            s.AttentionCloseSeconds = (int)nCloseSec.Value;
             string up = tUpdate.Text.Trim();
             s.UpdateFolder = up.Length == 0 ? null : NetAccess.ToUncIfMapped(up);
             s.AutoUpdate = cAutoUpdate.Checked;

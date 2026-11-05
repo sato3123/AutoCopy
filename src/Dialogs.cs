@@ -316,7 +316,8 @@ namespace AutoCopy
             cbJob.SelectedIndexChanged += delegate { LoadResult(); };
             summary = Ui.L("");
             Ui.FitToForm(summary, 1000);
-            FlowLayoutPanel top = Ui.Column(Ui.Row(Ui.L("ジョブ"), cbJob, Ui.B("今すぐ再チェック", delegate { Recheck(); })), summary);
+            FlowLayoutPanel top = Ui.Column(Ui.Row(Ui.L("ジョブ"), cbJob, Ui.B("今すぐ再チェック", delegate { Recheck(); }),
+                Ui.B("フォルダを指定して探す…", delegate { if (TrayApp.Instance != null) TrayApp.Instance.ShowFolderDup(null); else using (FolderDupForm f = new FolderDupForm(null)) f.ShowDialog(this); })), summary);
             top.Dock = DockStyle.Top;
             top.Padding = new Padding(10, 8, 10, 4);
 

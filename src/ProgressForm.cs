@@ -106,7 +106,7 @@ namespace AutoCopy
                     state = p.Phase + "（" + p.Finished.ToString("HH:mm") + "）";
                     if (p.TotalFiles > 0) { pct = Pct(p); fl = Fmt.Count(p.DoneFiles) + " / " + Fmt.Count(p.TotalFiles); by = Fmt.Size(p.DoneBytes); }
                 }
-                else state = "待機中（次回 " + (rt.NextRun == DateTime.MinValue ? "—" : rt.NextRun.ToString("HH:mm")) + "）";
+                else state = "待機中（次回 " + (j.StartupOnly && rt.StartupRunDone ? "ログオン時" : rt.NextRun == DateTime.MinValue ? "—" : rt.NextRun.ToString("HH:mm")) + "）";
                 string[] cols = { j.Name, state, pct, fl, by, sp, rem };
                 ListViewItem it;
                 if (i < jobs.Items.Count) it = jobs.Items[i];
