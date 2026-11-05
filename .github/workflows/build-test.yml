@@ -94,6 +94,8 @@ jobs:
           $p = Start-Process -FilePath "dist\AutoCopy.exe" -ArgumentList '/screenshots', "`"$pwd\screenshots`"" -PassThru
           if (-not $p.WaitForExit(420000)) { $p.Kill(); "timeout" | Out-File screenshots\timeout.txt }
           Get-ChildItem screenshots | Select-Object Name, Length
+          if (Test-Path screenshots\progress.txt) { "progress: " + (Get-Content -Encoding utf8 screenshots\progress.txt) }
+          if (Test-Path screenshots\timing.txt) { Get-Content -Encoding utf8 screenshots\timing.txt | Select-Object -Last 8 }
           Get-Content -Encoding utf8 screenshots\errors.txt
 
       - name: Layout check at 125% / 150% text size (Windows 7 style DPI) and a small screen

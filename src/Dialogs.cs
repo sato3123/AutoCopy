@@ -305,6 +305,7 @@ namespace AutoCopy
         private DupResult current;
         private JobConfig currentJob;
         private bool filling;
+        private bool totalPending;
         /// <summary>重複チェックの一覧に一度に出す行数の上限</summary>
         public const int MaxRows = 5000;
 
@@ -323,7 +324,13 @@ namespace AutoCopy
             lv.CheckBoxes = true;
             lv.Dock = DockStyle.Fill;
             lv.ItemCheck += OnItemCheck;
-            lv.ItemChecked += delegate { if (!filling) UpdateTotal(); };
+            // 合計の計算は、チェックが続けて変わったときもまとめて1回にする（件数が多くても固まらない）
+            lv.ItemChecked += delegate
+            {
+                if (filling || totalPending) return;
+                totalPending = true;
+                try { BeginInvoke(new Action(delegate() { totalPending = false; UpdateTotal(); })); } catch (Exception) { totalPending = false; }
+            };
             Panel checkBar = Ui.CheckAllBar(lv, "すべてにチェック／すべて外す（削除できるものだけ）", delegate(bool on)
             {
                 // 1件ずつの確認を通さずに、まとめて決める（件数が多くても速く）：
