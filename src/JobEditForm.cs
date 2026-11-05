@@ -310,8 +310,9 @@ namespace AutoCopy
                 expect(!cDup.Enabled && !cbWeekday.Enabled && !tDupTime.Enabled, "同期のとき重複チェックを変えられる");
                 expect(rSyncTake.Enabled && rSyncNoTake.Enabled, "同期なのに共有フォルダにだけあるファイルの扱いを選べない");
                 expect(rSyncPush.Enabled && rSyncNoPush.Enabled, "同期なのにこのPCにだけあるファイルの扱いを選べない");
+                bool takeBefore = rSyncTake.Checked;
                 rSyncPush.Checked = true;
-                expect(rSyncNoTake.Checked && rSync.Checked, "共有へコピーするを選ぶと、取り込みや方式の選択が外れる（同じ入れ物に入っている）");
+                expect(rSyncTake.Checked == takeBefore && rSyncNoTake.Checked != takeBefore && rSync.Checked, "共有へコピーするを選ぶと、取り込みや方式の選択が変わる（同じ入れ物に入っている）");
                 rSyncNoPush.Checked = true;
                 rSyncTake.Checked = true;
                 expect(rSync.Checked, "取り込むを選ぶと方式の選択が外れる（同じ入れ物に入っている）");

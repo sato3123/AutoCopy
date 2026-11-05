@@ -48,7 +48,8 @@ namespace AutoCopy
             cBefore = Ui.C("", false); dBefore = DatePicker(DateTime.Today.AddYears(-1));
             cAfter = Ui.C("", false); dAfter = DatePicker(DateTime.Today.AddMonths(-1));
             b.Controls.Add(Ui.Section("条件（指定したものすべてに当てはまるもの）",
-                Ui.WrapRow(Ui.L("名前・場所に", 110), tWords, cbWordsMode, Ui.Hint("（「;」で区切ると、どれか1つ）")),
+                Ui.WrapRow(Ui.L("名前・場所に", 110), tWords, cbWordsMode),
+                Ui.WrapRow(Ui.L("", 110), Ui.Hint("「;」で区切ると、どれか1つ")),
                 Ui.WrapRow(Ui.L("拡張子", 110), tExt, Ui.Hint("例：.tmp; .bak")),
                 Ui.WrapRow(Ui.L("大きさ", 110), cMin, nMin, cbMinUnit, Ui.L("以上"), cMax, nMax, cbMaxUnit, Ui.L("以下")),
                 Ui.WrapRow(Ui.L("更新日時", 110), cBefore, dBefore, Ui.L("より前"), cAfter, dAfter, Ui.L("以降"))));
