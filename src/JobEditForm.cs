@@ -134,9 +134,9 @@ namespace AutoCopy
             lSyncNote.ForeColor = Ui.Quiet;
             lSyncNote.Margin = new Padding(Ui.S(22), 0, 3, 4);
             // 同期：共有フォルダにだけある（このPCにない）ファイルの扱い（同じ入れ物の中で1つを選ぶ）
-            rSyncNoTake = Ui.R("このPCにはコピーしない（初期値）", true);
-            rSyncTake = Ui.R("このPCに取り込む（他のPCが追加したファイルも入ってくる）", false);
-            FlowLayoutPanel syncNew = Ui.Column(Ui.Hint("共有フォルダにだけあって、このPCにないファイル："), rSyncNoTake, rSyncTake);
+            rSyncTake = Ui.R("このPCに取り込む（初期値。他のPCが追加したファイルも入ってくる）", true);
+            rSyncNoTake = Ui.R("このPCにはコピーしない", false);
+            FlowLayoutPanel syncNew = Ui.Column(Ui.Hint("共有フォルダにだけあって、このPCにないファイル："), rSyncTake, rSyncNoTake);
             syncNew.Margin = new Padding(Ui.S(22), 0, 3, 4);
             // このPCにだけある（共有フォルダにない）ファイルの扱い（別の入れ物＝別の選択）
             rSyncNoPush = Ui.R("共有フォルダにはコピーしない（初期値）", true);
@@ -217,7 +217,7 @@ namespace AutoCopy
                 + "・コピー先は、同期するすべてのPCから見える共有フォルダにしてください（{フォルダ名} は使えません）。\n"
                 + "・他のPCが入れた・更新したファイルが、このPCのコピー元フォルダに入ってきます。\n"
                 + "・削除は「削除の確認」で選んでから伝えます。両方で変えたファイルは確認画面で選びます。\n"
-                + "・共有フォルダにだけあるファイルはこのPCに、このPCにだけあるファイルは共有フォルダに、初期値ではコピーしません（両方にあるファイルの更新だけを伝えます。下で選べます）。\n"
+                + "・共有フォルダにだけあるファイルは、初期値ではこのPCに取り込みます。このPCにだけあるファイルは、初期値では共有フォルダにコピーしません（どちらも下で選べます）。\n"
                 + "・このPCの古い版は、置き換える前に控え（" + AppPaths.SyncBackupDir + "）に残します。\n"
                 + "・重複チェックと大きいファイルの重複の省略は、同期では行いません。\n\n同期にしますか？";
             if (!Ui.Confirm(this, msg))

@@ -122,8 +122,9 @@ namespace AutoCopy
         [DataMember] public bool DupShowOrphans;
         [DataMember] public bool DupShowEmptyFolders;
         [DataMember] public bool Sync;                // 複数PCで同期（双方向・削除は確認してから）
-        // 同期：共有フォルダにだけあって、このPCにないファイルを取り込むか（初期値：取り込まない）
-        [DataMember] public bool SyncTakeNew;
+        // 同期：共有フォルダにだけあって、このPCにないファイルを取り込むか（初期値：取り込む）
+        // （1.10〜1.12 は初期値が「取り込まない」だったため、保存名を変えて初期値の「取り込む」に戻す）
+        [DataMember(Name = "SyncTakeShared")] public bool SyncTakeNew;
         // 同期：このPCにだけあって、共有フォルダにないファイルを共有フォルダへコピーするか（初期値：コピーしない）
         [DataMember] public bool SyncPushNew;
         // ログオン時（アプリの起動時）にも実行する。false なら、止まっている間に予定の時刻が過ぎたときだけ起動後に実行する
@@ -204,7 +205,7 @@ namespace AutoCopy
             DupWeekday = 1;
             DupDay = 1;
             DupMonth = 1;
-            SyncTakeNew = false;
+            SyncTakeNew = true;
             SyncPushNew = false;
             RunAtStartup = true;
             DupShowSameContent = true;

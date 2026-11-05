@@ -84,7 +84,8 @@ namespace AutoCopy
                 try { BeginInvoke(new Action(delegate() { totalPending = false; UpdateTotal(); })); } catch (Exception) { totalPending = false; }
             };
             lv.DoubleClick += delegate { OpenSelected(); };
-            Panel bar = Ui.CheckAllBar(lv, "各まとまりで1つ残して、ほかにすべてチェック／すべて外す", delegate(bool on) { CheckAllButFirst(on); });
+            Panel bar = Ui.CheckAllBar(lv, "各まとまりで1つ残して、ほかにすべてチェック／すべて外す", delegate(bool on) { CheckAllButFirst(on); },
+                Ui.B("条件で選ぶ…", delegate { SelectByCondition(); }));
 
             total = Ui.L("");
             total.Font = Ui.Bold;
@@ -193,6 +194,61 @@ namespace AutoCopy
             }
             finally { lv.EndUpdate(); filling = false; }
             UpdateTotal();
+        }
+
+        private static SelectRow Map(ListViewItem it)
+        {
+            Row r = it.Tag as Row;
+            if (r == null) return null;
+            SelectRow s = new SelectRow();
+            s.Path = r.Rel; s.Size = r.Group.Size;
+            int k = r.Group.Files.IndexOf(r.Rel);
+            s.Mtime = k >= 0 ? r.Group.Mtimes[k] : 0;
+            s.Tags.Add(r.Keep ? "残す候補" : "重複");
+            string ext = System.IO.Path.GetExtension(r.Rel);
+            s.Tags.Add("拡張子：" + (string.IsNullOrEmpty(ext) ? "（なし）" : ext.ToLowerInvariant()));
+            return s;
+        }
+
+        /// <summary>条件で選ぶ。各まとまりで残すものの決め方（パスが短い・新しい・古い・条件に合う）も選べる。必ず1つは残す</summary>
+        private void SelectByCondition()
+        {
+            if (result == null) return;
+            using (SelectDialog d = new SelectDialog("フォルダ内の重複", SelectDialog.TagsOf(lv, Map), delegate(SelectCriteria c) { return SelectDialog.Count(lv, Map, c); }, true))
+            {
+                if (d.ShowDialog(this) != DialogResult.OK) return;
+                filling = true;
+                lv.BeginUpdate();
+                try
+                {
+                    if (d.Action != SelectAction.KeepOne) SelectDialog.Apply(lv, Map, null, d.Action, d.Criteria);
+                    foreach (ListViewGroup g in lv.Groups)
+                    {
+                        List<ListViewItem> items = new List<ListViewItem>();
+                        foreach (ListViewItem it in g.Items) if (it.Tag is Row) items.Add(it);
+                        if (items.Count == 0) continue;
+                        List<SelectRow> rows = new List<SelectRow>();
+                        foreach (ListViewItem it in items) rows.Add(Map(it));
+                        int keep = KeepRule.Pick(rows, d.Keep, d.Criteria);
+                        if (d.Action == SelectAction.KeepOne)
+                        {
+                            for (int k = 0; k < items.Count; k++)
+                            {
+                                bool want = k != keep && (d.Criteria.IsEmpty || d.Keep == KeepRule.Matching || d.Criteria.Matches(rows[k]));
+                                if (items[k].Checked != want) items[k].Checked = want;
+                            }
+                        }
+                        else
+                        {
+                            bool anyKept = false;
+                            foreach (ListViewItem it in items) if (!it.Checked) anyKept = true;
+                            if (!anyKept) items[keep].Checked = false;   // 必ず1つは残す
+                        }
+                    }
+                }
+                finally { lv.EndUpdate(); filling = false; }
+                UpdateTotal();
+            }
         }
 
         /// <summary>同じ中身のまとまりで、すべてにチェックすることはできない（必ず1つは残す）</summary>

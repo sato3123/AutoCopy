@@ -358,6 +358,12 @@ namespace AutoCopy
             catch (Exception ex) { errors.Add("件数の多い重複チェック: " + ex); }
 
             Capture("42_ログ_ジョブと時刻で絞り込み", delegate() { return new LogForm(j0.Name, DateTime.Today); }, null);
+            Capture("45_条件で選ぶ（重複）", delegate()
+            {
+                SelectDialog.ResetLast();
+                List<string> tags = new List<string>(new string[] { "残す候補", "重複", "拡張子：.pptx", "拡張子：.pdf", "拡張子：.mp4" });
+                return new SelectDialog("フォルダ内の重複", tags, delegate(SelectCriteria c) { return 4; }, true);
+            }, null);
             Capture("43_ログ_エラー・確認の対応状況", delegate() { return new LogForm(); }, delegate(Form f) { ((LogForm)f).ShowStatusTab(); });
 
             // フォルダ内の重複ファイル検索（コピーと関係なく）

@@ -84,7 +84,8 @@ namespace AutoCopy
             lv = Ui.List("ファイル|260", "ジョブ|140", "コピー元|150", "コピー先|200", "状態|120");
             lv.CheckBoxes = true;
             lv.Dock = DockStyle.Fill;
-            Panel checkBar = Ui.CheckAllBar(lv, "すべてにチェック／すべて外す", null);
+            Panel checkBar = Ui.CheckAllBar(lv, "すべてにチェック／すべて外す", null,
+                Ui.B("条件で選ぶ…", delegate { SelectByCondition(); }));
 
             backup = Ui.C("上書きする前に、コピー先の古いファイルを「_AutoCopy\\退避」に残す", true);
             // 画面の幅が足りないときは折り返す
@@ -166,6 +167,27 @@ namespace AutoCopy
             });
             Reload();
             if (errors.Count > 0) Ui.Error(this, "できなかったものがあります：\n" + string.Join("\n", errors.ToArray()));
+        }
+
+        private static SelectRow MapRow(ListViewItem it)
+        {
+            Row r = it.Tag as Row;
+            if (r == null) return null;
+            SelectRow s = new SelectRow();
+            s.Path = r.Item.Rel; s.Size = r.Item.SrcSize; s.Mtime = r.Item.SrcMtime;
+            s.Tags.Add(it.SubItems[4].Text);
+            s.Tags.Add("ジョブ：" + r.Job.Name);
+            return s;
+        }
+
+        /// <summary>条件（名前・拡張子・大きさ・更新日時・状態・ジョブ）でまとめてチェックする</summary>
+        private void SelectByCondition()
+        {
+            using (SelectDialog d = new SelectDialog("上書きの確認", SelectDialog.TagsOf(lv, MapRow), delegate(SelectCriteria c) { return SelectDialog.Count(lv, MapRow, c); }, false))
+            {
+                if (d.ShowDialog(this) != DialogResult.OK) return;
+                SelectDialog.Apply(lv, MapRow, null, d.Action, d.Criteria);
+            }
         }
 
         private void OpenDest()
@@ -368,7 +390,7 @@ namespace AutoCopy
                 }
                 finally { lv.EndUpdate(); filling = false; }
                 UpdateTotal();
-            });
+            }, Ui.B("条件で選ぶ…", delegate { SelectByCondition(); }));
 
             total = Ui.L("");
             total.Font = Ui.Bold;
@@ -588,6 +610,99 @@ namespace AutoCopy
             }
         }
 
+        private static SelectRow MapDup(ListViewItem it)
+        {
+            SelectRow s = new SelectRow();
+            DupEntry e = it.Tag as DupEntry;
+            DedupPendingItem p = it.Tag as DedupPendingItem;
+            if (e != null)
+            {
+                s.Path = e.Rel; s.Size = e.Size; s.Mtime = e.Mtime;
+                s.Tags.Add(it.SubItems.Count > 5 ? it.SubItems[5].Text : "");
+            }
+            else if (p != null)
+            {
+                s.Path = p.Rel; s.Size = p.Size; s.Mtime = p.Mtime;
+                s.Tags.Add("大きいファイルの重複");
+            }
+            else return null;
+            return s;
+        }
+
+        private static bool CanCheckDup(ListViewItem it)
+        {
+            DupEntry e = it.Tag as DupEntry;
+            return it.Tag is DedupPendingItem || (e != null && e.CanDelete);
+        }
+
+        /// <summary>条件で選ぶ（名前・拡張子・大きさ・更新日時・判定）。同じ中身のまとまりでは必ず1つ残す</summary>
+        private void SelectByCondition()
+        {
+            using (SelectDialog d = new SelectDialog("重複チェック結果", SelectDialog.TagsOf(lv, MapDup), delegate(SelectCriteria c) { return SelectDialog.Count(lv, MapDup, c); }, true))
+            {
+                if (d.ShowDialog(this) != DialogResult.OK) return;
+                filling = true;
+                try
+                {
+                    if (d.Action == SelectAction.KeepOne) KeepOneEach(d.Keep, d.Criteria);
+                    else SelectDialog.Apply(lv, MapDup, CanCheckDup, d.Action, d.Criteria);
+                    EnforceKeep(d.Keep, d.Criteria);
+                }
+                finally { filling = false; }
+                UpdateTotal();
+            }
+        }
+
+        /// <summary>各まとまりで、残すもの（決め方を選べる）以外にチェック</summary>
+        private void KeepOneEach(string rule, SelectCriteria c)
+        {
+            lv.BeginUpdate();
+            try
+            {
+                foreach (ListViewGroup g in lv.Groups)
+                {
+                    List<ListViewItem> del = new List<ListViewItem>();
+                    bool hasKeep = false;
+                    foreach (ListViewItem it in g.Items) { if (CanCheckDup(it)) del.Add(it); else if (it.Tag is DupEntry) hasKeep = true; }
+                    if (del.Count == 0) continue;
+                    int keep = -1;
+                    if (!hasKeep && NeedsKeep(g))
+                    {
+                        List<SelectRow> rows = new List<SelectRow>();
+                        foreach (ListViewItem it in del) rows.Add(MapDup(it));
+                        keep = KeepRule.Pick(rows, rule, c);
+                    }
+                    for (int k = 0; k < del.Count; k++)
+                    {
+                        bool want = k != keep && (c.IsEmpty || rule == KeepRule.Matching || c.Matches(MapDup(del[k])));
+                        if (del[k].Checked != want) del[k].Checked = want;
+                    }
+                }
+            }
+            finally { lv.EndUpdate(); }
+        }
+
+        /// <summary>同じ中身のまとまりで、すべてにチェックが入っていたら1つ（決め方に従って）外す</summary>
+        private void EnforceKeep(string rule, SelectCriteria c)
+        {
+            foreach (ListViewGroup g in lv.Groups)
+            {
+                if (!NeedsKeep(g)) continue;
+                List<ListViewItem> items = new List<ListViewItem>();
+                bool anyKept = false;
+                foreach (ListViewItem it in g.Items)
+                {
+                    if (!(it.Tag is DupEntry)) continue;
+                    items.Add(it);
+                    if (!it.Checked) anyKept = true;
+                }
+                if (anyKept || items.Count < 2) continue;
+                List<SelectRow> rows = new List<SelectRow>();
+                foreach (ListViewItem it in items) rows.Add(MapDup(it));
+                items[KeepRule.Pick(rows, rule, c)].Checked = false;
+            }
+        }
+
         /// <summary>同じ中身のグループ（少なくとも1つ残す必要がある）か</summary>
         private static bool NeedsKeep(ListViewGroup g)
         {
@@ -675,7 +790,7 @@ namespace AutoCopy
             lv = Ui.List("ファイル|360", "ジョブ|160", "コピー元の更新日時|140", "コピー先の更新日時|140");
             lv.CheckBoxes = true;
             lv.Dock = DockStyle.Fill;
-            Panel bar = Ui.CheckAllBar(lv, "すべてにチェック／すべて外す", null);
+            Panel bar = Ui.CheckAllBar(lv, "すべてにチェック／すべて外す", null, Ui.B("条件で選ぶ…", delegate { SelectByCondition(); }));
             Controls.Add(lv);
             Controls.Add(bar);
             Controls.Add(top);
@@ -713,6 +828,24 @@ namespace AutoCopy
             }
             lv.EndUpdate();
             Text = "「今後も上書きしない」にしたファイル（" + CountReal() + "件）";
+        }
+
+        private static SelectRow MapSkip(ListViewItem it)
+        {
+            if (!(it.Tag is KeyValuePair<JobConfig, string>)) return null;
+            KeyValuePair<JobConfig, string> kv = (KeyValuePair<JobConfig, string>)it.Tag;
+            SelectRow s = new SelectRow();
+            s.Path = kv.Value;
+            DateTime t;
+            if (DateTime.TryParse(it.SubItems[2].Text, out t)) s.Mtime = t.ToUniversalTime().Ticks;
+            s.Tags.Add("ジョブ：" + kv.Key.Name);
+            return s;
+        }
+
+        private void SelectByCondition()
+        {
+            using (SelectDialog d = new SelectDialog("今後も上書きしないファイル", SelectDialog.TagsOf(lv, MapSkip), delegate(SelectCriteria c) { return SelectDialog.Count(lv, MapSkip, c); }, false))
+                if (d.ShowDialog(this) == DialogResult.OK) SelectDialog.Apply(lv, MapSkip, null, d.Action, d.Criteria);
         }
 
         private int CountReal()
@@ -771,7 +904,7 @@ namespace AutoCopy
             lv = Ui.List("ファイル|330", "ジョブ|140", "どこで削除されたか → どうなるか|280", "サイズ|80", "更新日時|130", "見つけた日時|130");
             lv.CheckBoxes = true;
             lv.Dock = DockStyle.Fill;
-            Panel bar = Ui.CheckAllBar(lv, "すべてにチェック／すべて外す", null);
+            Panel bar = Ui.CheckAllBar(lv, "すべてにチェック／すべて外す", null, Ui.B("条件で選ぶ…", delegate { SelectByCondition(); }));
             Button del = Ui.B("チェックしたものを削除する…", delegate { Apply(true); });
             del.ForeColor = Ui.Err;
             Controls.Add(lv);
@@ -783,6 +916,23 @@ namespace AutoCopy
         }
 
         private class Row { public JobConfig Job; public SyncDeleteItem Item; }
+
+        private static SelectRow MapSync(ListViewItem it)
+        {
+            Row r = it.Tag as Row;
+            if (r == null) return null;
+            SelectRow s = new SelectRow();
+            s.Path = r.Item.Rel; s.Size = r.Item.Size; s.Mtime = r.Item.Mtime;
+            s.Tags.Add(r.Item.SideText);
+            s.Tags.Add("ジョブ：" + r.Job.Name);
+            return s;
+        }
+
+        private void SelectByCondition()
+        {
+            using (SelectDialog d = new SelectDialog("同期：削除の確認", SelectDialog.TagsOf(lv, MapSync), delegate(SelectCriteria c) { return SelectDialog.Count(lv, MapSync, c); }, false))
+                if (d.ShowDialog(this) == DialogResult.OK) SelectDialog.Apply(lv, MapSync, null, d.Action, d.Criteria);
+        }
 
         public void Reload()
         {

@@ -92,6 +92,7 @@ namespace AutoCopy.Tests
             Add("T63", "同期：共有フォルダにだけあるファイルは、初期値ではこのPCにコピーしない（設定で取り込める）", T63_SyncTakeNew);
             Add("T64", "実行の予定：重複チェックの毎月・毎年・ログオン時、止まっている間に過ぎた予定は起動後に実行", T64_Schedule);
             Add("T65", "フォルダ内の重複ファイル検索：コピーと関係なく探す・1つ残す候補・移す（戻せる）・コピー元は移さない", T65_FolderDup);
+            Add("T66", "条件で選ぶ：名前・拡張子・大きさ・更新日時・種類、重複で残す1つの決め方", T66_SelectCriteria);
 
             int ng = 0;
             foreach (TestCase t in cases)
@@ -2037,12 +2038,13 @@ namespace AutoCopy.Tests
         private static void T63_SyncTakeNew()
         {
             JobConfig def = Json.Deserialize<JobConfig>("{\"Name\":\"v19\",\"Sync\":true}");
-            True(!def.SyncTakeNew, "初期値は「コピーしない」（前の版の設定を読んだときも）");
+            True(def.SyncTakeNew && new JobConfig().SyncTakeNew, "共有フォルダにだけあるファイルは、初期値で「取り込む」（前の版の設定を読んだときも）");
+            True(Json.Deserialize<JobConfig>("{\"Name\":\"v112\",\"Sync\":true,\"SyncTakeNew\":false}").SyncTakeNew, "1.10〜1.12 の「取り込まない」（初期値）は「取り込む」に戻す");
             True(!def.SyncPushNew && !new JobConfig().SyncPushNew, "このPCにだけあるファイルも、初期値は「共有フォルダにコピーしない」");
             True(new JobConfig().RunAtStartup && def.RunAtStartup, "ログオン時にも実行する が初期値");
 
             SyncPair p = new SyncPair("T63");
-            p.JA.SyncTakeNew = false;   // PC1 は初期値（コピーしない）
+            p.JA.SyncTakeNew = false;   // PC1 は「コピーしない」
             WriteFile(Path.Combine(p.A, "共通.txt"), "両方にある", 600);
             p.Run(p.JA, "pc1");
             p.Run(p.JB, "pc2");
@@ -2215,6 +2217,36 @@ namespace AutoCopy.Tests
             True(File.Exists(Path.Combine(root, "大\\2.bin")), "コピー元のファイルは残る");
             True(SafeFs.IsProtected(Path.Combine(root, "大\\x")) && !SafeFs.IsProtected(Path.Combine(root, "sub")), "コピー元かどうか");
             SafeFs.SetProtectedSources(new string[0]);
+        }
+
+        private static void T66_SelectCriteria()
+        {
+            SelectRow a = new SelectRow(); a.Path = "営業\\提案書.pptx"; a.Size = 3 * 1024 * 1024; a.Mtime = new DateTime(2025, 4, 1, 9, 0, 0).ToUniversalTime().Ticks; a.Tags.Add("重複");
+            SelectRow b = new SelectRow(); b.Path = "個人\\山田\\提案書.pptx"; b.Size = 3 * 1024 * 1024; b.Mtime = new DateTime(2026, 10, 1, 9, 0, 0).ToUniversalTime().Ticks; b.Tags.Add("残す候補");
+            SelectRow c = new SelectRow(); c.Path = "一時\\作業.tmp"; c.Size = 2000; c.Mtime = new DateTime(2026, 11, 1).ToUniversalTime().Ticks; c.Tags.Add("重複");
+            SelectCriteria k = new SelectCriteria();
+            True(k.IsEmpty && k.Matches(a) && k.Matches(c), "条件なしはすべて");
+            k.Words = SelectCriteria.Split("個人; 一時");
+            True(!k.Matches(a) && k.Matches(b) && k.Matches(c), "名前・場所に含む（どれか1つ）");
+            k.WordsNot = true;
+            True(k.Matches(a) && !k.Matches(b), "含まない");
+            k = new SelectCriteria(); k.Exts.Add(".TMP");
+            True(k.Matches(c) && !k.Matches(a), "拡張子（大文字小文字は区別しない）");
+            k = new SelectCriteria(); k.MinSize = 1024 * 1024;
+            True(k.Matches(a) && !k.Matches(c), "大きさ以上");
+            k = new SelectCriteria(); k.Before = new DateTime(2026, 1, 1);
+            True(k.Matches(a) && !k.Matches(b), "更新日時より前");
+            k = new SelectCriteria(); k.After = new DateTime(2026, 10, 15);
+            True(k.Matches(c) && !k.Matches(b), "更新日時以降");
+            k = new SelectCriteria(); k.Tags = new HashSet<string>(new string[] { "残す候補" });
+            True(k.Matches(b) && !k.Matches(a), "種類");
+
+            List<SelectRow> rows = new List<SelectRow>(new SelectRow[] { b, a });
+            Eq(1, KeepRule.Pick(rows, KeepRule.ShortPath, null), "パスが短いものを残す");
+            Eq(0, KeepRule.Pick(rows, KeepRule.Newest, null), "新しいものを残す");
+            Eq(1, KeepRule.Pick(rows, KeepRule.Oldest, null), "古いものを残す");
+            SelectCriteria m = new SelectCriteria(); m.Words.Add("個人");
+            Eq(0, KeepRule.Pick(rows, KeepRule.Matching, m), "条件に合うもの（場所）を残す");
         }
 
         private static void T42_Performance()
