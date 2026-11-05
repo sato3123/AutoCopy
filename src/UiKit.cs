@@ -937,8 +937,9 @@ namespace AutoCopy
             TabStop = true;
             Cursor = Cursors.Hand;
             lv.ItemChecked += delegate { Refresh2(); };
-            lv.HandleCreated += delegate { Refresh2(); };
-            Refresh2();
+            // 一覧のハンドルを作っている最中は行を読めない（読むと一覧が壊れる）ため、作り終えてから数える
+            lv.HandleCreated += delegate { try { lv.BeginInvoke(new Action(Refresh2)); } catch (Exception) { } };
+            VisibleChanged += delegate { if (Visible) Refresh2(); };
         }
 
         public CheckState State { get { return state; } }
@@ -946,8 +947,11 @@ namespace AutoCopy
         /// <summary>一覧のチェックの状態から、アイコンを ☑（すべて）・■（一部）・□（なし）に変える</summary>
         public void Refresh2()
         {
+            if (lv.IsDisposed || lv.VirtualMode) return;
+            if (lv.IsHandleCreated && lv.RecreatingHandle) return;
             int on = 0, n = lv.Items.Count;
-            foreach (ListViewItem it in lv.Items) if (it.Checked) on++;
+            try { foreach (ListViewItem it in lv.Items) if (it.Checked) on++; }
+            catch (Exception) { return; }
             CheckState s = n > 0 && on == n ? CheckState.Checked : on > 0 ? CheckState.Indeterminate : CheckState.Unchecked;
             if (s != state) { state = s; Invalidate(); }
         }
