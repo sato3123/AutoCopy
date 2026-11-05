@@ -71,6 +71,9 @@ namespace AutoCopy
         public string LastResult = "";     // ok / error / ""
         public string LastMessage = "";
         public JobProgress Progress;       // 実行中・最後に実行したときの作業状況
+        public DateTime StartGate;         // 起動後、これより前には実行しない（ネットワークの準備を待つ）
+        public bool DupStartupDone;        // 「ログオン時」の重複チェックを、今回の起動で済ませたか
+        public string CatchUpNote;         // 止まっている間に予定が過ぎたため、起動後に実行するときの説明
     }
 
     /// <summary>アプリの中心。スケジュール、ジョブの実行、通知を受け持つ。</summary>
@@ -135,11 +138,14 @@ namespace AutoCopy
                     {
                         rt = new JobRuntime();
                         int delayMin = (startup && j.UseStartupDelay) ? Math.Max(0, j.StartupDelayMinutes) : 0;
-                        rt.NextRun = DateTime.Now.AddMinutes(delayMin).AddSeconds(startup ? 5 : 10);
+                        DateTime gate = DateTime.Now.AddMinutes(delayMin).AddSeconds(startup ? 5 : 10);
+                        rt.StartGate = gate;
+                        rt.NextRun = gate;
                         JobState st = GetStateNoLock(j.Id);
                         rt.LastResult = st.LastResult ?? "";
                         rt.LastMessage = st.LastMessage ?? "";
                         if (st.LastRunTicks > 0) rt.LastRun = new DateTime(st.LastRunTicks, DateTimeKind.Utc).ToLocalTime();
+                        rt.NextRun = FirstRunAfterStart(j, rt.LastRun, gate, startup, out rt.CatchUpNote);
                         runtimes[j.Id] = rt;
                     }
                 }
@@ -224,8 +230,17 @@ namespace AutoCopy
                     JobRuntime rt = GetRuntime(j.Id);
                     if (rt.PausedUntil.HasValue && now >= rt.PausedUntil.Value) rt.PausedUntil = null;
                     if (!j.Enabled || IsPaused(j.Id)) continue;
-                    if (!rt.Running && !rt.DupRunning && now >= rt.NextRun && TimeUtil.InWindow(j, now)) RunJob(j.Id, false, false);
-                    else if (!rt.Running && !rt.DupRunning && DupDue(j, now)) RunDup(j.Id);
+                    string dupNote;
+                    if (!rt.Running && !rt.DupRunning && now >= rt.NextRun && TimeUtil.InWindow(j, now))
+                    {
+                        if (rt.CatchUpNote != null) { Logger.Info(j.Name, rt.CatchUpNote); rt.CatchUpNote = null; }
+                        RunJob(j.Id, false, false);
+                    }
+                    else if (!rt.Running && !rt.DupRunning && DupDue(j, rt, now, out dupNote))
+                    {
+                        if (dupNote != null) Logger.Info(j.Name, dupNote);
+                        if (RunDup(j.Id)) rt.DupStartupDone = true;
+                    }
                 }
                 if ((now - lastFlush).TotalMinutes >= 10)
                 {
@@ -254,18 +269,104 @@ namespace AutoCopy
             }
         }
 
-        private static bool DupDue(JobConfig j, DateTime now)
+        /// <summary>
+        /// 起動したときの最初の実行時刻。
+        /// 「ログオン時にも実行する」なら起動後すぐ（待ち時間の後）。そうでなければ、前回から実行間隔がたって
+        /// 予定の時刻が来たら実行する。止まっている間に予定の時刻が過ぎていたら、起動後すぐに実行する（取りこぼさない）。
+        /// </summary>
+        public static DateTime FirstRunAfterStart(JobConfig j, DateTime lastRun, DateTime gate, bool startup, out string catchUp)
         {
-            if (!j.DupCheckEnabled || j.DupSchedule == "manual") return false;
+            catchUp = null;
+            if (!startup || j.RunAtStartup || lastRun == DateTime.MinValue) return gate;
+            DateTime due = lastRun.AddMinutes(Math.Max(1, j.IntervalMinutes));
+            if (due <= gate)
+            {
+                catchUp = "前回の予定（" + due.ToString("M/d HH:mm") + "）に動いていなかったため、起動後に実行します";
+                return gate;
+            }
+            return due;
+        }
+
+        /// <summary>
+        /// 重複チェックの、now 以前でいちばん新しい予定の時刻（毎日・毎週・毎月・毎年）。予定がない（手動・ログオン時）は DateTime.MinValue。
+        /// この時刻より後に一度もチェックしていなければ実行する＝止まっている間に過ぎた予定も、起動後に取りこぼさず実行する。
+        /// </summary>
+        public static DateTime PrevDupTime(JobConfig j, DateTime now)
+        {
             TimeSpan t;
             if (!TimeUtil.TryParseHm(j.DupTime, out t)) t = new TimeSpan(12, 0, 0);
-            DateTime todayAt = now.Date + t;
-            if (now < todayAt) return false;
-            if (j.DupSchedule == "weekly" && (int)now.DayOfWeek != j.DupWeekday) return false;
+            switch (j.DupSchedule)
+            {
+                case DupScheduleKind.Daily:
+                    {
+                        DateTime d = now.Date + t;
+                        return d <= now ? d : d.AddDays(-1);
+                    }
+                case DupScheduleKind.Weekly:
+                    for (int k = 0; k <= 7; k++)
+                    {
+                        DateTime d = now.Date.AddDays(-k);
+                        if ((int)d.DayOfWeek == j.DupWeekday && d + t <= now) return d + t;
+                    }
+                    return DateTime.MinValue;
+                case DupScheduleKind.Monthly:
+                    for (int k = 0; k <= 2; k++)
+                    {
+                        DateTime m = new DateTime(now.Year, now.Month, 1).AddMonths(-k);
+                        DateTime d = m.AddDays(DayOf(j.DupDay, m.Year, m.Month) - 1) + t;
+                        if (d <= now) return d;
+                    }
+                    return DateTime.MinValue;
+                case DupScheduleKind.Yearly:
+                    for (int k = 0; k <= 2; k++)
+                    {
+                        int y = now.Year - k, mo = Math.Max(1, Math.Min(12, j.DupMonth));
+                        DateTime d = new DateTime(y, mo, DayOf(j.DupDay, y, mo)) + t;
+                        if (d <= now) return d;
+                    }
+                    return DateTime.MinValue;
+            }
+            return DateTime.MinValue;
+        }
+
+        private static int DayOf(int day, int y, int m)
+        {
+            int last = DateTime.DaysInMonth(y, m);
+            return day == DupScheduleKind.LastDay ? last : Math.Max(1, Math.Min(last, day));
+        }
+
+        /// <summary>重複チェックの予定の説明（画面用）</summary>
+        public static string DupScheduleText(JobConfig j)
+        {
+            if (!j.DupCheckEnabled) return "しない";
+            string day = j.DupDay == DupScheduleKind.LastDay ? "末日" : j.DupDay + "日";
+            string[] wd = { "日", "月", "火", "水", "木", "金", "土" };
+            switch (j.DupSchedule)
+            {
+                case DupScheduleKind.Startup: return "ログオン時（アプリの起動時）";
+                case DupScheduleKind.Daily: return "毎日 " + j.DupTime;
+                case DupScheduleKind.Weekly: return "毎週" + wd[Math.Max(0, Math.Min(6, j.DupWeekday))] + "曜 " + j.DupTime;
+                case DupScheduleKind.Monthly: return "毎月" + day + " " + j.DupTime;
+                case DupScheduleKind.Yearly: return "毎年" + j.DupMonth + "月" + day + " " + j.DupTime;
+            }
+            return "手動のみ";
+        }
+
+        /// <summary>重複チェックをする時か。予定の時刻を過ぎていて、その後まだチェックしていなければ実行する</summary>
+        public static bool DupDue(JobConfig j, JobRuntime rt, DateTime now, out string catchUp)
+        {
+            catchUp = null;
+            if (!j.DupCheckEnabled || j.Sync || j.DupSchedule == DupScheduleKind.Manual) return false;
+            if (now < rt.StartGate) return false;   // 起動直後はネットワークの準備を待つ
+            if (j.DupSchedule == DupScheduleKind.Startup) return !rt.DupStartupDone;
+            DateTime prev = PrevDupTime(j, now);
+            if (prev == DateTime.MinValue) return false;
             JobState st = GetState(j.Id);
             DateTime last;
             lock (st) { last = st.LastDupCheckTicks > 0 ? new DateTime(st.LastDupCheckTicks, DateTimeKind.Utc).ToLocalTime() : DateTime.MinValue; }
-            return last < todayAt;
+            if (last >= prev) return false;
+            if ((now - prev).TotalMinutes > 5) catchUp = "重複チェックの予定（" + prev.ToString("M/d HH:mm") + "）に動いていなかったため、起動後に実行します";
+            return true;
         }
 
         // ---------------- 一時停止 ----------------
@@ -648,9 +749,21 @@ namespace AutoCopy
                     }
                     else
                     {
-                        // 残す：記録を消すと、次回の実行で消えた側へコピーし直す
+                        // 残す：記録を消す。共有フォルダで消えたもの（このPCにある）は、次回の実行で共有フォルダへコピーし直す。
+                        // このPCで消したもの（共有フォルダにある）は、「取り込まない」設定でも戻るよう、ここでこのPCへ戻す
                         lock (st) { st.Files.Remove(i.Rel); }
-                        Logger.Write(job.Name, "SYNCIN", i.Rel + "　（削除せずに残すことにしました。次回の実行で" + (i.Side == SyncDeleteItem.SideLocal ? "共有フォルダへ戻します" : "このPCへ戻します") + "）", i.Size, -1);
+                        if (i.Side == SyncDeleteItem.SideShared && sEx && !lEx)
+                        {
+                            FileInfo sf = new FileInfo(PathUtil.Long(sp));
+                            byte[] h = SafeFs.CopyIntoSync(sp, lp, i.Rel, sf.LastWriteTimeUtc, null, CancellationToken.None);
+                            FileRecord rec = new FileRecord();
+                            rec.Size = sf.Length; rec.Mtime = File.GetLastWriteTimeUtc(PathUtil.Long(lp)).Ticks; rec.DestMtime = sf.LastWriteTimeUtc.Ticks;
+                            rec.Hash = h; rec.CopiedByApp = true;
+                            lock (st) { st.Files[i.Rel] = rec; }
+                            Logger.Write(job.Name, "SYNCIN", i.Rel + "　（削除せずに残すことにしたため、共有フォルダからこのPCへ戻しました）", i.Size, -1);
+                        }
+                        else
+                            Logger.Write(job.Name, "SYNCIN", i.Rel + "　（削除せずに残すことにしました。次回の実行で共有フォルダへ戻します）", i.Size, -1);
                     }
                     done.Add(i);
                 }

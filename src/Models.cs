@@ -60,6 +60,12 @@ namespace AutoCopy
         }
     }
 
+    public static class DupScheduleKind
+    {
+        public const string Startup = "startup", Daily = "daily", Weekly = "weekly", Monthly = "monthly", Yearly = "yearly", Manual = "manual";
+        public const int LastDay = 32;   // 毎月・毎年の「末日」
+    }
+
     public static class NewerPolicy
     {
         public const string Ask = "ask";
@@ -102,13 +108,19 @@ namespace AutoCopy
         [DataMember] public int MirrorMaxPercent;
         [DataMember] public ExcludeRules Exclude;
         [DataMember] public bool DupCheckEnabled;
-        [DataMember] public string DupSchedule;       // daily / weekly / manual
+        [DataMember] public string DupSchedule;       // startup（ログオン時＝アプリの起動時）/ daily / weekly / monthly / yearly / manual
+        [DataMember] public int DupDay;               // 毎月・毎年：日（1〜28、LastDay = 末日）
+        [DataMember] public int DupMonth;             // 毎年：月（1〜12）
         [DataMember] public string DupTime;
         [DataMember] public int DupWeekday;           // 0=日 .. 6=土
         [DataMember] public bool DupShowSameContent;
         [DataMember] public bool DupShowOrphans;
         [DataMember] public bool DupShowEmptyFolders;
-        [DataMember] public bool Sync;                // 複数PCで同期（双方向・削除は伝えない）
+        [DataMember] public bool Sync;                // 複数PCで同期（双方向・削除は確認してから）
+        // 同期：共有フォルダにだけあって、このPCにないファイルを取り込むか（初期値：取り込まない）
+        [DataMember] public bool SyncTakeNew;
+        // ログオン時（アプリの起動時）にも実行する。false なら、止まっている間に予定の時刻が過ぎたときだけ起動後に実行する
+        [DataMember] public bool RunAtStartup;
         // 大きいファイルの重複（コピー元の中で中身が同じ）の扱い：off = 使わない / ask = 見つけたら毎回選ぶ（初期値） / auto = 自動でテキストにする
         [DataMember(Name = "DedupMode")] public string Dedup;
         // v1.7 の「使う・使わない」（使う = 自動でテキスト）。読み込んだら DedupMode に移す
@@ -134,6 +146,8 @@ namespace AutoCopy
             if (string.IsNullOrEmpty(Id)) Id = Guid.NewGuid().ToString("N");
             if (string.IsNullOrEmpty(Scope)) Scope = JobScope.Local;
             if (string.IsNullOrEmpty(NewerDestPolicy)) NewerDestPolicy = NewerPolicy.Ask;
+            if (DupDay < 1 || (DupDay > 28 && DupDay != DupScheduleKind.LastDay)) DupDay = 1;
+            if (DupMonth < 1 || DupMonth > 12) DupMonth = 1;
             if (string.IsNullOrEmpty(DupSchedule)) DupSchedule = "daily";
             if (DedupMinMB <= 0) DedupMinMB = 10;
             if (string.IsNullOrEmpty(Dedup)) Dedup = oldDedupEnabled ? DedupMode.Auto : DedupMode.Ask;
@@ -179,6 +193,10 @@ namespace AutoCopy
             DupSchedule = "daily";
             DupTime = "12:00";
             DupWeekday = 1;
+            DupDay = 1;
+            DupMonth = 1;
+            SyncTakeNew = false;
+            RunAtStartup = true;
             DupShowSameContent = true;
             DupShowOrphans = false;
             DupShowEmptyFolders = true;

@@ -16,7 +16,8 @@ namespace AutoCopy
 
         // 基本
         private TextBox tName, tSrc, tDst, tStart, tEnd;
-        private CheckBox cEnabled, cSub, cWindow, cDelay, cFollow, cBackup;
+        private CheckBox cEnabled, cSub, cWindow, cDelay, cFollow, cBackup, cRunAtStartup;
+        private RadioButton rSyncNoTake, rSyncTake;
         private RadioButton rDedupOff, rDedupAsk, rDedupOn;
         private CheckBox cAlwaysRename;
         private Label lSyncNote, lDedupNote;
@@ -38,8 +39,8 @@ namespace AutoCopy
         private CheckBox cSaveCred, cDup, cSame, cOrphan, cEmpty;
         private Label lServerNote, lConn;
         private NumericUpDown nRetry, nRetryInt;
-        private RadioButton rDaily, rWeekly, rManual;
-        private ComboBox cbWeekday;
+        private RadioButton rStartupDup, rDaily, rWeekly, rMonthly, rYearly, rManual;
+        private ComboBox cbWeekday, cbDupDay, cbDupMonth;
         private readonly Dictionary<string, string[]> credEdits = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
         private string currentServer;
 
@@ -129,10 +130,15 @@ namespace AutoCopy
             rSync = Ui.R("複数PCで同期（例外）", false);
             rSync.ForeColor = Ui.Warn;
             rSync.CheckedChanged += OnSyncChanged;
-            lSyncNote = Ui.Wrap("コピー先を共有フォルダにして、複数のPCで双方向に同期します。他のPCが共有フォルダに入れた・更新したファイルを、このPCのコピー元フォルダにも取り込みます。削除はどちらにも伝えません。両方で変えたファイルは「上書きの確認」で選びます。取り込みで置き換えたこのPCの古い版は控えに残ります。", 580);
+            lSyncNote = Ui.Wrap("コピー先を共有フォルダにして、複数のPCで同期します。他のPCが更新したファイルは、このPCのコピー元フォルダにも取り込みます。削除は「削除の確認」で選んでから伝えます。両方で変えたファイルは「上書きの確認」で選びます。取り込みで置き換えたこのPCの古い版は控えに残ります。", 580);
             lSyncNote.ForeColor = Ui.Quiet;
             lSyncNote.Margin = new Padding(Ui.S(22), 0, 3, 4);
-            FlowLayoutPanel modes = Ui.Column(rAppend, rMirror, mirrorLimit, rSync, lSyncNote);
+            // 同期：共有フォルダにだけある（このPCにない）ファイルの扱い（同じ入れ物の中で1つを選ぶ）
+            rSyncNoTake = Ui.R("このPCにはコピーしない（初期値）", true);
+            rSyncTake = Ui.R("このPCに取り込む（他のPCが追加したファイルも入ってくる）", false);
+            FlowLayoutPanel syncNew = Ui.Column(Ui.Hint("共有フォルダにだけあって、このPCにないファイル："), rSyncNoTake, rSyncTake);
+            syncNew.Margin = new Padding(Ui.S(22), 0, 3, 4);
+            FlowLayoutPanel modes = Ui.Column(rAppend, rMirror, mirrorLimit, rSync, lSyncNote, syncNew);
             b.Controls.Add(Ui.Row(Ui.L("コピーの方式", 130), modes));
 
             nInterval = Ui.N(1, 1440, 30, 72);
@@ -147,6 +153,10 @@ namespace AutoCopy
             cDelay = Ui.C("PC起動後", true);
             nDelay = Ui.N(0, 120, 1, 56);
             b.Controls.Add(Ui.Row(Ui.L("起動後の初回", 130), cDelay, nDelay, Ui.L("分待ってから実行する")));
+            cRunAtStartup = Ui.C("ログオン時（アプリの起動時）にも実行する", true);
+            Label lStartupNote = Ui.Wrap("チェックしない場合も、PCが止まっている間に予定の時刻（前回＋実行間隔）が過ぎていれば、起動後に実行します。", 560);
+            lStartupNote.ForeColor = Ui.Quiet;
+            b.Controls.Add(Ui.Row(Ui.L("ログオン時", 130), Ui.Column(cRunAtStartup, lStartupNote)));
 
             cFollow = Ui.C("名前やフォルダ名を変えたら、コピー先も同じ名前に変える（再コピーしない）", true);
             rAsk = Ui.R("毎回確認する（推奨）", true);
@@ -188,7 +198,8 @@ namespace AutoCopy
             string msg = "「複数PCで同期」は例外的な使い方です。\n\n"
                 + "・コピー先は、同期するすべてのPCから見える共有フォルダにしてください（{フォルダ名} は使えません）。\n"
                 + "・他のPCが入れた・更新したファイルが、このPCのコピー元フォルダに入ってきます。\n"
-                + "・削除はどちらにも伝えません。両方で変えたファイルは確認画面で選びます。\n"
+                + "・削除は「削除の確認」で選んでから伝えます。両方で変えたファイルは確認画面で選びます。\n"
+                + "・共有フォルダにだけあるファイルは、初期値ではこのPCにコピーしません（下で選べます）。\n"
                 + "・このPCの古い版は、置き換える前に控え（" + AppPaths.SyncBackupDir + "）に残します。\n"
                 + "・重複チェックと大きいファイルの重複の省略は、同期では行いません。\n\n同期にしますか？";
             if (!Ui.Confirm(this, msg))
@@ -207,7 +218,7 @@ namespace AutoCopy
         {
             EventHandler h = delegate { UpdateEnabled(); };
             foreach (CheckBox c in new CheckBox[] { cWindow, cDelay, cMax, cOlder, cDup }) c.CheckedChanged += h;
-            foreach (RadioButton r in new RadioButton[] { rAppend, rMirror, rSync, rAsk, rSkip, rOver, rDaily, rWeekly, rManual, rDedupOff, rDedupAsk, rDedupOn }) r.CheckedChanged += h;
+            foreach (RadioButton r in new RadioButton[] { rAppend, rMirror, rSync, rAsk, rSkip, rOver, rStartupDup, rDaily, rWeekly, rMonthly, rYearly, rManual, rDedupOff, rDedupAsk, rDedupOn }) r.CheckedChanged += h;
             nRetry.ValueChanged += h;
         }
 
@@ -221,6 +232,7 @@ namespace AutoCopy
             // コピーの方式
             nMirrorCount.Enabled = nMirrorPct.Enabled = mirror;
             lSyncNote.Enabled = sync;
+            rSyncNoTake.Enabled = rSyncTake.Enabled = sync;
             // 実行する時間帯・起動後の待ち
             tStart.Enabled = tEnd.Enabled = cWindow.Checked;
             nDelay.Enabled = cDelay.Checked;
@@ -236,9 +248,11 @@ namespace AutoCopy
             // 重複チェック：同期では行わない。行うときだけ日時と探すものを決められる
             cDup.Enabled = !sync;
             bool dup = cDup.Checked && !sync;
-            rDaily.Enabled = rWeekly.Enabled = rManual.Enabled = dup;
+            rStartupDup.Enabled = rDaily.Enabled = rWeekly.Enabled = rMonthly.Enabled = rYearly.Enabled = rManual.Enabled = dup;
             cbWeekday.Enabled = dup && rWeekly.Checked;
-            tDupTime.Enabled = dup && !rManual.Checked;
+            cbDupDay.Enabled = dup && (rMonthly.Checked || rYearly.Checked);
+            cbDupMonth.Enabled = dup && rYearly.Checked;
+            tDupTime.Enabled = dup && !rManual.Checked && !rStartupDup.Checked;
             cEmpty.Enabled = cSame.Enabled = cOrphan.Enabled = dup;
             cAlwaysRename.Enabled = false;   // 常に探す（変えられない）
             // ネットワークの接続：ネットワークのフォルダがないとき、保存しないときは入力できない
@@ -252,14 +266,18 @@ namespace AutoCopy
         /// <summary>
         /// 確認用：上の設定を切り替えたとき、下の項目が操作できる・できないが正しく変わるか（問題があれば説明を返す）
         /// </summary>
+        /// <summary>SelfTestEnabled で確かめる項目の数（画面の確認の報告用）</summary>
+        public static int SelfTestCount;
+
         public List<string> SelfTestEnabled()
         {
+            SelfTestCount = 0;
             List<string> bad = new List<string>();
             bool saveLoading = loading;
             loading = true;   // 確認画面（ミラーの注意など）を出さない
             try
             {
-                Action<bool, string> expect = delegate(bool ok, string what) { if (!ok) bad.Add(what); };
+                Action<bool, string> expect = delegate(bool ok, string what) { SelfTestCount++; if (!ok) bad.Add(what); };
                 rAppend.Checked = true; UpdateEnabled();
                 expect(!nMirrorCount.Enabled && !nMirrorPct.Enabled, "追加・更新のときミラーの件数が変えられる");
                 rMirror.Checked = true; UpdateEnabled();
@@ -269,8 +287,13 @@ namespace AutoCopy
                 expect(!rMirror.Checked && !rAppend.Checked, "同期を選んでも他の方式の選択が外れない");
                 expect(!rDedupOn.Enabled && !nDedup.Enabled, "同期のとき重複の省略を選べる");
                 expect(!cDup.Enabled && !cbWeekday.Enabled && !tDupTime.Enabled, "同期のとき重複チェックを変えられる");
+                expect(rSyncTake.Enabled && rSyncNoTake.Enabled, "同期なのに共有フォルダにだけあるファイルの扱いを選べない");
+                rSyncTake.Checked = true;
+                expect(rSync.Checked, "取り込むを選ぶと方式の選択が外れる（同じ入れ物に入っている）");
+                rSyncNoTake.Checked = true;
                 rAppend.Checked = true; UpdateEnabled();
                 expect(!rSync.Checked && !rMirror.Checked, "追加・更新を選んでも他の方式の選択が外れない");
+                expect(!rSyncTake.Enabled && !rSyncNoTake.Enabled, "同期でないのに共有フォルダにだけあるファイルの扱いを選べる");
                 rDedupOff.Checked = true; UpdateEnabled();
                 expect(rDedupOn.Enabled && !nDedup.Enabled, "重複の省略を使わないのに大きさを変えられる");
                 expect(!rDedupAsk.Checked && !rDedupOn.Checked, "使わないを選んでも他の選択が外れない");
@@ -295,11 +318,17 @@ namespace AutoCopy
                 cDup.Checked = false; UpdateEnabled();
                 expect(!rDaily.Enabled && !tDupTime.Enabled && !cEmpty.Enabled && !cSame.Enabled && !cOrphan.Enabled, "重複チェックをしないのに日時・探すものを変えられる");
                 cDup.Checked = true; rManual.Checked = true; UpdateEnabled();
-                expect(!tDupTime.Enabled && !cbWeekday.Enabled, "手動のみなのに時刻・曜日を変えられる");
+                expect(!tDupTime.Enabled && !cbWeekday.Enabled && !cbDupDay.Enabled && !cbDupMonth.Enabled, "手動のみなのに時刻・曜日・日・月を変えられる");
+                rStartupDup.Checked = true; UpdateEnabled();
+                expect(!tDupTime.Enabled && !cbWeekday.Enabled && !cbDupDay.Enabled && !cbDupMonth.Enabled, "ログオン時なのに時刻・曜日・日・月を変えられる");
                 rDaily.Checked = true; UpdateEnabled();
-                expect(tDupTime.Enabled && !cbWeekday.Enabled, "毎日なのに曜日を変えられる（または時刻を変えられない）");
+                expect(tDupTime.Enabled && !cbWeekday.Enabled && !cbDupDay.Enabled, "毎日なのに曜日・日を変えられる（または時刻を変えられない）");
                 rWeekly.Checked = true; UpdateEnabled();
-                expect(tDupTime.Enabled && cbWeekday.Enabled, "毎週なのに曜日・時刻を変えられない");
+                expect(tDupTime.Enabled && cbWeekday.Enabled && !cbDupDay.Enabled, "毎週なのに曜日・時刻を変えられない（または日を変えられる）");
+                rMonthly.Checked = true; UpdateEnabled();
+                expect(tDupTime.Enabled && cbDupDay.Enabled && !cbDupMonth.Enabled && !cbWeekday.Enabled, "毎月なのに日・時刻を変えられない（または月・曜日を変えられる）");
+                rYearly.Checked = true; UpdateEnabled();
+                expect(tDupTime.Enabled && cbDupDay.Enabled && cbDupMonth.Enabled, "毎年なのに月・日・時刻を変えられない");
                 expect(!cAlwaysRename.Enabled, "常に探す項目のチェックを外せる");
                 nRetry.Value = 0; UpdateEnabled();
                 expect(!nRetryInt.Enabled, "再試行しないのに間隔を変えられる");
@@ -438,9 +467,19 @@ namespace AutoCopy
                 Ui.Wrap("すべて失敗したらエラーを通知し、次の実行時刻にもう一度試します。ID・パスワードの誤りのときは再試行しません。", 640)));
 
             cDup = Ui.C("重複チェックを行う", true);
+            rStartupDup = Ui.R("ログオン時（起動時）", false);
             rDaily = Ui.R("毎日", true);
             rWeekly = Ui.R("毎週", false);
+            rMonthly = Ui.R("毎月", false);
+            rYearly = Ui.R("毎年", false);
             cbWeekday = Ui.Combo(64, "日曜", "月曜", "火曜", "水曜", "木曜", "金曜", "土曜");
+            List<string> days = new List<string>();
+            for (int d = 1; d <= 28; d++) days.Add(d + "日");
+            days.Add("末日");
+            cbDupDay = Ui.Combo(64, days.ToArray());
+            List<string> months = new List<string>();
+            for (int m = 1; m <= 12; m++) months.Add(m + "月");
+            cbDupMonth = Ui.Combo(64, months.ToArray());
             rManual = Ui.R("手動のみ", false);
             tDupTime = Ui.T("12:00", 60);
             cSame = Ui.C("中身が同じファイル（情報として表示のみ）", true);
@@ -448,7 +487,9 @@ namespace AutoCopy
             cEmpty = Ui.C("空のフォルダ（コピー元にないもの）", true);
             b.Controls.Add(Ui.Section("重複チェック",
                 cDup,
-                Ui.Row(Ui.L("実行", 110), rDaily, rWeekly, cbWeekday, rManual, Ui.L("時刻"), tDupTime),
+                Ui.Row(Ui.L("実行", 110), Ui.WrapRow(rStartupDup, rDaily, rWeekly, rMonthly, rYearly, rManual)),
+                Ui.Row(Ui.L("", 110), Ui.WrapRow(Ui.L("曜日"), cbWeekday, Ui.L("月"), cbDupMonth, Ui.L("日"), cbDupDay, Ui.L("時刻"), tDupTime)),
+                Ui.Row(Ui.L("", 110), Ui.Wrap("PCが止まっていて予定の日時に実行できなかったときは、その後にアプリが起動したときに実行します。", 520)),
                 Ui.Row(Ui.L("探すもの", 110), Ui.Column(cAlwaysRename = Ui.C("ファイル名・フォルダ名の変更や移動の取りこぼし（常に探します）", true), cEmpty, cSame, cOrphan)),
                 Ui.Wrap("削除したファイルは「コピー先\\_AutoCopy\\削除済み」に移し、アプリ設定の保存日数が過ぎたら完全に削除します。", 640)));
             p.Controls.Add(b);
@@ -523,6 +564,9 @@ namespace AutoCopy
             rMirror.Checked = j.Mirror && !j.Sync;
             rSync.Checked = j.Sync;
             rAppend.Checked = !j.Mirror && !j.Sync;
+            rSyncTake.Checked = j.SyncTakeNew;
+            rSyncNoTake.Checked = !j.SyncTakeNew;
+            cRunAtStartup.Checked = j.RunAtStartup;
             rDedupOff.Checked = j.Dedup == DedupMode.Off;
             rDedupAsk.Checked = j.Dedup == DedupMode.Ask;
             rDedupOn.Checked = j.Dedup == DedupMode.Auto;
@@ -566,10 +610,15 @@ namespace AutoCopy
             nRetry.Value = Clamp(nRetry, j.RetryCount);
             nRetryInt.Value = Clamp(nRetryInt, j.RetryIntervalSeconds);
             cDup.Checked = j.DupCheckEnabled;
-            rDaily.Checked = j.DupSchedule == "daily";
-            rWeekly.Checked = j.DupSchedule == "weekly";
-            rManual.Checked = j.DupSchedule == "manual";
+            rStartupDup.Checked = j.DupSchedule == DupScheduleKind.Startup;
+            rDaily.Checked = j.DupSchedule == DupScheduleKind.Daily;
+            rWeekly.Checked = j.DupSchedule == DupScheduleKind.Weekly;
+            rMonthly.Checked = j.DupSchedule == DupScheduleKind.Monthly;
+            rYearly.Checked = j.DupSchedule == DupScheduleKind.Yearly;
+            rManual.Checked = j.DupSchedule == DupScheduleKind.Manual;
             cbWeekday.SelectedIndex = Math.Max(0, Math.Min(6, j.DupWeekday));
+            cbDupDay.SelectedIndex = j.DupDay == DupScheduleKind.LastDay ? 28 : Math.Max(0, Math.Min(27, j.DupDay - 1));
+            cbDupMonth.SelectedIndex = Math.Max(0, Math.Min(11, j.DupMonth - 1));
             tDupTime.Text = j.DupTime;
             cSame.Checked = j.DupShowSameContent;
             cOrphan.Checked = j.DupShowOrphans;
@@ -607,6 +656,8 @@ namespace AutoCopy
             j.Dest = ToUncIfNetworkDrive(tDst.Text.Trim());
             j.Mirror = rMirror.Checked;
             j.Sync = rSync.Checked;
+            j.SyncTakeNew = rSync.Checked && rSyncTake.Checked;
+            j.RunAtStartup = cRunAtStartup.Checked;
             j.Dedup = rDedupOff.Checked ? DedupMode.Off : rDedupOn.Checked ? DedupMode.Auto : DedupMode.Ask;
             j.DedupMinMB = (int)nDedup.Value;
             j.MirrorMaxCount = (int)nMirrorCount.Value;
@@ -641,8 +692,11 @@ namespace AutoCopy
             j.RetryCount = (int)nRetry.Value;
             j.RetryIntervalSeconds = (int)nRetryInt.Value;
             j.DupCheckEnabled = cDup.Checked;
-            j.DupSchedule = rManual.Checked ? "manual" : rWeekly.Checked ? "weekly" : "daily";
+            j.DupSchedule = rManual.Checked ? DupScheduleKind.Manual : rStartupDup.Checked ? DupScheduleKind.Startup : rWeekly.Checked ? DupScheduleKind.Weekly
+                : rMonthly.Checked ? DupScheduleKind.Monthly : rYearly.Checked ? DupScheduleKind.Yearly : DupScheduleKind.Daily;
             j.DupWeekday = cbWeekday.SelectedIndex;
+            j.DupDay = cbDupDay.SelectedIndex == 28 ? DupScheduleKind.LastDay : cbDupDay.SelectedIndex + 1;
+            j.DupMonth = cbDupMonth.SelectedIndex + 1;
             j.DupTime = tDupTime.Text.Trim();
             j.DupShowSameContent = cSame.Checked;
             j.DupShowOrphans = cOrphan.Checked;
@@ -671,7 +725,7 @@ namespace AutoCopy
             TimeSpan ts;
             if (j.UseTimeWindow && (!TimeUtil.TryParseHm(j.WindowStart, out ts) || !TimeUtil.TryParseHm(j.WindowEnd, out ts)))
             { Ui.Error(this, "時間帯は 08:00 の形で入力してください。"); return false; }
-            if (j.DupCheckEnabled && j.DupSchedule != "manual" && !TimeUtil.TryParseHm(j.DupTime, out ts))
+            if (j.DupCheckEnabled && j.DupSchedule != DupScheduleKind.Manual && j.DupSchedule != DupScheduleKind.Startup && !TimeUtil.TryParseHm(j.DupTime, out ts))
             { Ui.Error(this, "重複チェックの時刻は 12:00 の形で入力してください。"); return false; }
             string v = CopyEngine.Validate(j, AppCore.Settings, AppCore.Settings.Jobs);
             if (v != null) { Ui.Error(this, v); return false; }

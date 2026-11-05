@@ -462,7 +462,7 @@ namespace AutoCopy
                     f.StartPosition = FormStartPosition.Manual; f.Location = new Point(20, 20);
                     f.Show(); Pump(800);
                     List<string> bad = f.SelfTestEnabled();
-                    if (bad.Count == 0) lines.Add("| ジョブ設定（" + j.Name + "） | OK | 26項目 |");
+                    if (bad.Count == 0) lines.Add("| ジョブ設定（" + j.Name + "） | OK | " + JobEditForm.SelfTestCount + "項目 |");
                     foreach (string x in bad) { lines.Add("| ジョブ設定（" + j.Name + "） | NG | " + x + " |"); ng++; }
                 }
                 catch (Exception ex) { errors.Add("操作できる項目の確認: " + ex); }

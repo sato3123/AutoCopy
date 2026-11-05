@@ -764,7 +764,7 @@ namespace AutoCopy
             FlowLayoutPanel top = Ui.Column(
                 Ui.Heading("同期のフォルダで削除されたファイルがあります"),
                 Ui.Hint("一方（このPC または 共有フォルダ）で削除されたファイルです。もう一方からも消すか、残すかを選んでください。選ぶまでは、どちらもそのままにします。"),
-                Ui.Hint("「削除する」：このPCの分は控え（" + AppPaths.SyncBackupDir + "）へ、共有フォルダの分は「_AutoCopy\\削除済み」へ移します（保存日数の間は戻せます）。「残す」：次回の実行で、消えた側へコピーし直します。"));
+                Ui.Hint("「削除する」：このPCの分は控え（" + AppPaths.SyncBackupDir + "）へ、共有フォルダの分は「_AutoCopy\\削除済み」へ移します（保存日数の間は戻せます）。「残す」：このPCで削除したものはすぐにこのPCへ戻し、共有フォルダで削除されたものは次回の実行で共有フォルダへコピーし直します。"));
             top.Dock = DockStyle.Top;
             top.Padding = new Padding(12, 10, 12, 6);
             lv = Ui.List("ファイル|330", "ジョブ|140", "どこで削除されたか → どうなるか|280", "サイズ|80", "更新日時|130", "見つけた日時|130");
@@ -828,7 +828,7 @@ namespace AutoCopy
             if (n == 0) { Ui.Info(this, "ファイルにチェックを入れてください。"); return; }
             string msg = delete
                 ? n + "件を、もう一方からも削除します（消さずに控え・削除済みへ移すので、保存日数の間は戻せます）。よろしいですか？"
-                : n + "件を残します。次回の実行で、消えた側へコピーし直します。よろしいですか？";
+                : n + "件を残します（消えた側へ戻します）。よろしいですか？";
             if (!Ui.Confirm(this, msg)) return;
             List<string> errors = Ui.Busy<List<string>>(this, "処理しています…", delegate()
             {

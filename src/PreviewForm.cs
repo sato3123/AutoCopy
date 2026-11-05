@@ -293,6 +293,7 @@ namespace AutoCopy
                 + (r.PlannedDedup > 0 ? "・重複で省略 " + Fmt.Count(r.PlannedDedup) + "件" : "")
                 + (r.PlannedDownloads > 0 ? "・取り込み " + Fmt.Count(r.PlannedDownloads) + "件" : "")
                 + (r.SyncDeleteCandidates > 0 ? "・削除の確認 " + Fmt.Count(r.SyncDeleteCandidates) + "件" : "")
+                + (r.SyncNotTaken > 0 ? "・取り込まない（設定）" + Fmt.Count(r.SyncNotTaken) + "件" : "")
                 + "・除外 " + Fmt.Count(r.Excluded) + "件"
                 + (r.Excluded > 5000 ? "（一覧は最初の5,000件）" : "")
                 + "　" + DateTime.Now.ToString("HH:mm") + " 時点";
@@ -304,7 +305,7 @@ namespace AutoCopy
             if (k == PlanKind.Conflict || k == PlanKind.Hold) return Ui.Warn;
             if (k == PlanKind.Delete) return Ui.Err;
             if (k == PlanKind.Copy || k == PlanKind.Overwrite || k == PlanKind.Rename || k == PlanKind.SyncIn) return Ui.Ok;
-            if (k == PlanKind.Excluded || k == PlanKind.Same || k == PlanKind.Deferred || k == PlanKind.Skip) return Ui.Quiet;
+            if (k == PlanKind.Excluded || k == PlanKind.Same || k == PlanKind.Deferred || k == PlanKind.Skip || k == PlanKind.SyncNotTaken) return Ui.Quiet;
             return SystemColors.WindowText;
         }
 

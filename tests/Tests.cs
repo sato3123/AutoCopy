@@ -89,6 +89,8 @@ namespace AutoCopy.Tests
             Add("T60", "同期：一方で削除されたファイルは削除候補として示し、確認してから削除（控え・削除済みへ）／残すと戻す", T60_SyncDeleteCandidates);
             Add("T61", "重複チェック：名前変更が大量でも速く終わり、同じフォルダのものは1つのまとまりにする", T61_DupManyRenames);
             Add("T62", "お知らせ：未対応・対応済み（自動・手動）・同じお知らせはまとめる・保存される", T62_NoticeStates);
+            Add("T63", "同期：共有フォルダにだけあるファイルは、初期値ではこのPCにコピーしない（設定で取り込める）", T63_SyncTakeNew);
+            Add("T64", "実行の予定：重複チェックの毎月・毎年・ログオン時、止まっている間に過ぎた予定は起動後に実行", T64_Schedule);
 
             int ng = 0;
             foreach (TestCase t in cases)
@@ -1436,8 +1438,8 @@ namespace AutoCopy.Tests
                 App.InstanceId = "test-instance";
                 App.FolderName = "PC1";
                 App.TrashDays = 30;
-                JA = new JobConfig(); JA.Name = name + "A"; JA.Source = A; JA.Dest = S; JA.Sync = true; JA.RetryCount = 0;
-                JB = new JobConfig(); JB.Name = name + "B"; JB.Source = B; JB.Dest = S; JB.Sync = true; JB.RetryCount = 0;
+                JA = new JobConfig(); JA.Name = name + "A"; JA.Source = A; JA.Dest = S; JA.Sync = true; JA.RetryCount = 0; JA.SyncTakeNew = true;
+                JB = new JobConfig(); JB.Name = name + "B"; JB.Source = B; JB.Dest = S; JB.Sync = true; JB.RetryCount = 0; JB.SyncTakeNew = true;
                 App.Jobs.Add(JA); App.Jobs.Add(JB);
                 AppCore.Settings = App;
                 SafeFs.SetProtectedSources(new string[] { A, B });
@@ -1904,9 +1906,9 @@ namespace AutoCopy.Tests
             True(Directory.GetFiles(Path.Combine(p.S, "_AutoCopy\\削除済み"), "d.txt", SearchOption.AllDirectories).Length == 1, "共有フォルダの「削除済み」に移った（戻せる）");
             Eq(0, AppCore.ResolveSyncDeletes(p.JA, new List<SyncDeleteItem>(new SyncDeleteItem[] { e }), false).Count, "残すを選べる");
             Eq(0, SyncDeleteStore.Count(p.JA.Id), "候補はなくなる");
+            Eq("残すファイル", Read(Path.Combine(p.A, "e.txt")), "残すにした e は、すぐにこのPCへ戻す（取り込まない設定でも戻る）");
             RunResult r2 = p.Run(p.JA, "pc1");
-            Eq(1, r2.Downloaded, "残すにした e は、このPCへ戻す");
-            Eq("残すファイル", Read(Path.Combine(p.A, "e.txt")), "e が戻った");
+            Eq(0, r2.Downloaded + r2.Copied, "戻した e はその後は何もしない");
             Eq(0, r2.SyncDeleteCandidates, "d は候補に出ない");
 
             // PC2：共有フォルダで消えた d → PC2 からも消すかの候補
@@ -2029,6 +2031,105 @@ namespace AutoCopy.Tests
             int before = AppCore.RecentNotices().FindAll(mine).Count;
             int removed = AppCore.ClearHandledNotices();
             True(removed >= 3 && AppCore.RecentNotices().FindAll(mine).Count < before, "対応済みのものを消せる");
+        }
+
+        private static void T63_SyncTakeNew()
+        {
+            JobConfig def = Json.Deserialize<JobConfig>("{\"Name\":\"v19\",\"Sync\":true}");
+            True(!def.SyncTakeNew, "初期値は「コピーしない」（前の版の設定を読んだときも）");
+            True(new JobConfig().RunAtStartup && def.RunAtStartup, "ログオン時にも実行する が初期値");
+
+            SyncPair p = new SyncPair("T63");
+            p.JA.SyncTakeNew = false;   // PC1 は初期値（コピーしない）
+            WriteFile(Path.Combine(p.A, "共通.txt"), "両方にある", 600);
+            p.Run(p.JA, "pc1");
+            p.Run(p.JB, "pc2");
+            True(File.Exists(Path.Combine(p.B, "共通.txt")), "取り込む設定の PC2 には入る");
+
+            WriteFile(Path.Combine(p.B, "PC2だけ.txt"), "PC2が追加", 600);
+            p.Run(p.JB, "pc2");
+            True(File.Exists(Path.Combine(p.S, "PC2だけ.txt")), "共有フォルダへはコピーする");
+            RunResult r1 = p.Run(p.JA, "pc1");
+            Eq(0, r1.Downloaded, "共有フォルダにだけあるファイルはコピーしない");
+            Eq(1, r1.SyncNotTaken, "取り込まなかった件数");
+            True(!File.Exists(Path.Combine(p.A, "PC2だけ.txt")), "PC1 には入らない");
+            Eq(0, r1.SyncDeleteCandidates, "削除の候補にもしない");
+            RunResult pv = AppCore.DryRun(p.JA, false);
+            True(pv.Plan.Exists(delegate(PlanItem x) { return x.Kind == PlanKind.SyncNotTaken && x.Rel == "PC2だけ.txt"; }), "予測に「取り込まない」");
+
+            // 両方にあるファイルの更新は、これまでどおり取り込む
+            WriteFile(Path.Combine(p.B, "共通.txt"), "PC2が更新した", 100);
+            p.Run(p.JB, "pc2");
+            RunResult r2 = p.Run(p.JA, "pc1");
+            Eq(1, r2.Downloaded, "両方にあるファイルの更新は取り込む");
+            Eq("PC2が更新した", Read(Path.Combine(p.A, "共通.txt")), "新しい版");
+
+            // 設定で「取り込む」にすると入る
+            p.JA.SyncTakeNew = true;
+            RunResult r3 = p.Run(p.JA, "pc1");
+            Eq(1, r3.Downloaded, "取り込む設定にすると入る");
+            Eq("PC2が追加", Read(Path.Combine(p.A, "PC2だけ.txt")), "中身");
+        }
+
+        private static void T64_Schedule()
+        {
+            JobConfig j = new JobConfig();
+            j.DupTime = "12:00";
+            DateTime now = new DateTime(2026, 11, 5, 9, 0, 0);   // 木曜
+
+            j.DupSchedule = DupScheduleKind.Daily;
+            Eq(new DateTime(2026, 11, 4, 12, 0, 0), AppCore.PrevDupTime(j, now), "毎日：今日の時刻前なら昨日");
+            j.DupSchedule = DupScheduleKind.Weekly; j.DupWeekday = 1;
+            Eq(new DateTime(2026, 11, 2, 12, 0, 0), AppCore.PrevDupTime(j, now), "毎週月曜");
+            j.DupSchedule = DupScheduleKind.Monthly; j.DupDay = 10;
+            Eq(new DateTime(2026, 10, 10, 12, 0, 0), AppCore.PrevDupTime(j, now), "毎月10日：今月はまだ → 先月");
+            j.DupDay = 5;
+            Eq(new DateTime(2026, 10, 5, 12, 0, 0), AppCore.PrevDupTime(j, now), "毎月5日：今日の12時前 → 先月");
+            Eq(new DateTime(2026, 11, 5, 12, 0, 0), AppCore.PrevDupTime(j, now.AddHours(4)), "毎月5日：今日の12時を過ぎたら今日");
+            j.DupDay = DupScheduleKind.LastDay;
+            Eq(new DateTime(2026, 10, 31, 12, 0, 0), AppCore.PrevDupTime(j, now), "毎月末日");
+            Eq(new DateTime(2026, 2, 28, 12, 0, 0), AppCore.PrevDupTime(j, new DateTime(2026, 3, 15)), "2月の末日");
+            j.DupSchedule = DupScheduleKind.Yearly; j.DupMonth = 4; j.DupDay = 1;
+            Eq(new DateTime(2026, 4, 1, 12, 0, 0), AppCore.PrevDupTime(j, now), "毎年4月1日");
+            j.DupMonth = 12;
+            Eq(new DateTime(2025, 12, 1, 12, 0, 0), AppCore.PrevDupTime(j, now), "毎年12月1日：今年はまだ → 去年");
+
+            // 止まっている間に過ぎた予定は、起動後に実行する（取りこぼさない）
+            Box b = new Box("T64");
+            b.Job.DupCheckEnabled = true;
+            b.Job.DupSchedule = DupScheduleKind.Monthly; b.Job.DupDay = 1; b.Job.DupTime = "12:00";
+            JobRuntime rt = new JobRuntime();
+            DateTime t = new DateTime(2026, 11, 20, 8, 0, 0);
+            lock (b.State) b.State.LastDupCheckTicks = new DateTime(2026, 10, 1, 12, 5, 0).ToUniversalTime().Ticks;   // 10/1 に実行済み、11/1 は止まっていた
+            string note;
+            True(AppCore.DupDue(b.Job, rt, t, out note), "11/1 の予定を過ぎていて未実行 → 起動後に実行");
+            True(note != null && note.Contains("11/1"), "取りこぼしの記録: " + note);
+            lock (b.State) b.State.LastDupCheckTicks = new DateTime(2026, 11, 20, 8, 1, 0).ToUniversalTime().Ticks;
+            True(!AppCore.DupDue(b.Job, rt, t.AddMinutes(5), out note), "実行した後は次の予定（12/1）まで待つ");
+            True(AppCore.DupDue(b.Job, rt, new DateTime(2026, 12, 1, 12, 0, 0), out note), "12/1 12:00 に実行");
+            rt.StartGate = new DateTime(2026, 12, 1, 12, 1, 0);
+            True(!AppCore.DupDue(b.Job, rt, new DateTime(2026, 12, 1, 12, 0, 30), out note), "起動直後の待ち時間の間は実行しない");
+
+            // ログオン時（アプリの起動時）：起動するたびに1回
+            b.Job.DupSchedule = DupScheduleKind.Startup;
+            JobRuntime rt2 = new JobRuntime();
+            True(AppCore.DupDue(b.Job, rt2, DateTime.Now, out note), "起動したら実行");
+            rt2.DupStartupDone = true;
+            True(!AppCore.DupDue(b.Job, rt2, DateTime.Now, out note), "同じ起動の間は1回だけ");
+            b.Job.DupSchedule = DupScheduleKind.Manual;
+            True(!AppCore.DupDue(b.Job, new JobRuntime(), DateTime.Now, out note), "手動のみは自動で実行しない");
+
+            // コピー：ログオン時にも実行する（初期値）／しない場合は、予定を過ぎていたときだけ起動後に実行
+            DateTime gate = new DateTime(2026, 11, 5, 9, 1, 0);
+            JobConfig c = new JobConfig(); c.IntervalMinutes = 240;
+            string cu;
+            Eq(gate, AppCore.FirstRunAfterStart(c, gate.AddHours(-1), gate, true, out cu), "ログオン時にも実行：起動後すぐ");
+            c.RunAtStartup = false;
+            Eq(gate.AddHours(-1).AddMinutes(240), AppCore.FirstRunAfterStart(c, gate.AddHours(-1), gate, true, out cu), "予定前：前回＋間隔まで待つ");
+            True(cu == null, "取りこぼしではない");
+            Eq(gate, AppCore.FirstRunAfterStart(c, gate.AddHours(-9), gate, true, out cu), "止まっている間に予定が過ぎた：起動後すぐ");
+            True(cu != null, "取りこぼしの記録");
+            Eq(gate, AppCore.FirstRunAfterStart(c, DateTime.MinValue, gate, true, out cu), "一度も実行していない：起動後すぐ");
         }
 
         private static void T42_Performance()

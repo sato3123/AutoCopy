@@ -12,6 +12,7 @@ namespace AutoCopy
     public class RunResult
     {
         public int SyncDeleteCandidates;   // 同期：削除の確認待ち
+        public int SyncNotTaken;           // 同期：共有フォルダにだけあるが、設定により取り込まなかった
         public int SyncDeleteNew;          // うち今回新しく見つかったもの
 
         public int PlannedCopyCount, Scanned, Copied, Overwritten, Renamed, Conflicts, Deleted, Errors, Locked, Excluded, Deferred, PendingDeletes, SameAdopted;
@@ -75,7 +76,8 @@ namespace AutoCopy
         public const string Deferred = "次回に回す";
         public const string Excluded = "除外";
         public const string SyncDelete = "削除の確認（同期）";
-        public static readonly string[] All = { Copy, Overwrite, Conflict, Skip, Rename, Delete, Hold, Dedup, DedupAsk, SyncIn, SyncDelete, Same, Deferred, Excluded };
+        public const string SyncNotTaken = "取り込まない（同期の設定）";
+        public static readonly string[] All = { Copy, Overwrite, Conflict, Skip, Rename, Delete, Hold, Dedup, DedupAsk, SyncIn, SyncDelete, SyncNotTaken, Same, Deferred, Excluded };
     }
 
     public class FolderConflictException : Exception
@@ -823,7 +825,20 @@ namespace AutoCopy
                 }
                 if (L == null)
                 {
-                    if (S != null && sChanged) { AddDown(downs, new SyncDown(rel, S, false)); continue; }
+                    if (S != null && sChanged)
+                    {
+                        // 共有フォルダにだけある（このPCにない）ファイル：初期値では取り込まない（ジョブ設定で選べる）
+                        if (!job.SyncTakeNew)
+                        {
+                            res.SyncNotTaken++;
+                            Plan(PlanKind.SyncNotTaken, rel, S, S.Size, S.Mtime, rec == null
+                                ? "共有フォルダにだけある → このPCにはコピーしない（設定）"
+                                : "このPCで削除した後に共有フォルダで更新 → このPCにはコピーしない（設定）");
+                            continue;
+                        }
+                        AddDown(downs, new SyncDown(rel, S, false));
+                        continue;
+                    }
                     // 記録があり変わっていない＝このPCで消した → 取り込み直さず、共有フォルダからも消すかを確認してもらう
                     if (S != null && rec != null)
                     {
