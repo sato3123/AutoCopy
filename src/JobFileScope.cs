@@ -20,6 +20,12 @@ namespace AutoCopy
                 if (other.Id == job.Id) continue;
                 string od = CopyEngine.ResolvedDest(other, app);
                 if (!PathUtil.IsSameOrInside(dst, od) && !PathUtil.IsSameOrInside(od, dst)) continue;
+                if (other.Sync)
+                {
+                    // 同期の共有フォルダには、このPCのコピー元にない（他のPCの）ファイルもある：まるごと整理の対象から外す
+                    result.blockedRoots.Add(PathUtil.Normalize(od));
+                    continue;
+                }
                 try
                 {
                     string os = CopyEngine.ResolvedSource(other, app);

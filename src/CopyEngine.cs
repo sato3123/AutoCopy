@@ -323,7 +323,8 @@ namespace AutoCopy
                 // 共有フォルダの詳しい確認は時間がかかる：前回の確認から一定時間以内で、どのPCも共有フォルダを変えていなければ
                 // （共有フォルダの「変更の印」が同じなら）、前回の確認の結果を使う
                 string stamp = SyncRemoteCache.ReadStamp(dst);
-                SyncRemoteCache.Entry ce = SyncRemoteCache.Get(job.Id, dst);
+                string rules = SyncRemoteCache.RulesOf(job);   // 除外・対象を変えたら、前回の一覧は使わない
+                SyncRemoteCache.Entry ce = SyncRemoteCache.Get(job.Id, dst, rules);
                 bool reuse = !FullVerify && job.SyncRemoteCacheMinutes > 0 && ce != null && stamp != null && stamp == ce.Stamp
                     && (DateTime.Now - ce.FullScanAt).TotalMinutes < job.SyncRemoteCacheMinutes;
                 if (reuse)
@@ -336,7 +337,7 @@ namespace AutoCopy
                 {
                     Progress.SetPhase("共有フォルダを調べています");
                     remote = Directory.Exists(PathUtil.Long(dst)) ? Scanner.Scan(dst, job.IncludeSubdirs, matcher, true, ct) : new ScanResult();
-                    if (!dryRun && stamp != null && remote.FailedDirs.Count == 0) SyncRemoteCache.Put(job.Id, dst, remote, stamp);
+                    if (!dryRun && stamp != null && remote.FailedDirs.Count == 0) SyncRemoteCache.Put(job.Id, dst, remote, stamp, rules);
                     else if (!dryRun) SyncRemoteCache.Invalidate(job.Id);
                 }
                 Progress.SetPhase("変更を判定しています");
@@ -394,7 +395,7 @@ namespace AutoCopy
                 if (it.Recent) { res.Deferred++; Plan(PlanKind.Deferred, rel, it, -1, 0, "更新されたばかり（保存中の可能性）"); continue; }
 
                 string dpath = PathUtil.Combine(dst, rel);
-                FileInfo dfi = inventory == null ? new FileInfo(PathUtil.Long(dpath)) : inventory.Get(dpath);
+                DestEntry dfi = inventory == null ? DestEntry.Of(new FileInfo(PathUtil.Long(dpath))) : inventory.Get(dpath);
                 if (dfi == null || !dfi.Exists)
                 {
                     AddTask(tasks, new CopyTask(rel, it, false));

@@ -32,6 +32,13 @@ namespace AutoCopy.Tests
             Add("T103", "ネットワーク用一覧キャッシュの正確性と取得回数", InventoryTest);
             Add("T104", "実行間隔の変更を次回実行予定に反映", Reschedule);
             Add("T105", "大容量重複の確認済み：永続化・通常コピー・内容変更・解除", SkipReviewedLarge);
+            Add("T106", "重複チェック：除外しているだけでコピー元にあるファイルを「古いコピー」にしない", DupKeepsExcluded);
+            Add("T107", "例外ルールがあっても、隠し・システムのフォルダには入らない（名前で除外したフォルダには入る）", HiddenDirWithIncludes);
+            Add("T108", "同期：除外・対象を変えたら共有フォルダの一覧を使い直さない（削除の候補にしない）", SyncCacheRules);
+            Add("T109", "別ジョブが同期なら、その共有フォルダはまるごと整理の対象にしない", SyncSharedProtected);
+            Add("T110", "ログ送信：途中で終了しても二重・途中までにしない・保管先のファイルを書き直さない", LogResume);
+            Add("T111", "コピー先一覧：上限を超えたらファイルごとに確かめる", InventoryLimit);
+            Add("T112", "終了時の停止待ちは上限まで（止まらない処理があっても終了できる）", StopTimeout);
         }
 
         private static void SkipReviewedLarge()
@@ -278,7 +285,7 @@ namespace AutoCopy.Tests
         {
             Box b = new Box("T103"); for (int i = 0; i < 200; i++) b.WD(i + ".txt", "sample", 600);
             DestinationInventory inventory = new DestinationInventory(); Stopwatch sw = Stopwatch.StartNew();
-            for (int i = 0; i < 200; i++) { FileInfo f = inventory.Get(b.D(i + ".txt")); True(f != null && f.Length == 6, "一覧の内容"); }
+            for (int i = 0; i < 200; i++) { DestEntry f = inventory.Get(b.D(i + ".txt")); True(f != null && f.Length == 6, "一覧の内容"); }
             True(inventory.Get(b.D("missing")) == null, "存在しないファイル");
             Eq(1, inventory.EnumeratedDirectories, "200件を1回の一覧取得で判定");
             Note = "200件のメタデータ照会: " + sw.ElapsedMilliseconds + "ms（ローカル測定）";
@@ -290,6 +297,150 @@ namespace AutoCopy.Tests
             JobRuntime rt = AppCore.GetRuntime(b.Job.Id); rt.LastRun = DateTime.Now.AddMinutes(-2); rt.NextRun = DateTime.Now.AddHours(1);
             b.Job.IntervalMinutes = 5; AppCore.SaveSettings();
             True(Math.Abs((rt.NextRun - rt.LastRun.AddMinutes(5)).TotalSeconds) < 1, "次回予定を再計算");
+        }
+            private static void DupKeepsExcluded()
+        {
+            Box b = new Box("T106"); b.Job.Dedup = DedupMode.Off;
+            b.W("keep.bak", "同じ内容"); b.W("a.txt", "a");
+            b.Run();
+            True(b.DE("keep.bak"), "最初はコピー");
+            b.Job.Exclude.Extensions.Add(".bak");   // 後から除外（コピー元にはまだある）
+            b.WD(@"old\keep.bak", "同じ内容", 600);  // コピー先にだけある同じ中身（本当に古いコピー）
+            DupResult r = DupChecker.Run(b.Job, b.App, b.State, CancellationToken.None);
+            bool keepIsOld = false, oldIsOld = false;
+            foreach (DupGroup g in r.Groups)
+                foreach (DupEntry e in g.Entries)
+                {
+                    if (string.Equals(e.Rel, "keep.bak", StringComparison.OrdinalIgnoreCase) && e.Status == "old") keepIsOld = true;
+                    if (string.Equals(e.Rel, @"old\keep.bak", StringComparison.OrdinalIgnoreCase) && e.Status == "old") oldIsOld = true;
+                }
+            True(!keepIsOld, "コピー元にある（除外しているだけの）ファイルのコピーは古いコピーにしない");
+            True(oldIsOld, "コピー先にだけあるものは古いコピー");
+        }
+
+        private static void HiddenDirWithIncludes()
+        {
+            ExcludeRules r = new ExcludeRules();
+            r.ExcludeHidden = true; r.ExcludeSystem = true; r.Folders.Add("tmp"); r.Includes.Add("*.txt");
+            ExcludeMatcher m = new ExcludeMatcher(r);
+            True(m.ExcludeDir("秘密", "秘密", FileAttributes.Directory | FileAttributes.Hidden), "隠しフォルダには入らない");
+            True(m.ExcludeDir("System Volume Information", "System Volume Information", FileAttributes.Directory | FileAttributes.Hidden | FileAttributes.System), "システムのフォルダには入らない");
+            True(!m.ExcludeDir("tmp", "tmp", FileAttributes.Directory), "名前で除外したフォルダは、例外のために中を見る");
+            True(m.ExcludeFile(@"tmp\x.bin", "x.bin", 1, DateTime.UtcNow, FileAttributes.Normal), "中の例外でないファイルは除外");
+            True(!m.ExcludeFile(@"tmp\x.txt", "x.txt", 1, DateTime.UtcNow, FileAttributes.Normal), "中の例外はコピー");
+            // 実際の走査でも：隠しフォルダの中の（隠しでない）ファイルはコピーしない
+            Box b = new Box("T107"); b.Job.Dedup = DedupMode.Off;
+            b.Job.Exclude.ExcludeHidden = true; b.Job.Exclude.Includes.Add("*.txt");
+            b.W(@"h\a.txt", "a"); b.W("top.txt", "t");
+            File.SetAttributes(b.S("h"), FileAttributes.Directory | FileAttributes.Hidden);
+            b.Run();
+            True(b.DE("top.txt") && !b.DE(@"h\a.txt"), "隠しフォルダの中はコピーしない");
+        }
+
+        private static void SyncCacheRules()
+        {
+            SyncPair p = new SyncPair("T108");
+            p.JA.SyncRemoteCacheMinutes = 30;
+            WriteFile(Path.Combine(p.A, "a.txt"), "a", 600);
+            WriteFile(Path.Combine(p.A, "b.log"), "b", 600);
+            RunResult r1 = p.Run(p.JA, "pc1");
+            Eq(2, r1.Copied, "共有へ2件");
+            True(p.Run(p.JA, "pc1").RemoteScanSkipped, "設定が同じなら省略");
+            p.JA.Exclude.Extensions.Add(".log");   // 後から除外
+            RunResult r3 = p.Run(p.JA, "pc1");
+            True(!r3.RemoteScanSkipped, "除外を変えたら詳しく確認し直す");
+            Eq(0, SyncDeleteStore.Count(p.JA.Id), "除外しただけのファイルを削除の候補にしない");
+            True(File.Exists(Path.Combine(p.S, "b.log")), "共有フォルダはそのまま");
+            p.JA.Exclude.OnlyFolders.Add("docs");
+            True(!p.Run(p.JA, "pc1").RemoteScanSkipped, "対象を変えたときも確認し直す");
+            Eq(0, SyncDeleteStore.Count(p.JA.Id), "対象外にしただけのファイルも候補にしない");
+            SyncRemoteCache.Invalidate(p.JA.Id); SyncRemoteCache.Invalidate(p.JB.Id);
+        }
+
+        private static void SyncSharedProtected()
+        {
+            Box b = new Box("T109");
+            JobConfig sync = new JobConfig(); sync.Name = "同期"; sync.Sync = true;
+            sync.Source = Path.Combine(b.Root, "local"); Directory.CreateDirectory(sync.Source);
+            sync.Dest = b.D("shared");
+            b.App.Jobs.Add(sync);
+            JobFileScope scope = JobFileScope.Build(b.Job, b.App, CancellationToken.None);
+            True(scope.Protects(b.D(@"shared\他のPCのファイル.txt"), false), "共有フォルダの中は保護");
+            True(scope.Protects(b.Dst, true), "親フォルダごとの整理もしない");
+            True(!scope.Protects(b.D("自分のファイル.txt"), false), "それ以外は今までどおり");
+            b.App.Jobs.Remove(sync);
+        }
+
+        private static void LogResume()
+        {
+            Box b = new Box("T110");
+            string target = b.D("day.log");
+            Directory.CreateDirectory(Path.GetDirectoryName(target));
+            File.WriteAllText(target, "前の行\r\n");
+            string batch = Path.Combine(b.Root, "1.sending");
+            File.WriteAllText(batch, "送る行1\r\n送る行2\r\n");
+            LogDelivery.AppendOnce(batch, target, CancellationToken.None);
+            Eq("前の行\r\n送る行1\r\n送る行2\r\n", File.ReadAllText(target), "書き足した");
+            // 送れたが、手元のファイルを消す前に終了 → 次の送信で二重にしない
+            LogDelivery.AppendOnce(batch, target, CancellationToken.None);
+            Eq("前の行\r\n送る行1\r\n送る行2\r\n", File.ReadAllText(target), "再送でも二重にしない");
+            LogDelivery.Done(batch);
+            True(!File.Exists(batch) && !File.Exists(batch + LogDelivery.PosSuffix), "片付けた");
+            // 書き足しの途中で終了（途中までの行が残った）→ 取り消してから書き直す
+            string batch2 = Path.Combine(b.Root, "2.sending");
+            File.WriteAllText(batch2, "次の行\r\n");
+            long len = new FileInfo(target).Length;
+            File.WriteAllText(batch2 + LogDelivery.PosSuffix, len.ToString());
+            using (FileStream fs = new FileStream(target, FileMode.Append)) { byte[] half = Encoding.UTF8.GetBytes("次の"); fs.Write(half, 0, half.Length); }
+            LogDelivery.AppendOnce(batch2, target, CancellationToken.None);
+            Eq("前の行\r\n送る行1\r\n送る行2\r\n次の行\r\n", File.ReadAllText(target), "途中までの分を取り消して書き直す");
+            LogDelivery.Done(batch2);
+            // 片付けの途中で終了した記録を消す
+            File.WriteAllText(Path.Combine(b.Root, "3.sending" + LogDelivery.PosSuffix), "0");
+            LogDelivery.CleanOrphans(b.Root);
+            True(!File.Exists(Path.Combine(b.Root, "3.sending" + LogDelivery.PosSuffix)), "送信待ちのない記録を消す");
+        }
+
+        private static void InventoryLimit()
+        {
+            Box b = new Box("T111");
+            for (int i = 0; i < 5; i++) b.WD(i + ".txt", "abc", 600);
+            int keep = DestinationInventory.MaxEntries;
+            try
+            {
+                DestinationInventory.MaxEntries = 0;
+                DestinationInventory inv = new DestinationInventory();
+                DestEntry e = inv.Get(b.D("3.txt"));
+                True(e != null && e.Exists && e.Length == 3, "上限を超えたらファイルごとに確かめる");
+                True(inv.Get(b.D("none.txt")) == null, "ないファイル");
+                Eq(0, inv.EnumeratedDirectories, "一覧は取らない");
+                DestinationInventory.MaxEntries = 1000;
+                DestinationInventory inv2 = new DestinationInventory();
+                inv2.Get(b.D("0.txt"));
+                Eq(5, inv2.CachedEntries, "持っている件数");
+            }
+            finally { DestinationInventory.MaxEntries = keep; }
+        }
+
+        private static void StopTimeout()
+        {
+            Box b = new Box("T112");
+            JobRuntime rt = AppCore.GetRuntime(b.Job.Id);
+            rt.Idle.Reset();   // 止まらない処理（ネットワークの応答待ちなど）のつもり
+            int keep = AppCore.StopWaitSeconds;
+            AppCore.StopWaitSeconds = 1;
+            Stopwatch sw = Stopwatch.StartNew();
+            bool all;
+            try { all = AppCore.Stop(); }
+            finally
+            {
+                rt.Idle.Set();
+                AppCore.StopWaitSeconds = keep;
+                // 以降のテストのために「終了中」を戻す
+                typeof(AppCore).GetField("stopping", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static).SetValue(null, false);
+            }
+            True(!all, "止まらないものがあったと返す");
+            True(sw.ElapsedMilliseconds < 10000, "上限で待つのをやめる: " + sw.ElapsedMilliseconds + "ms");
         }
     }
 }

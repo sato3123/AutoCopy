@@ -130,6 +130,30 @@ jobs:
           Remove-Item Env:AUTOCOPY_FONTSCALE
           if (Test-Path Env:AUTOCOPY_SCREEN) { Remove-Item Env:AUTOCOPY_SCREEN }
 
+      - name: Check dual signing (SHA1 + SHA256) by build.ps1 with a temporary certificate
+        if: always()
+        shell: pwsh
+        run: |
+          $work = "$env:RUNNER_TEMP\signcheck"
+          if (Test-Path $work) { Remove-Item -Recurse -Force $work }
+          New-Item -ItemType Directory -Force $work | Out-Null
+          Copy-Item -Recurse src, build.ps1, app.ico, *.html, *.cer, *.bat -Destination $work
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=signing check' -CertStoreLocation Cert:\CurrentUser\My
+          $pass = [Guid]::NewGuid().ToString('N')
+          $pfx = "$env:RUNNER_TEMP\signcheck.pfx"
+          Export-PfxCertificate -Cert $cert -FilePath $pfx -Password (ConvertTo-SecureString $pass -AsPlainText -Force) | Out-Null
+          Export-Certificate -Cert $cert -FilePath "$env:RUNNER_TEMP\signcheck.cer" | Out-Null
+          Import-Certificate -FilePath "$env:RUNNER_TEMP\signcheck.cer" -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          $env:AUTOCOPY_SIGN_PFX = $pfx; $env:AUTOCOPY_SIGN_PASS = $pass
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$work\build.ps1" | Tee-Object -FilePath sign-console.txt
+          if ($LASTEXITCODE -ne 0) { throw 'build.ps1 signing failed' }
+          $signtool = @(Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe | Where-Object { $_.FullName -match '\\x64\\' } | Sort-Object FullName -Descending)[0].FullName
+          $v = & $signtool verify /pa /all /v "$work\dist\AutoCopy.exe" 2>&1 | Out-String
+          $v | Out-File -Append sign-console.txt
+          $v -split "`n" | Select-String 'Hash of file|Signature Index|Number of'
+          if ($v -notmatch 'Hash of file \(sha1\)' -or $v -notmatch 'Hash of file \(sha256\)') { throw 'Dual signature (SHA1 + SHA256) not found' }
+          Remove-Item Cert:\LocalMachine\Root\$($cert.Thumbprint), Cert:\CurrentUser\My\$($cert.Thumbprint) -ErrorAction SilentlyContinue
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -98,7 +98,9 @@ namespace AutoCopy
             if (!Directory.Exists(PathUtil.Long(dst))) { Save(res); return res; }
 
             ScanResult ds = Scanner.Scan(dst, true, null, true, ct);
-            ScanResult ss = Scanner.Scan(src, job.IncludeSubdirs, new ExcludeMatcher(job.Exclude), false, ct);
+            // コピー元は除外ルールなしで調べる：除外しているだけでコピー元に今もあるファイルの既存コピーを
+            // 「コピー元にない（古いコピー）」と間違えないため。対象外（対象の限定）は下で保護する
+            ScanResult ss = Scanner.Scan(src, job.IncludeSubdirs, null, false, ct);
             JobFileScope scope = JobFileScope.Build(job, app, ct);
             ExcludeMatcher scopeMatcher = new ExcludeMatcher(job.Exclude);
             List<string> protectedFiles = new List<string>();

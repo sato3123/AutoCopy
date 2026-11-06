@@ -584,7 +584,8 @@ namespace AutoCopy
                 if (pathsChanged)
                 {
                     // 前回までの記録は別のフォルダのものなので使わない（ミラーで誤って消さないため）
-                    Ui.Busy<int>(this, "ジョブの停止を待っています…", delegate { AppCore.StopJobAndWait(j.Id); return 0; });
+                    try { Ui.Busy<int>(this, "ジョブの停止を待っています…", delegate { AppCore.StopJobAndWait(j.Id); return 0; }); }
+                    catch (Exception ex) { Ui.Error(this, "設定を保存できませんでした：" + ex.Message); return; }
                 }
                 try { AppCore.Settings.Jobs[idx] = f.Result; AppCore.SaveSettings(); if (pathsChanged) AppCore.ForgetJobState(j.Id); }
                 finally { if (pathsChanged) AppCore.EndResolve(j); }
@@ -617,7 +618,8 @@ namespace AutoCopy
             string msg = "ジョブ「" + j.Name + "」を削除しますか？\nコピー元・コピー先のファイルはそのまま残ります。";
             if (j.Scope == JobScope.Dist) msg += "\n\n※ 配布設定のジョブです。新しい配布設定を読み込むと戻ります。";
             if (!Ui.Confirm(this, msg)) return;
-            Ui.Busy<int>(this, "ジョブの停止を待っています…", delegate { AppCore.StopJobAndWait(j.Id); return 0; });
+            try { Ui.Busy<int>(this, "ジョブの停止を待っています…", delegate { AppCore.StopJobAndWait(j.Id); return 0; }); }
+            catch (Exception ex) { Ui.Error(this, "ジョブを削除できませんでした：" + ex.Message); return; }
             try { AppCore.Settings.Jobs.Remove(j); AppCore.SaveSettings(); AppCore.ForgetJobState(j.Id); }
             finally { AppCore.EndResolve(j); }
             Logger.Info(j.Name, "ジョブを削除しました");

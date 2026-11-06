@@ -322,7 +322,11 @@ namespace AutoCopy
             List<JobConfig> reserved = new List<JobConfig>();
             try
             {
-            foreach (JobConfig j in AppCore.Settings.Jobs) { Ui.Busy<int>(this, "停止を待っています…", delegate { AppCore.StopJobAndWait(j.Id); return 0; }); reserved.Add(j); }
+            try
+            {
+                foreach (JobConfig j in AppCore.Settings.Jobs) { string id = j.Id; Ui.Busy<int>(this, "停止を待っています…", delegate { AppCore.StopJobAndWait(id); return 0; }); reserved.Add(j); }
+            }
+            catch (Exception ex) { Ui.Error(this, "フォルダ名を変えられませんでした：" + ex.Message); return; }
             List<string> errors = new List<string>();
             foreach (FolderMove m in moves)
             {

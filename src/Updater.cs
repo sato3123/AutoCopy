@@ -304,7 +304,10 @@ namespace AutoCopy
             return target;
         }
 
-        /// <summary>起動し直した後：前の版の exe が終わるのを待つ</summary>
+        /// <summary>
+        /// 手元に「.new」として用意したファイルを入れ替える（前のものは「.old」に残す）。
+        /// 1つでも失敗したら、入れ替えたものをすべて元に戻して例外にする（exe と関連ファイルが食い違わないように）。
+        /// </summary>
         public static void ReplaceStagedFiles(IList<string> targets)
         {
             List<string> moved = new List<string>(), installed = new List<string>();
@@ -336,6 +339,7 @@ namespace AutoCopy
             }
         }
 
+        /// <summary>起動し直した後：前の版の exe が終わるのを待つ</summary>
         public static void WaitForExit(int pid, int seconds)
         {
             try

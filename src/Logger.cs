@@ -323,10 +323,12 @@ namespace AutoCopy
                     {
                         foreach (string f in Directory.GetFiles(AppPaths.OutboxDir, "*.log"))
                         {
-                            string sending = f + "." + Guid.NewGuid().ToString("N") + ".sending";
+                            // 名前の順＝書いた順（同じ日の送信待ちが複数あっても、ログの行の順が入れ替わらない）。重ならないよう番号も付ける
+                            string sending = f + "." + DateTime.UtcNow.Ticks.ToString("D19") + "-" + Guid.NewGuid().ToString("N").Substring(0, 8) + ".sending";
                             File.Move(f, sending);
                         }
                     }
+                    LogDelivery.CleanOrphans(AppPaths.OutboxDir);
                     string[] list = Directory.GetFiles(AppPaths.OutboxDir, "*.sending");
                     if (list.Length == 0) return true;
                     Array.Sort(list, StringComparer.Ordinal);
@@ -335,7 +337,7 @@ namespace AutoCopy
                     {
                         string day = Path.GetFileName(f).Substring(0, 10);
                         LogDelivery.AppendOnce(f, PathUtil.Combine(target, day + ".log"), CancellationToken.None);
-                        File.Delete(f);
+                        LogDelivery.Done(f);
                     }
                     LastSendOk = DateTime.Now;
                     LastSendError = null;

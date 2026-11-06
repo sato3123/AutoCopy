@@ -122,9 +122,9 @@ namespace AutoCopy
         public bool ExcludeDir(string rel, string name, FileAttributes a)
         {
             if (onlyFolders.Count > 0 && !onlyFolders.Exists(delegate(string f) { return PathUtil.IsSameOrInsideRel(rel, f) || PathUtil.IsSameOrInsideRel(f, rel); })) return true;
-            bool ex = false;
-            if (hidden && (a & FileAttributes.Hidden) != 0) ex = true;
-            if (system && (a & FileAttributes.System) != 0) ex = true;
+            bool ex = false, byAttr = false;
+            if (hidden && (a & FileAttributes.Hidden) != 0) ex = byAttr = true;
+            if (system && (a & FileAttributes.System) != 0) ex = byAttr = true;
             if (!ex)
             {
                 foreach (string f in folderNames)
@@ -136,7 +136,11 @@ namespace AutoCopy
                     if (string.Equals(f, rel, StringComparison.OrdinalIgnoreCase)) { ex = true; break; }
             }
             if (!ex) return false;
-            if (includes.Count > 0) return false;
+            // 名前・パスで除外したフォルダ：例外（必ずコピー）が中のファイルに当てはまるかもしれないので中を見る
+            // （中のファイルは ExcludeFile でフォルダの除外を当てはめる）。
+            // 隠し・システムのフォルダ（System Volume Information など）は中を見ない：
+            // 中のファイルに隠しの印がなくてもコピーしてしまう・読めずに毎回「一部失敗」になるため
+            if (!byAttr && includes.Count > 0) return false;
             // 例外の対象フォルダを含むなら、中を見に行く
             foreach (string p in includeDirPrefixes)
             {

@@ -250,14 +250,37 @@ namespace AutoCopy
             timer = new Timer(delegate(object o) { Tick(); }, null, 3000, 15000);
         }
 
-        public static void Stop()
+        /// <summary>終了するときに、動いている処理が止まるのを待つ最長の時間</summary>
+        public static int StopWaitSeconds = 30;
+
+        /// <summary>
+        /// すべてのジョブを止める。止まるまで最長 StopWaitSeconds 秒待つ（NAS が応答しないときに終了・更新・シャットダウンが止まらないよう）。
+        /// 時間内に止まらなかったものは記録して先へ進む（上書きの途中で終わっても、次の起動で元のファイルに戻す）。全部止まったら true。
+        /// </summary>
+        public static bool Stop()
         {
             stopping = true;
             if (timer != null) timer.Dispose();
             List<JobRuntime> active;
             lock (sync) { active = new List<JobRuntime>(runtimes.Values); }
             foreach (JobRuntime rt in active) if (rt.Cts != null) rt.Cts.Cancel();
-            foreach (JobRuntime rt in active) rt.Idle.Wait();
+            DateTime limit = DateTime.UtcNow.AddSeconds(Math.Max(0, StopWaitSeconds));
+            Dictionary<JobRuntime, string> ids = new Dictionary<JobRuntime, string>();
+            lock (sync) { foreach (KeyValuePair<string, JobRuntime> kv in runtimes) ids[kv.Value] = kv.Key; }
+            List<string> names = new List<string>();
+            foreach (JobRuntime rt in active)
+            {
+                int left = (int)Math.Max(0, (limit - DateTime.UtcNow).TotalMilliseconds);
+                if (rt.Idle.Wait(left)) continue;
+                string id; ids.TryGetValue(rt, out id);
+                JobConfig j = id != null ? FindJob(id) : null;
+                names.Add(j != null ? j.Name : (id ?? "?"));
+            }
+            if (names.Count == 0) return true;
+            Logger.Error(null, StopWaitSeconds + "秒待っても止まらない処理があるため、待たずに終了します（ネットワークの応答待ちなど）: " + string.Join("、", names.ToArray())
+                + "。上書きの途中だったファイルは、次の起動で元に戻します");
+            Logger.Flush();
+            return false;
         }
 
         private static int ticking;

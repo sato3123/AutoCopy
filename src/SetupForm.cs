@@ -207,7 +207,8 @@ namespace AutoCopy
             List<JobConfig> reserved = new List<JobConfig>();
             try
             {
-                foreach (JobConfig j in s.Jobs.ToArray()) { AppCore.StopJobAndWait(j.Id); reserved.Add(j); }
+                // 動いているジョブが止まるのを待つ（画面が固まらないよう、待っている間は「お待ちください」を出す）
+                foreach (JobConfig j in s.Jobs.ToArray()) { string id = j.Id; Ui.Busy<int>(this, "ジョブの停止を待っています…", delegate { AppCore.StopJobAndWait(id); return 0; }); reserved.Add(j); }
                 if (payload != null)
                 {
                     // 前の版と比べ、コピー元・コピー先が変わったジョブは記録を使わない

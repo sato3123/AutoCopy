@@ -141,6 +141,7 @@ namespace AutoCopy
             public ScanResult Remote;
             public DateTime FullScanAt;
             public string Stamp;
+            public string Rules;   // 調べたときの除外・対象の設定（変わったら使わない）
 
             public ScanResult CopyRemote()
             {
@@ -182,20 +183,37 @@ namespace AutoCopy
             catch (Exception ex) { Logger.Error(null, "共有フォルダの変更の印を書けません: " + ex.Message); return null; }
         }
 
+        /// <summary>一覧の内容を左右する設定（除外・対象・サブフォルダ）。これが変わったら前回の一覧は使えない</summary>
+        public static string RulesOf(JobConfig job)
+        {
+            return (job.IncludeSubdirs ? "1|" : "0|") + Json.Serialize(job.Exclude ?? new ExcludeRules());
+        }
+
         public static Entry Get(string jobId, string dst)
+        {
+            return Get(jobId, dst, null);
+        }
+
+        public static Entry Get(string jobId, string dst, string rules)
         {
             lock (cache)
             {
                 Entry e;
-                if (cache.TryGetValue(jobId, out e) && string.Equals(e.Root, dst, StringComparison.OrdinalIgnoreCase)) return e;
+                if (cache.TryGetValue(jobId, out e) && string.Equals(e.Root, dst, StringComparison.OrdinalIgnoreCase)
+                    && (rules == null || string.Equals(e.Rules, rules, StringComparison.Ordinal))) return e;
                 return null;
             }
         }
 
         public static void Put(string jobId, string dst, ScanResult remote, string stamp)
         {
+            Put(jobId, dst, remote, stamp, null);
+        }
+
+        public static void Put(string jobId, string dst, ScanResult remote, string stamp, string rules)
+        {
             Entry e = new Entry();
-            e.Root = dst; e.Remote = remote; e.FullScanAt = DateTime.Now; e.Stamp = stamp;
+            e.Root = dst; e.Remote = remote; e.FullScanAt = DateTime.Now; e.Stamp = stamp; e.Rules = rules;
             lock (cache) cache[jobId] = e;
         }
 
