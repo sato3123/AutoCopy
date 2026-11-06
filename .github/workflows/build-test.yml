@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write   # 結果を ci-results ブランチへ置くため（push のときだけ。フォークからの pull request は読み取りのみ）
 
 jobs:
   build-test:
@@ -164,3 +164,26 @@ jobs:
             screenshots*/
             *console.txt
             dist/
+
+      - name: Publish results to ci-results branch (push only)
+        if: always() && github.event_name == 'push'
+        shell: pwsh
+        run: |
+          $dir = "$env:RUNNER_TEMP\results"
+          New-Item -ItemType Directory -Force "$dir\${{ matrix.os }}" | Out-Null
+          foreach ($f in 'build-console.txt','test-results.md','test-console.txt','integration-results.md','integration-console.txt','sign-console.txt') { if (Test-Path $f) { Copy-Item $f "$dir\${{ matrix.os }}\" } }
+          foreach ($x in 'screenshots', 'screenshots-125', 'screenshots-15', 'screenshots-small') { if (Test-Path $x) { Copy-Item -Recurse $x "$dir\${{ matrix.os }}\$x" } }
+          if (Test-Path dist) { Copy-Item -Recurse dist "$dir\${{ matrix.os }}\dist" }
+          git config --global user.name "ci"
+          git config --global user.email "ci@example.invalid"
+          $branch = "ci-results-${{ matrix.os }}"
+          git fetch origin $branch 2>$null
+          git worktree add -B $branch "$env:RUNNER_TEMP\wt" 2>$null
+          if (-not $?) { git worktree add --orphan -b $branch "$env:RUNNER_TEMP\wt" }
+          Set-Location "$env:RUNNER_TEMP\wt"
+          git rm -rq . 2>$null
+          Copy-Item -Recurse -Force "$dir\*" .
+          "${{ github.sha }}" | Out-File -Encoding utf8 commit.txt
+          git add -A
+          git commit -qm "results for ${{ github.sha }}"
+          git push -f origin "HEAD:$branch"
