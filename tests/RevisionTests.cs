@@ -301,18 +301,18 @@ namespace AutoCopy.Tests
             private static void DupKeepsExcluded()
         {
             Box b = new Box("T106"); b.Job.Dedup = DedupMode.Off;
-            b.W("keep.bak", "同じ内容"); b.W("a.txt", "a");
+            b.W("keep.dat", "同じ内容"); b.W("a.txt", "a");
             b.Run();
-            True(b.DE("keep.bak"), "最初はコピー");
-            b.Job.Exclude.Extensions.Add(".bak");   // 後から除外（コピー元にはまだある）
-            b.WD(@"old\keep.bak", "同じ内容", 600);  // コピー先にだけある同じ中身（本当に古いコピー）
+            True(b.DE("keep.dat"), "最初はコピー");
+            b.Job.Exclude.Extensions.Add(".dat");   // 後から除外（コピー元にはまだある）
+            b.WD(@"old\keep.dat", "同じ内容", 600);  // コピー先にだけある同じ中身（本当に古いコピー）
             DupResult r = DupChecker.Run(b.Job, b.App, b.State, CancellationToken.None);
             bool keepIsOld = false, oldIsOld = false;
             foreach (DupGroup g in r.Groups)
                 foreach (DupEntry e in g.Entries)
                 {
-                    if (string.Equals(e.Rel, "keep.bak", StringComparison.OrdinalIgnoreCase) && e.Status == "old") keepIsOld = true;
-                    if (string.Equals(e.Rel, @"old\keep.bak", StringComparison.OrdinalIgnoreCase) && e.Status == "old") oldIsOld = true;
+                    if (string.Equals(e.Rel, "keep.dat", StringComparison.OrdinalIgnoreCase) && e.Status == "old") keepIsOld = true;
+                    if (string.Equals(e.Rel, @"old\keep.dat", StringComparison.OrdinalIgnoreCase) && e.Status == "old") oldIsOld = true;
                 }
             True(!keepIsOld, "コピー元にある（除外しているだけの）ファイルのコピーは古いコピーにしない");
             True(oldIsOld, "コピー先にだけあるものは古いコピー");
