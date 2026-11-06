@@ -312,12 +312,14 @@ namespace AutoCopy
             TrashStore.Batch b = (TrashStore.Batch)lv.SelectedItems[0].Tag;
             if (!Ui.Confirm(this, b.FileCount + "件" + (b.EmptyFolderCount > 0 ? "（と空のフォルダ " + b.EmptyFolderCount + "件）" : "") + "を元の場所に戻します。よろしいですか？")) return;
             string dst = CopyEngine.ResolvedDest(job, AppCore.Settings);
+            string busy = AppCore.BeginResolve(job); if (busy != null) { Ui.Info(this, busy); return; }
             try
             {
                 int n = Ui.Busy<int>(this, "元に戻しています…", delegate() { return TrashStore.Restore(job.Name, dst, b); });
                 Ui.Info(this, n + "件を元に戻しました。");
             }
             catch (Exception ex) { Ui.Error(this, ex.Message); }
+            finally { AppCore.EndResolve(job); }
             Reload();
         }
     }
@@ -328,7 +330,10 @@ namespace AutoCopy
         private readonly ComboBox cbJob;
         private readonly ListView lv;
         private readonly Label summary, total;
-        private readonly Button bToText, bToCopy;
+        private readonly Button bToText, bToCopy, bSkip, bResetSkip;
+        private Button deleteButton;
+        private ComboBox actionMode;
+        private Label actionHelp;
         private DupResult current;
         private JobConfig currentJob;
         private bool filling;
@@ -345,7 +350,9 @@ namespace AutoCopy
             cbJob.SelectedIndexChanged += delegate { LoadResult(); };
             summary = Ui.L("");
             Ui.FitToForm(summary, 1000);
-            FlowLayoutPanel top = Ui.Column(Ui.Row(Ui.L("ジョブ"), cbJob, Ui.B("今すぐ再チェック", delegate { Recheck(); }),
+            actionMode = Ui.Combo(300, "大きい重複：保存方法を選ぶ", "古いコピー：削除済みへ移す");
+            actionMode.SelectedIndexChanged += delegate { LoadResult(); };
+            FlowLayoutPanel top = Ui.Column(Ui.Row(Ui.L("操作"), actionMode), Ui.Row(Ui.L("ジョブ"), cbJob, Ui.B("今すぐ再チェック", delegate { Recheck(); }),
                 Ui.B("フォルダを指定して探す…", delegate { if (TrayApp.Instance != null) TrayApp.Instance.ShowFolderDup(null); else using (FolderDupForm f = new FolderDupForm(null)) f.ShowDialog(this); })), summary);
             top.Dock = DockStyle.Top;
             top.Padding = new Padding(10, 8, 10, 4);
@@ -361,7 +368,7 @@ namespace AutoCopy
                 totalPending = true;
                 try { BeginInvoke(new Action(delegate() { totalPending = false; UpdateTotal(); })); } catch (Exception) { totalPending = false; }
             };
-            Panel checkBar = Ui.CheckAllBar(lv, "すべてにチェック／すべて外す（削除できるものだけ）", delegate(bool on)
+            Panel checkBar = Ui.CheckAllBar(lv, "操作できる行をすべて選択／選択を解除", delegate(bool on)
             {
                 // 1件ずつの確認を通さずに、まとめて決める（件数が多くても速く）：
                 // 削除できるものだけチェックし、同じ中身のグループでは少なくとも1つ残す
@@ -402,22 +409,25 @@ namespace AutoCopy
             total = Ui.L("");
             total.Font = Ui.Bold;
             Label note = Ui.Hint("チェックしたものを削除します。削除したものはコピー先の「_AutoCopy\\削除済み」に移り、保存日数の間は元に戻せます。各グループの「今の名前」は削除できません。");
-            bToText = Btn.MakeCaution(Ui.B("選んだ重複をテキストにする（コピーしない）", delegate { ResolveLarge("text"); }));
-            bToCopy = Ui.B("選んだ重複を普通にコピーする", delegate { ResolveLarge("copy"); });
+            bToText = Btn.MakeCaution(Ui.B("保管場所のテキストに置換…", delegate { ResolveLarge("text"); }));
+            bToCopy = Ui.B("実ファイルとして保存…", delegate { ResolveLarge("copy"); });
+            bSkip = Ui.B("確認済みにする…", delegate { ResolveLarge("skip"); });
+            bResetSkip = Ui.B("確認済みを解除…", delegate { ResetSkipped(); });
             Label lnote = Ui.Hint("大きいファイルの重複：チェックしたものを「テキストにする」と、コピー先には1つ目の保管場所を書いたテキストを置きます（コピー済みのものは削除済みへ移し、元に戻せます）。「普通にコピー」を選ぶと、今後もそのままコピーします。");
             Ui.FitToForm(lnote, 1000);
-            FlowLayoutPanel bottom = Ui.Column(total, note, Ui.Row(bToText, bToCopy), lnote);
+            actionHelp = Ui.Hint(""); Ui.FitToForm(actionHelp, 1000);
+            FlowLayoutPanel bottom = Ui.Column(total, actionHelp, Ui.Row(bResetSkip,
+                SafeBtn(Ui.B("削除済みから復元…", delegate { if (currentJob != null) using (TrashForm f = new TrashForm(currentJob)) f.ShowDialog(this); })),
+                Ui.B("削除済みフォルダを開く", delegate { if (currentJob != null) Ui.OpenFolder(PathUtil.Combine(PathUtil.Combine(CopyEngine.ResolvedDest(currentJob, AppCore.Settings), AppPaths.DestMetaFolder), "削除済み")); })));
             bottom.Dock = DockStyle.Bottom;
             bottom.Padding = new Padding(12, 6, 12, 6);
 
-            Button del = Btn.MakeDanger(Ui.B("選んだものを削除…", delegate { DeleteChecked(); }));
+            Button del = deleteButton = Btn.MakeDanger(Ui.B("削除済みへ移す…", delegate { DeleteChecked(); }));
             Controls.Add(lv);
             Controls.Add(checkBar);
             Controls.Add(top);
             Controls.Add(bottom);
-            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(), del, Btn.Gap(),
-                SafeBtn(Ui.B("元に戻す…", delegate { if (currentJob != null) using (TrashForm f = new TrashForm(currentJob)) f.ShowDialog(this); })),
-                Ui.B("削除済みフォルダを開く", delegate { if (currentJob != null) Ui.OpenFolder(PathUtil.Combine(PathUtil.Combine(CopyEngine.ResolvedDest(currentJob, AppCore.Settings), AppPaths.DestMetaFolder), "削除済み")); })));
+            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(), bSkip, bToCopy, bToText, del));
             FillJobs();
             VisibleChanged += delegate { if (Visible) MarkSeen(); };
         }
@@ -447,6 +457,8 @@ namespace AutoCopy
             LoadResult();
         }
 
+        public void SelectActionMode(bool large) { actionMode.SelectedIndex = large ? 0 : 1; }
+
         private void LoadResult()
         {
             int i = cbJob.SelectedIndex;
@@ -458,7 +470,11 @@ namespace AutoCopy
             lv.BeginUpdate();
             lv.Items.Clear();
             lv.Groups.Clear();
-            int largeCount = AddLargeGroups();
+            bool largeMode = actionMode.SelectedIndex == 0;
+            bSkip.Visible = bResetSkip.Visible = bToText.Visible = bToCopy.Visible = largeMode; deleteButton.Visible = !largeMode;
+            actionHelp.Text = largeMode ? "行を選んで操作します。「確認済み」は今のファイルを変更せず、以後の確認を省略します。通常コピーは続け、内容が変わると再確認します。"
+                : "①古いコピーにチェック → ②削除済みへ移す。保存期間内は「元に戻す」から復元できます。";
+            int largeCount = largeMode ? AddLargeGroups() : 0;
             if (current == null)
             {
                 summary.Text = "まだ重複チェックをしていません。" + (largeCount > 0 ? "（大きいファイルの重複 " + largeCount + "件）" : "");
@@ -472,6 +488,7 @@ namespace AutoCopy
                 foreach (DupGroup g in current.Groups) allRows += g.Entries.Count;
                 foreach (DupGroup g in current.Groups)
                 {
+                    if (largeMode) continue;
                     // 件数がとても多いときは、表示する行数を抑える（画面が固まったり落ちたりしないように）
                     if (rows >= MaxRows) { hiddenGroups++; continue; }
                     rows += g.Entries.Count;
@@ -563,11 +580,14 @@ namespace AutoCopy
             if (sel.Count == 0) { Ui.Info(this, "大きいファイルの重複の行にチェックを入れてください。"); return; }
             long bytes = 0; int copied = 0;
             foreach (DedupPendingItem p in sel) if (p.Copied) { bytes += p.Size; copied++; }
-            string msg = action == "text"
+            string msg = action == "skip" ? sel.Count + "件を確認済みにします。\n現在のファイルは変更しません。通常コピーは継続し、同じ内容の重複は今後確認しません。\n内容が変わった場合は再確認します。「確認済みを解除」で戻せます。"
+                : action == "text"
                 ? sel.Count + "件をテキストにします（コピー先には1つ目の保管場所を書いたテキストを置きます）。" + (copied > 0 ? "\nコピー済みの " + copied + "件（" + Fmt.Size(bytes) + "）は「_AutoCopy\\削除済み」へ移します（元に戻せます）。" : "") + "\nよろしいですか？"
                 : sel.Count + "件を普通にコピーします（今後もこのままコピーします）。よろしいですか？";
             if (!Ui.Confirm(this, msg)) return;
             JobConfig job = currentJob;
+            string busy = AppCore.BeginResolve(job); if (busy != null) { Ui.Info(this, busy); return; }
+            try {
             List<string> errs = Ui.Busy<List<string>>(this, "処理しています…", delegate()
             {
                 List<string> e = new List<string>();
@@ -583,6 +603,17 @@ namespace AutoCopy
             AppCore.RaiseChanged();
             LoadResult();
             if (errs.Count > 0) Ui.Error(this, "できなかったものがあります：\n" + string.Join("\n", errs.ToArray()));
+            } finally { AppCore.EndResolve(job); }
+        }
+
+        private void ResetSkipped()
+        {
+            if (currentJob == null || !Ui.Confirm(this, "このジョブの「確認済み」をすべて解除します。次回の重複チェックから再び確認対象になります。")) return;
+            JobConfig job = currentJob;
+            string busy = AppCore.BeginResolve(job); if (busy != null) { Ui.Info(this, busy); return; }
+            try { LargeDup.ResetSkipped(job.Id); LoadResult(); AppCore.RaiseChanged(); }
+            catch (Exception ex) { Ui.Error(this, ex.Message); }
+            finally { AppCore.EndResolve(job); }
         }
 
         private void OnItemCheck(object sender, ItemCheckEventArgs e)
@@ -726,7 +757,10 @@ namespace AutoCopy
                 if (d == null) { if (it.Tag is DedupPendingItem) large++; continue; }
                 n += Math.Max(1, d.FileCount); bytes += d.Size;
             }
-            total.Text = "削除するもの：" + Fmt.Count(n) + "件・" + Fmt.Size(bytes) + (large > 0 ? "　／　大きいファイルの重複：" + large + "件を選択中" : "");
+            bSkip.Enabled = bToCopy.Enabled = bToText.Enabled = large > 0;
+            deleteButton.Enabled = n > 0;
+            total.Text = actionMode.SelectedIndex == 0 ? "大きいファイルの重複：" + large + "件を選択中"
+                : "削除済みへ移すもの：" + Fmt.Count(n) + "件・" + Fmt.Size(bytes);
         }
 
         private void Recheck()
@@ -764,13 +798,14 @@ namespace AutoCopy
             string busy = AppCore.BeginResolve(job);
             if (busy != null) { Ui.Info(this, busy); return; }
             List<string> skipped = new List<string>();
+            List<DupEntry> completed = new List<DupEntry>(); List<string> errors = new List<string>();
             DupResult cur = current;
             try
             {
                 int done = Ui.Busy<int>(this, "中身を確かめて削除しています…", delegate()
                 {
                     List<DupEntry> ok = DupChecker.VerifyBeforeDelete(job, AppCore.Settings, cur, sel, skipped);
-                    int r = DupChecker.DeleteSelected(job, AppCore.Settings, AppCore.GetState(job.Id), ok);
+                    int r = DupChecker.DeleteSelected(job, AppCore.Settings, AppCore.GetState(job.Id), ok, completed, errors);
                     AppCore.SaveState(job.Id);
                     return r;
                 });
@@ -781,10 +816,11 @@ namespace AutoCopy
                     Ui.Info(this, skipped.Count + "件は、今の名前のファイルと中身が同じでなかったため、削除しませんでした。");
                 }
                 // 結果から消す
-                foreach (DupGroup g in current.Groups) g.Entries.RemoveAll(delegate(DupEntry x) { return sel.Contains(x); });
+                foreach (DupGroup g in current.Groups) g.Entries.RemoveAll(delegate(DupEntry x) { return completed.Contains(x); });
                 current.Groups.RemoveAll(delegate(DupGroup g) { return g.Entries.Count < 2 && g.Kind != "orphan" && g.Kind != "empty" || g.Entries.Count == 0; });
                 try { Json.Save(DupChecker.ResultPath(job.Id), current); } catch (Exception ex) { Logger.Error(job.Name, "重複チェックの結果を保存できません: " + ex.Message); }
-                Ui.Info(this, Fmt.Count(done) + "件を削除しました（削除済みフォルダへ移動）。");
+                Ui.Info(this, Fmt.Count(done) + "件を削除済みへ移動しました。");
+                if (errors.Count > 0) Ui.Error(this, "失敗した項目は一覧に残しました。\n" + string.Join("\n", errors.ToArray()));
             }
             catch (Exception ex) { Ui.Error(this, ex.Message); }
             finally { AppCore.EndResolve(job); }

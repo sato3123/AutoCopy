@@ -3,10 +3,11 @@ name: build-and-test
 on:
   push:
     branches-ignore: [release]
+  pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build-test:
@@ -62,11 +63,12 @@ jobs:
         shell: pwsh
         run: |
           $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
-          $core = 'Models','Util','Native','NetAccess','SafeFs','StateStore','Exclude','Scanner','Progress','CopyEngine','DupChecker','LargeDup','Usage','Updater','Logger','Distribution','SystemIntegration','AppCore','Selection','AssemblyInfo' | ForEach-Object { "src\$_.cs" }
+          $sources = @(Get-ChildItem src -Filter '*.cs' | ForEach-Object FullName)
+          $tests = @(Get-ChildItem tests -Filter '*.cs' | ForEach-Object FullName)
           New-Item -ItemType Directory -Force test | Out-Null
-          & $csc /nologo /target:exe /platform:anycpu /codepage:65001 /out:test\AutoCopyTests.exe `
+          & $csc /nologo /target:exe /main:AutoCopy.Tests.TestMain /platform:anycpu /codepage:65001 /out:test\AutoCopyTests.exe `
             /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Runtime.Serialization.dll /r:System.Xml.dll /r:System.Security.dll `
-            @core tests\Tests.cs
+            @sources @tests
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Prepare SMB share with a separate user
@@ -108,6 +110,7 @@ jobs:
           if (Test-Path screenshots\progress.txt) { "progress: " + (Get-Content -Encoding utf8 screenshots\progress.txt) }
           if (Test-Path screenshots\timing.txt) { Get-Content -Encoding utf8 screenshots\timing.txt | Select-Object -Last 8 }
           Get-Content -Encoding utf8 screenshots\errors.txt
+          if ($p.ExitCode -ne 0 -or (Test-Path screenshots\timeout.txt)) { throw "Screenshot checks failed" }
 
       - name: Layout check at 125% / 150% text size (Windows 7 style DPI) and a small screen
         if: always()
@@ -118,10 +121,11 @@ jobs:
             $dir = if ($scr) { "screenshots-small" } else { "screenshots-" + ($sc -replace '\.', '') }
             $env:AUTOCOPY_HOME = "$env:RUNNER_TEMP\shots-home-$sc-$scr"
             $env:AUTOCOPY_FONTSCALE = $sc
-            if ($scr) { $env:AUTOCOPY_SCREEN = $scr } elseif (Test-Path Env:AUTOCOPY_SCREEN) { Remove-Item Env:AUTOCOPY_SCREEN }
+            $env:AUTOCOPY_SCREEN = if ($scr) { $scr } else { '1366x728' }
             $p = Start-Process -FilePath "dist\AutoCopy.exe" -ArgumentList '/screenshots', "`"$pwd\$dir`"" -PassThru
             if (-not $p.WaitForExit(420000)) { $p.Kill(); "timeout" | Out-File "$dir\timeout.txt" }
             "$cfg : " + (Get-Content -Encoding utf8 "$dir\layout-count.txt")
+            if ($p.ExitCode -ne 0 -or (Test-Path "$dir\timeout.txt")) { throw "Layout checks failed: $cfg" }
           }
           Remove-Item Env:AUTOCOPY_FONTSCALE
           if (Test-Path Env:AUTOCOPY_SCREEN) { Remove-Item Env:AUTOCOPY_SCREEN }
@@ -133,31 +137,6 @@ jobs:
           path: |
             test-results.md
             integration-results.md
-            screenshots/
+            screenshots*/
+            *console.txt
             dist/
-
-      - name: Publish results to ci-results branch
-        if: always()
-        shell: pwsh
-        run: |
-          $dir = "$env:RUNNER_TEMP\results"
-          New-Item -ItemType Directory -Force "$dir\${{ matrix.os }}" | Out-Null
-          foreach ($f in 'build-console.txt','test-results.md','test-console.txt','integration-results.md','integration-console.txt') { if (Test-Path $f) { Copy-Item $f "$dir\${{ matrix.os }}\" } }
-          if (Test-Path screenshots) { Copy-Item -Recurse screenshots "$dir\${{ matrix.os }}\screenshots" }
-          foreach ($x in 'screenshots-125', 'screenshots-15', 'screenshots-small') { if (Test-Path $x) { Copy-Item -Recurse $x "$dir\${{ matrix.os }}\$x" } }
-          if (Test-Path dist) { Copy-Item -Recurse dist "$dir\${{ matrix.os }}\dist" }
-          $h = "$env:AUTOCOPY_HOME"
-          Get-ChildItem -Recurse "$env:RUNNER_TEMP" -Filter "*.log" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -like '*\logs\*' } | Select-Object -First 5 | ForEach-Object { Copy-Item $_.FullName "$dir\${{ matrix.os }}\app-$($_.Directory.Parent.Parent.Name)-$($_.Name)" }
-          git config --global user.name "ci"
-          git config --global user.email "ci@example.invalid"
-          $branch = "ci-results-${{ matrix.os }}"
-          git fetch origin $branch 2>$null
-          git worktree add -B $branch "$env:RUNNER_TEMP\wt" 2>$null
-          if (-not $?) { git worktree add --orphan -b $branch "$env:RUNNER_TEMP\wt" }
-          Set-Location "$env:RUNNER_TEMP\wt"
-          git rm -rq . 2>$null
-          Copy-Item -Recurse -Force "$dir\*" .
-          "${{ github.sha }}" | Out-File -Encoding utf8 commit.txt
-          git add -A
-          git commit -qm "results for ${{ github.sha }}"
-          git push -f origin "HEAD:$branch"

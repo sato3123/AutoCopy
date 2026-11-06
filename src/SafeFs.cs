@@ -201,7 +201,7 @@ namespace AutoCopy
             return CopyIntoSync(from, toLocal, rel, mtimeUtc, backupRoot, ct, onBytes, null);
         }
 
-        public static byte[] CopyIntoSync(string from, string toLocal, string rel, DateTime mtimeUtc, string backupRoot, CancellationToken ct, Action<long> onBytes, DestExpect expect)
+        public static byte[] CopyIntoSync(string from, string toLocal, string rel, DateTime mtimeUtc, string backupRoot, CancellationToken ct, Action<long> onBytes, DestExpect expect, Action<long, long> onCommitted = null)
         {
             if (!IsInSyncRoot(toLocal))
             {
@@ -220,7 +220,7 @@ namespace AutoCopy
                 File.Copy(lto, lb, false);
                 if (!SameBytes(lto, lb)) { TryDelete(lb); throw new IOException("控えを正しく作れなかったため、取り込みを止めました: " + rel); }
             }
-            return CopyVerifiedAndCommit(from, toLocal, mtimeUtc, null, ct, onBytes, expect);
+            return CopyVerifiedAndCommit(from, toLocal, mtimeUtc, null, ct, onBytes, expect, onCommitted);
         }
 
         /// <summary>一時ファイルの名前（同じファイルへ同時に書いてもぶつからないよう、毎回違う名前にする）</summary>
@@ -241,7 +241,7 @@ namespace AutoCopy
         /// 3) 中止されたら、置き換える直前でも止める（コピー先は元のまま）
         /// 4) 置き換えは元のファイルを失わない方法で行う（失敗したら元のファイルに戻す）
         /// </summary>
-        private static byte[] CopyVerifiedAndCommit(string src, string dst, DateTime srcMtimeUtc, Throttle throttle, CancellationToken ct, Action<long> onBytes, DestExpect expect)
+        private static byte[] CopyVerifiedAndCommit(string src, string dst, DateTime srcMtimeUtc, Throttle throttle, CancellationToken ct, Action<long> onBytes, DestExpect expect, Action<long, long> onCommitted = null)
         {
             string ls = PathUtil.Long(src), ld = PathUtil.Long(dst);
             for (int attempt = 1; ; attempt++)
@@ -272,7 +272,7 @@ namespace AutoCopy
                         continue;
                     }
                     ct.ThrowIfCancellationRequested();   // 中止：置き換える前に止める（コピー先は元のまま）
-                    File.SetLastWriteTimeUtc(lt, srcMtimeUtc);
+                    File.SetLastWriteTimeUtc(lt, new DateTime(bm, DateTimeKind.Utc));
                     using (DestLock.Acquire(ld, ct))   // 同じコピー先へ同時に書かない（このPCの他のジョブ・他のPC）
                     {
                         if (expect != null)
@@ -280,9 +280,11 @@ namespace AutoCopy
                             string why = expect.Check(ld);
                             if (why != null) throw new DestChangedException(dst, why);
                         }
+                        ct.ThrowIfCancellationRequested();
                         Commit(lt, ld);
                     }
-                    try { File.SetLastWriteTimeUtc(ld, srcMtimeUtc); } catch (Exception ex) { Logger.Error(null, "更新日時を設定できません: " + PathUtil.Plain(dst) + "　" + ex.Message); }
+                    try { File.SetLastWriteTimeUtc(ld, new DateTime(bm, DateTimeKind.Utc)); } catch (Exception ex) { Logger.Error(null, "更新日時を設定できません: " + PathUtil.Plain(dst) + "　" + ex.Message); }
+                    if (onCommitted != null) onCommitted(copied, bm);
                     return hash;
                 }
                 catch
@@ -626,13 +628,13 @@ namespace AutoCopy
         }
 
         /// <summary>expect：置き換える直前に確かめるコピー先の状態（違えば DestChangedException。上書きしない）</summary>
-        public static byte[] CopyFile(string src, string dst, DateTime srcMtimeUtc, Throttle throttle, CancellationToken ct, Action<long> onBytes, DestExpect expect)
+        public static byte[] CopyFile(string src, string dst, DateTime srcMtimeUtc, Throttle throttle, CancellationToken ct, Action<long> onBytes, DestExpect expect, Action<long, long> onCommitted = null)
         {
             Guard(dst);
             Guard(dst + PartSuffix);
             string parent = Path.GetDirectoryName(PathUtil.Plain(dst));
             CreateDirectory(parent);
-            return CopyVerifiedAndCommit(src, dst, srcMtimeUtc, throttle, ct, onBytes, expect);
+            return CopyVerifiedAndCommit(src, dst, srcMtimeUtc, throttle, ct, onBytes, expect, onCommitted);
         }
     }
 
@@ -691,6 +693,7 @@ namespace AutoCopy
 
         public static IDisposable Acquire(string ld, CancellationToken ct)
         {
+            ct.ThrowIfCancellationRequested();
             string key = PathUtil.Plain(ld).TrimEnd('\\');
             Holder h;
             lock (held)

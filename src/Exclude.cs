@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -47,6 +47,8 @@ namespace AutoCopy
         private readonly List<Regex> includes = new List<Regex>();
         private readonly List<string> includeDirPrefixes = new List<string>();
         private readonly long maxSize;
+        private readonly List<string> onlyFolders = new List<string>();
+        private readonly HashSet<string> onlyExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private readonly bool zero, hidden, system;
         private readonly DateTime olderThanUtc;
         private readonly bool useOlder;
@@ -54,6 +56,8 @@ namespace AutoCopy
         public ExcludeMatcher(ExcludeRules r)
         {
             if (r == null) r = new ExcludeRules();
+            foreach (string f in r.OnlyFolders ?? new List<string>()) { string x = (f ?? "").Trim().Replace('/', '\\').Trim('\\'); if (x.Length > 0) onlyFolders.Add(x); }
+            foreach (string e in r.OnlyExtensions ?? new List<string>()) { string x = (e ?? "").Trim(); if (x.Length > 0) onlyExtensions.Add(x.StartsWith(".") ? x : "." + x); }
             foreach (string p in r.Presets)
                 foreach (string e in ExcludePresets.Extensions(p)) exts.Add(e);
             foreach (string e in r.Extensions)
@@ -101,6 +105,12 @@ namespace AutoCopy
             return new Regex(re, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
         }
 
+        public bool InScope(string rel)
+        {
+            if (onlyFolders.Count > 0 && !onlyFolders.Exists(delegate(string f) { return PathUtil.IsSameOrInsideRel(rel, f); })) return false;
+            return onlyExtensions.Count == 0 || onlyExtensions.Contains(Path.GetExtension(rel));
+        }
+
         private bool IsIncluded(string rel)
         {
             string name = PathUtil.FileName(rel);
@@ -111,6 +121,7 @@ namespace AutoCopy
 
         public bool ExcludeDir(string rel, string name, FileAttributes a)
         {
+            if (onlyFolders.Count > 0 && !onlyFolders.Exists(delegate(string f) { return PathUtil.IsSameOrInsideRel(rel, f) || PathUtil.IsSameOrInsideRel(f, rel); })) return true;
             bool ex = false;
             if (hidden && (a & FileAttributes.Hidden) != 0) ex = true;
             if (system && (a & FileAttributes.System) != 0) ex = true;
@@ -125,6 +136,7 @@ namespace AutoCopy
                     if (string.Equals(f, rel, StringComparison.OrdinalIgnoreCase)) { ex = true; break; }
             }
             if (!ex) return false;
+            if (includes.Count > 0) return false;
             // 例外の対象フォルダを含むなら、中を見に行く
             foreach (string p in includeDirPrefixes)
             {
@@ -135,6 +147,7 @@ namespace AutoCopy
 
         public bool ExcludeFile(string rel, string name, long size, DateTime mtimeUtc, FileAttributes a)
         {
+            if (!InScope(rel)) return true;
             if (IsIncluded(rel)) return false;
             if (hidden && (a & FileAttributes.Hidden) != 0) return true;
             if (system && (a & FileAttributes.System) != 0) return true;
@@ -159,6 +172,7 @@ namespace AutoCopy
         /// <summary>相対パスだけで判定（ミラー削除時：今は除外対象になったファイルを消さないため）</summary>
         public bool ExcludeByPathOnly(string rel)
         {
+            if (!InScope(rel)) return true;
             if (IsIncluded(rel)) return false;
             string name = PathUtil.FileName(rel);
             string ext = Path.GetExtension(name);

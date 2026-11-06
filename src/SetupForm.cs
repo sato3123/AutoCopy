@@ -201,10 +201,13 @@ namespace AutoCopy
             if (err != null) { Ui.Error(this, err); return; }
             if (mirrorPanel.Visible && !cMirrorAgree.Checked) { Ui.Error(this, "ミラーのジョブについて「内容を理解しました」にチェックを入れてください。"); return; }
 
-            AppSettings s = AppCore.Settings;
+            AppSettings s = Json.Deserialize<AppSettings>(Json.Serialize(AppCore.Settings));
+            List<string> changedPaths = new List<string>();
             int newDisabled = 0;
+            List<JobConfig> reserved = new List<JobConfig>();
             try
             {
+                foreach (JobConfig j in s.Jobs.ToArray()) { AppCore.StopJobAndWait(j.Id); reserved.Add(j); }
                 if (payload != null)
                 {
                     // 前の版と比べ、コピー元・コピー先が変わったジョブは記録を使わない
@@ -223,8 +226,7 @@ namespace AutoCopy
                         if (before.TryGetValue(j.Id, out o) &&
                             (!string.Equals(o.Source, j.Source, StringComparison.OrdinalIgnoreCase) || !string.Equals(o.Dest, j.Dest, StringComparison.OrdinalIgnoreCase)))
                         {
-                            AppCore.CancelJob(j.Id);
-                            AppCore.ForgetJobState(j.Id);
+                            changedPaths.Add(j.Id);
                         }
                     }
                 }
@@ -235,7 +237,9 @@ namespace AutoCopy
                 }
                 s.FolderName = folder;
                 s.AutoStart = cAuto.Checked;
+                AppCore.Settings = s;
                 AppCore.SaveSettings();
+                foreach (string id in changedPaths) AppCore.ForgetJobState(id);
 
                 // インストール先（%LOCALAPPDATA%\AutoCopy\bin）にコピーする。動いている本体は置き換えない。
                 string exe = AppPaths.ExePath;
@@ -273,6 +277,7 @@ namespace AutoCopy
             {
                 Ui.Error(this, "セットアップできませんでした：" + ex.Message);
             }
+            finally { foreach (JobConfig j in reserved) AppCore.EndResolve(j); }
         }
     }
 }

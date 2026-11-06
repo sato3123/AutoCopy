@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
@@ -78,6 +78,7 @@ namespace AutoCopy
                 {
                     foreach (FileSystemInfo fsi in entries)
                     {
+                        ct.ThrowIfCancellationRequested();
                         string name = fsi.Name;
                         string childRel = rel.Length == 0 ? name : rel + "\\" + name;
                         FileAttributes a = fsi.Attributes;
@@ -114,6 +115,7 @@ namespace AutoCopy
                         }
                     }
                 }
+                catch (OperationCanceledException) { throw; }
                 catch (Exception ex)
                 {
                     if (rel.Length == 0 && res.Files.Count == 0 && res.Dirs.Count == 0) throw;

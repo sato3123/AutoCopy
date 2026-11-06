@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
@@ -268,6 +268,10 @@ namespace AutoCopy
             if (string.IsNullOrEmpty(name)) return false;
             if (name.Trim().Length == 0) return false;
             if (name.IndexOfAny(InvalidNameChars) >= 0) return false;
+            foreach (char c in name) if (char.IsControl(c)) return false;
+            string stem = name.Split('.')[0].TrimEnd().ToUpperInvariant();
+            if (stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL"
+                || System.Text.RegularExpressions.Regex.IsMatch(stem, @"^(COM|LPT)[1-9]$")) return false;
             if (name.EndsWith(".") || name.EndsWith(" ")) return false;
             return true;
         }

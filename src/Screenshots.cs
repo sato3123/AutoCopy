@@ -42,6 +42,7 @@ namespace AutoCopy
             Capture("06_上書きの確認", delegate() { return new ConflictForm(); }, delegate(Form f) { CheckFirst(f); });
             Capture("07_ミラーの保留中の削除", delegate() { return new PendingDeleteForm(j1); }, null);
             Capture("08_重複チェック結果", delegate() { DupForm d = new DupForm(); d.SelectJob(j0.Id); return d; }, null);
+            Capture("08b_重複チェック結果_古いコピー", delegate() { DupForm d = new DupForm(); d.SelectJob(j0.Id); d.SelectActionMode(false); return d; }, null);
             Capture("09_元に戻す", delegate() { return new TrashForm(j0); }, null);
             Capture("10_ログ", delegate() { return new LogForm(); }, null);
             Capture("11_アプリ設定", delegate() { return new SettingsForm(); }, null);
@@ -111,6 +112,7 @@ namespace AutoCopy
             int ng = 0;
             foreach (KeyValuePair<string, List<string>> r in layout) ng += r.Value.Count;
             File.WriteAllText(Path.Combine(outDir, "layout-count.txt"), layout.Count + " " + ng);
+            Environment.ExitCode = errors.Count > 0 || ng > 0 ? 1 : 0;
         }
 
         private static void Prepare()
@@ -420,10 +422,11 @@ namespace AutoCopy
                 bool before = target.Checked;
                 Rectangle rc = target.GetBounds(ItemBoundsPortion.Label);
                 IntPtr lp = (IntPtr)(((rc.Top + rc.Height / 2) << 16) | ((rc.Left + 10) & 0xFFFF));
-                SendMessage(lv.Handle, 0x0201, (IntPtr)1, lp);   // WM_LBUTTONDOWN
-                SendMessage(lv.Handle, 0x0202, IntPtr.Zero, lp); // WM_LBUTTONUP
-                SendMessage(lv.Handle, 0x0203, (IntPtr)1, lp);   // WM_LBUTTONDBLCLK
-                SendMessage(lv.Handle, 0x0202, IntPtr.Zero, lp);
+                // 押下中のネイティブ待機でも解放メッセージを受け取れるよう、まとめてキューへ送る。
+                PostMessage(lv.Handle, 0x0201, (IntPtr)1, lp);   // WM_LBUTTONDOWN
+                PostMessage(lv.Handle, 0x0202, IntPtr.Zero, lp); // WM_LBUTTONUP
+                PostMessage(lv.Handle, 0x0203, (IntPtr)1, lp);   // WM_LBUTTONDBLCLK
+                PostMessage(lv.Handle, 0x0202, IntPtr.Zero, lp);
                 Pump(300);
                 bool same = target.Checked == before;
                 lines.Add("| 行のダブルクリックでチェックが変わらない | " + (same ? "OK" : "NG") + " | 前 " + before + " → 後 " + target.Checked + " |"); if (!same) ng++;
@@ -465,7 +468,7 @@ namespace AutoCopy
         }
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
-        private static extern IntPtr SendMessage(IntPtr hwnd, int msg, IntPtr wp, IntPtr lp);
+        private static extern bool PostMessage(IntPtr hwnd, int msg, IntPtr wp, IntPtr lp);
 
         /// <summary>設定画面：上の設定で、下の項目が操作できる・できないが正しく変わるか</summary>
         private static void CheckEnabled(JobConfig j0, JobConfig sync)

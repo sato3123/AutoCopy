@@ -264,6 +264,8 @@ namespace AutoCopy
             return s.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ');
         }
 
+        public static string LastWriteError;
+
         public static void Write(string job, string type, string detail, long size, double seconds)
         {
             DateTime now = DateTime.Now;
@@ -285,7 +287,7 @@ namespace AutoCopy
                         File.AppendAllText(Path.Combine(AppPaths.OutboxDir, day + ".log"), line, new UTF8Encoding(false));
                     }
                 }
-                catch (Exception) { }
+                catch (Exception ex) { LastWriteError = ex.Message; }
             }
             Action<LogLine> h = LineWritten;
             if (h != null)
@@ -321,7 +323,7 @@ namespace AutoCopy
                     {
                         foreach (string f in Directory.GetFiles(AppPaths.OutboxDir, "*.log"))
                         {
-                            string sending = f + "." + DateTime.Now.Ticks + ".sending";
+                            string sending = f + "." + Guid.NewGuid().ToString("N") + ".sending";
                             File.Move(f, sending);
                         }
                     }
@@ -332,8 +334,7 @@ namespace AutoCopy
                     foreach (string f in list)
                     {
                         string day = Path.GetFileName(f).Substring(0, 10);
-                        string text = File.ReadAllText(f, Encoding.UTF8);
-                        SafeFs.AppendText(PathUtil.Combine(target, day + ".log"), text);
+                        LogDelivery.AppendOnce(f, PathUtil.Combine(target, day + ".log"), CancellationToken.None);
                         File.Delete(f);
                     }
                     LastSendOk = DateTime.Now;
@@ -412,6 +413,11 @@ namespace AutoCopy
         /// <summary>ログを読む。allPcs なら保管先の全PC分。</summary>
         public static List<LogLine> Read(DateTime from, DateTime to, bool allPcs, out string note)
         {
+            return Read(from, to, allPcs, out note, CancellationToken.None);
+        }
+
+        public static List<LogLine> Read(DateTime from, DateTime to, bool allPcs, out string note, CancellationToken ct)
+        {
             note = null;
             List<LogLine> list = new List<LogLine>();
             List<string> dirs = new List<string>();
@@ -446,11 +452,13 @@ namespace AutoCopy
                             string line;
                             while ((line = r.ReadLine()) != null)
                             {
+                                ct.ThrowIfCancellationRequested();
                                 LogLine l = LogLine.Parse(line);
                                 if (l != null) list.Add(l);
                             }
                         }
                     }
+                    catch (OperationCanceledException) { throw; }
                     catch (Exception) { }
                 }
             }

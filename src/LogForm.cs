@@ -283,14 +283,17 @@ namespace AutoCopy
             List<PcStatus> statuses = null;
             try
             {
-                all = Ui.Busy<List<LogLine>>(this, "ログを読み込んでいます…", delegate()
+                bool stopped;
+                List<LogLine> loaded = Ui.BusyCancel<List<LogLine>>(this, "ログを読み込んでいます…", delegate(System.Threading.CancellationToken ct, BusyProgress progress)
                 {
                     string n;
-                    List<LogLine> r = Logger.Read(from, to, allPcs, out n);
+                    List<LogLine> r = Logger.Read(from, to, allPcs, out n, ct);
                     note = n;
                     if (allPcs) statuses = Logger.ReadAllStatus();
                     return r;
-                });
+                }, out stopped);
+                if (stopped) return;
+                all = loaded;
                 loadedFrom = from; loadedTo = to; loadedAllPcs = allPcs;
             }
             catch (Exception ex) { Ui.Error(this, ex.Message); return; }
@@ -319,7 +322,7 @@ namespace AutoCopy
                         it.SubItems.Add(st.ComputerName ?? "");
                         it.SubItems.Add(st.Updated ?? "");
                         it.SubItems.Add(j.Name ?? "");
-                        it.SubItems.Add(j.Result == "ok" ? "正常" : j.Result == "error" ? "エラー" : j.Result == "running" ? "実行中" : "");
+                        it.SubItems.Add(j.Result == "ok" ? "正常" : j.Result == "error" ? "エラー" : j.Result == "partial" ? "一部失敗" : j.Result == "canceled" ? "中止" : j.Result == "running" ? "実行中" : "");
                         it.SubItems.Add(j.Message ?? "");
                         it.SubItems[2].Tag = upKey;
                         it.Tag = new string[] { LogStats.PcLabel(st.FolderName, st.ComputerName), j.Name };

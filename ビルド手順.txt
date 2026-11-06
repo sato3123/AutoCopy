@@ -10,11 +10,15 @@
   1. .NET Framework 4.8 が入っている Windows PC を用意します（Windows 10/11 なら標準で入っています）。
      Visual Studio などの追加ソフトは不要です。Windows に付いている C# コンパイラを使います。
   2. このフォルダを PC にコピーし、build.bat をダブルクリックします。
-  3. 「ビルドが完了しました」と出たら、dist フォルダに次の3つができています。
+  3. エラーなく終了し SHA256 が表示されたら、dist フォルダに次のファイルができています。
        AutoCopy.exe / AutoCopy.exe.config / 操作説明書.html / 自動コピー_署名証明書.cer / 署名証明書を登録.bat
   4. dist フォルダの AutoCopy.exe を起動すると、初回セットアップが始まります。
 
-  ※ 日本語の Windows でビルドしてください（build.bat の文字コードが Shift-JIS のため）。
+  ※ build.bat は build.ps1 を実行します。ソースは UTF-8 で読み込みます。
+  ※ テストもビルドする場合: powershell -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Tests
+     実行: .\test\AutoCopyTests.exe test-results.md
+     AUTOCOPY_TEST_ROOT でテスト専用フォルダ、AUTOCOPY_TEST_FILTER=T105 などで対象を指定できます。
+     起動登録テストは CI 環境、SMB テストは AC_SHARE 等を設定した専用環境でのみ実行します。
   ※ AutoCopy.exe.config は AutoCopy.exe と同じフォルダに置いてください（長いパス対応の設定）。
 
 ■ デジタル署名と版
@@ -24,7 +28,7 @@
        set AUTOCOPY_SIGN_PFX=C:\安全な場所\自動コピー_署名用.pfx
        set AUTOCOPY_SIGN_PASS=（パスワード）
        build.bat
-    「署名しました：CN=自動コピー…」と出れば完了です。
+    署名状態が Valid でない場合はビルドを失敗させます。証明書を指定しなければ未署名版になります。
   ・署名なしの版は、署名付きで動いているPCの自動更新には使われません（安全のため）。
   ・自動コピー_署名証明書.cer と 署名証明書を登録.bat は、dist と配布フォルダに自動で入ります。
 

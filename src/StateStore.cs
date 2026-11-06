@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -100,6 +100,13 @@ namespace AutoCopy
             return empty;
         }
 
+        private static int ReadCount(BinaryReader r)
+        {
+            int n = r.ReadInt32();
+            if (n < 0 || n > 10000000 || n > r.BaseStream.Length - r.BaseStream.Position) throw new InvalidDataException("件数が不正です");
+            return n;
+        }
+
         private static JobState ReadFrom(string file, JobState s)
         {
             using (BinaryReader r = new BinaryReader(File.OpenRead(file), Encoding.UTF8))
@@ -110,9 +117,11 @@ namespace AutoCopy
                 s.LastRunTicks = r.ReadInt64();
                 s.LastDupCheckTicks = r.ReadInt64();
                 s.LastTrashPurgeTicks = r.ReadInt64();
+                if (s.LastRunTicks < 0 || s.LastRunTicks > DateTime.MaxValue.Ticks || s.LastDupCheckTicks < 0 || s.LastDupCheckTicks > DateTime.MaxValue.Ticks
+                    || s.LastTrashPurgeTicks < 0 || s.LastTrashPurgeTicks > DateTime.MaxValue.Ticks) throw new InvalidDataException("日時が不正です");
                 s.LastResult = r.ReadString();
                 s.LastMessage = r.ReadString();
-                int n = r.ReadInt32();
+                int n = ReadCount(r);
                 if (n < 0) throw new InvalidDataException("件数が正しくありません");
                 for (int i = 0; i < n; i++)
                 {
@@ -130,9 +139,9 @@ namespace AutoCopy
                     if ((flags & 8) != 0) f.CopiedAt = r.ReadInt64();
                     s.Files[rel] = f;
                 }
-                n = r.ReadInt32();
+                n = ReadCount(r);
                 for (int i = 0; i < n; i++) s.SkipForever.Add(r.ReadString());
-                n = r.ReadInt32();
+                n = ReadCount(r);
                 for (int i = 0; i < n; i++)
                 {
                     ConflictItem c = new ConflictItem();
@@ -142,7 +151,7 @@ namespace AutoCopy
                     c.Reason = r.ReadString(); c.Detected = r.ReadString();
                     s.Conflicts.Add(c);
                 }
-                n = r.ReadInt32();
+                n = ReadCount(r);
                 for (int i = 0; i < n; i++)
                 {
                     PendingDelete d = new PendingDelete();

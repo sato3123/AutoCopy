@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Runtime.Serialization;
 
@@ -238,6 +238,8 @@ namespace AutoCopy
         [DataMember] public bool ExcludeHidden;
         [DataMember] public bool ExcludeSystem;
         [DataMember] public List<string> Folders;       // フォルダ名 または 相対パス
+        [DataMember] public List<string> OnlyFolders = new List<string>();
+        [DataMember] public List<string> OnlyExtensions = new List<string>();
         [DataMember] public List<string> Includes;      // 例外（必ずコピー）"会議録画\*.mp4"
 
         public ExcludeRules()
@@ -257,6 +259,8 @@ namespace AutoCopy
             if (NamePatterns == null) NamePatterns = new List<string>();
             if (Folders == null) Folders = new List<string>();
             if (Includes == null) Includes = new List<string>();
+            if (OnlyFolders == null) OnlyFolders = new List<string>();
+            if (OnlyExtensions == null) OnlyExtensions = new List<string>();
         }
 
         public static ExcludeRules CreateDefault()

@@ -12,7 +12,7 @@ namespace AutoCopy.Tests
     /// 自動コピーの自動テスト。コピー処理・名前変更・ミラー・除外・元データ保護・重複チェック・配布設定・ログなど。
     /// どのテストでも、実行の前後でコピー元が1バイトも変わっていないことを自動で確かめる。
     /// </summary>
-    internal static class TestMain
+    internal static partial class TestMain
     {
         private static string baseDir;
         private static readonly List<string[]> results = new List<string[]>();
@@ -22,8 +22,7 @@ namespace AutoCopy.Tests
             AppContext.SetSwitch("Switch.System.IO.UseLegacyPathHandling", false);
             AppContext.SetSwitch("Switch.System.IO.BlockLongPaths", false);
             Console.OutputEncoding = Encoding.UTF8;
-            baseDir = Path.Combine(Path.GetTempPath(), "autocopy-tests");
-            if (Directory.Exists(baseDir)) Directory.Delete(PathUtil.Long(baseDir), true);
+            baseDir = Path.Combine(Environment.GetEnvironmentVariable("AUTOCOPY_TEST_ROOT") ?? Path.GetTempPath(), "autocopy-tests-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(baseDir);
             Environment.SetEnvironmentVariable("AUTOCOPY_HOME", Path.Combine(baseDir, "_home"));
 
@@ -112,9 +111,12 @@ namespace AutoCopy.Tests
             Add("T83", "配布用パスワードは12文字以上（前の版で作った短いパスワードの配布設定も読める）", T83_DistPassword);
             Add("T84", "同期：共有フォルダの確認を省略していても、上書きの直前に実際の状態を確かめる", T84_SyncCacheFresh);
 
+            RegisterRevisionTests();
             int ng = 0;
             foreach (TestCase t in cases)
             {
+                string filter = Environment.GetEnvironmentVariable("AUTOCOPY_TEST_FILTER");
+                if (!string.IsNullOrEmpty(filter) && !Array.Exists(filter.Split(','), delegate(string id) { return id == t.Id; })) continue;
                 Stopwatch sw = Stopwatch.StartNew();
                 string status, detail = "";
                 try
@@ -145,7 +147,8 @@ namespace AutoCopy.Tests
             string outFile = args.Length > 0 ? args[0] : "test-results.md";
             File.WriteAllText(outFile, md.ToString(), new UTF8Encoding(false));
             Console.WriteLine();
-            Console.WriteLine("結果: " + (cases.Count - ng) + " / " + cases.Count + " 成功（NG " + ng + "）");
+            int skipped = results.FindAll(delegate(string[] r) { return r[2] == "SKIP"; }).Count;
+            Console.WriteLine("結果: 実行 " + results.Count + " / 成功 " + (results.Count - ng - skipped) + " / SKIP " + skipped + " / NG " + ng);
             return ng;
         }
 
@@ -2707,21 +2710,27 @@ namespace AutoCopy.Tests
             Eq(0, SyncDeleteStore.Count(id), "保存できれば取り除ける");
             // 同時に変更しても、件数が壊れない
             List<Thread> ths = new List<Thread>();
+            List<Exception> threadErrors = new List<Exception>();
             for (int t = 0; t < 4; t++)
             {
                 int k = t;
                 Thread th = new Thread(delegate()
                 {
+                    try
+                    {
                     for (int n = 0; n < 20; n++)
                     {
                         List<SyncDeleteItem> l = new List<SyncDeleteItem>();
                         for (int m = 0; m <= (k + n) % 5; m++) { SyncDeleteItem x = new SyncDeleteItem(); x.Rel = "f" + m; x.Side = SyncDeleteItem.SideShared; l.Add(x); }
                         SyncDeleteStore.Replace(id, l);
                     }
+                    }
+                    catch (Exception ex) { lock (threadErrors) threadErrors.Add(ex); }
                 });
                 th.Start(); ths.Add(th);
             }
             foreach (Thread th in ths) th.Join();
+            if (threadErrors.Count > 0) throw new Exception("並行保存テストで失敗しました", threadErrors[0]);
             int mem = SyncDeleteStore.Count(id);
             SyncDeleteBook disk = Json.Load<SyncDeleteBook>(path);
             Eq(mem, disk.Items.Count, "覚えている内容と保存した内容が同じ");

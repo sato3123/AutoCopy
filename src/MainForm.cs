@@ -468,7 +468,7 @@ namespace AutoCopy
                     else if (rt.Running || rt.DupRunning) { result = rt.Phase + "…"; color = Ui.Accent; }
                     else if (rt.LastResult == "error") { result = "エラー　" + rt.LastMessage; color = Ui.Err; }
                     else if (rt.LastResult == "canceled") { result = "中断　" + rt.LastMessage; color = Ui.Quiet; }
-                    else if (rt.LastResult == "ok" && (rt.LastMessage ?? "").StartsWith(JobOutcome.Partial)) { result = rt.LastMessage; color = Ui.Warn; }
+                    else if (rt.LastResult == "partial" || (rt.LastResult == "ok" && (rt.LastMessage ?? "").StartsWith(JobOutcome.Partial))) { result = rt.LastMessage; color = Ui.Warn; }
                     else if (rt.LastResult == "ok") { result = "正常　" + rt.LastMessage; color = Ui.Ok; }
                     else result = "未実行";
                     if (!rt.Running && (rt.QueuedManual || rt.WaitingFor != null)) { result = "待機中（「" + rt.WaitingFor + "」が終わってから実行）　" + result; color = Ui.Accent; }
@@ -584,11 +584,10 @@ namespace AutoCopy
                 if (pathsChanged)
                 {
                     // 前回までの記録は別のフォルダのものなので使わない（ミラーで誤って消さないため）
-                    AppCore.CancelJob(j.Id);
-                    AppCore.ForgetJobState(j.Id);
+                    Ui.Busy<int>(this, "ジョブの停止を待っています…", delegate { AppCore.StopJobAndWait(j.Id); return 0; });
                 }
-                AppCore.Settings.Jobs[idx] = f.Result;
-                AppCore.SaveSettings();
+                try { AppCore.Settings.Jobs[idx] = f.Result; AppCore.SaveSettings(); if (pathsChanged) AppCore.ForgetJobState(j.Id); }
+                finally { if (pathsChanged) AppCore.EndResolve(j); }
             }
             RefreshView();
         }
@@ -618,10 +617,9 @@ namespace AutoCopy
             string msg = "ジョブ「" + j.Name + "」を削除しますか？\nコピー元・コピー先のファイルはそのまま残ります。";
             if (j.Scope == JobScope.Dist) msg += "\n\n※ 配布設定のジョブです。新しい配布設定を読み込むと戻ります。";
             if (!Ui.Confirm(this, msg)) return;
-            AppCore.CancelJob(j.Id);
-            AppCore.Settings.Jobs.Remove(j);
-            AppCore.SaveSettings();
-            AppCore.ForgetJobState(j.Id);
+            Ui.Busy<int>(this, "ジョブの停止を待っています…", delegate { AppCore.StopJobAndWait(j.Id); return 0; });
+            try { AppCore.Settings.Jobs.Remove(j); AppCore.SaveSettings(); AppCore.ForgetJobState(j.Id); }
+            finally { AppCore.EndResolve(j); }
             Logger.Info(j.Name, "ジョブを削除しました");
             RefreshView();
         }

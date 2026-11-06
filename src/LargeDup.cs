@@ -19,7 +19,7 @@ namespace AutoCopy
     {
         [DataMember] public string Rel;
         [DataMember] public string Hash;      // 選んだときの中身（変わったら選び直し）
-        [DataMember] public string Action;    // text = テキストにする / copy = 普通にコピー
+        [DataMember] public string Action;    // text / copy / skip（確認済み、通常コピーを継続）
         [DataMember] public string Decided;
     }
 
@@ -178,7 +178,7 @@ namespace AutoCopy
                     FileRecord rec;
                     byte[] h = null;
                     if (files != null && files.TryGetValue(rel, out rec) && rec.Hash != null && rec.Size == it.Size && rec.Mtime == it.Mtime) h = rec.Hash;
-                    if (h == null) h = CopyEngine.HashFile(PathUtil.Combine(src, rel));
+                    if (h == null) h = CopyEngine.HashFile(PathUtil.Combine(src, rel), ct);
                     if (h == null) continue;
                     if (hashes != null) hashes[rel] = h;
                     string k = Hex(h);
@@ -212,7 +212,7 @@ namespace AutoCopy
         {
             ScanItem ia, ib;
             scan.Files.TryGetValue(a, out ia); scan.Files.TryGetValue(b, out ib);
-            string key = a + "|" + b + "|" + (ia != null ? ia.Size + ":" + ia.Mtime : "") + "|" + (ib != null ? ib.Mtime.ToString() : "");
+            string key = PathUtil.Normalize(src) + "|" + a + "|" + b + "|" + (ia != null ? ia.Size + ":" + ia.Mtime : "") + "|" + (ib != null ? ib.Mtime.ToString() : "");
             lock (verified) { bool v; if (verified.TryGetValue(key, out v)) return v; }
             bool same;
             try { same = SafeFs.SameBytes(PathUtil.Combine(src, a), PathUtil.Combine(src, b)); }
@@ -291,6 +291,7 @@ namespace AutoCopy
         /// </summary>
         public static string Resolve(JobConfig job, AppSettings app, JobState state, DedupPendingItem item, string action)
         {
+            if (action != "text" && action != "copy" && action != "skip") throw new ArgumentException("不明な操作です", "action");
             string src = CopyEngine.ResolvedSource(job, app), dst = CopyEngine.ResolvedDest(job, app);
             DedupBook book = DedupStore.Get(job.Id);
             string s = PathUtil.Combine(src, item.Rel), d = PathUtil.Combine(dst, item.Rel);
@@ -301,10 +302,35 @@ namespace AutoCopy
                 DedupStore.Save(job.Id);
                 return item.Rel + "：コピー元にもうありません";
             }
+            if (action == "skip")
+            {
+                string hash = Hex(CopyEngine.HashFile(s));
+                fi.Refresh();
+                if (hash == null || hash != item.Hash || !fi.Exists || fi.Length != item.Size || fi.LastWriteTimeUtc.Ticks != item.Mtime)
+                    return item.Rel + "：検索後に内容が変わったため確認済みにしません。再チェックしてください。";
+                lock (book)
+                {
+                    List<DedupDecision> oldDecisions = new List<DedupDecision>(book.Decisions);
+                    List<DedupPendingItem> oldPending = new List<DedupPendingItem>(book.Pending);
+                    book.Decide(item.Rel, item.Hash, "skip");
+                    try { DedupStore.Save(job.Id); }
+                    catch { book.Decisions = oldDecisions; book.Pending = oldPending; throw; }
+                }
+                return null;
+            }
             NetAccess.Ensure(dst, job.RetryCount, job.RetryIntervalSeconds, CancellationToken.None, null);
             string ph = d + AppPaths.PlaceholderSuffix;
             if (action == "text")
             {
+                string target = PathUtil.Combine(dst, item.Target);
+                if (fi.Length != item.Size || fi.LastWriteTimeUtc.Ticks != item.Mtime
+                    || !SafeFs.SameBytes(s, PathUtil.Combine(src, item.Target))
+                    || !File.Exists(PathUtil.Long(target)) || !SafeFs.SameBytes(s, target))
+                    return item.Rel + "：検索後に内容が変わったため処理しません。再チェックしてください。";
+                if (File.Exists(PathUtil.Long(d)) && !SafeFs.SameBytes(s, d))
+                    return item.Rel + "：コピー先の内容が変わったため処理しません。";
+                JobFileScope scope = JobFileScope.Build(job, app, CancellationToken.None);
+                if (scope.Protects(d, false)) return item.Rel + "：別ジョブが使用するファイルのためテキストに置換しません。";
                 if (!File.Exists(PathUtil.Long(PathUtil.Combine(dst, item.Target))))
                     return item.Rel + "：中身が同じ「" + item.Target + "」がまだコピー先にないため、テキストにできません（コピーの後でもう一度選んでください）";
                 if (File.Exists(PathUtil.Long(d)))
@@ -334,6 +360,18 @@ namespace AutoCopy
             lock (book) book.Decide(item.Rel, item.Hash, action);
             DedupStore.Save(job.Id);
             return null;
+        }
+
+        public static void ResetSkipped(string jobId)
+        {
+            DedupBook book = DedupStore.Get(jobId);
+            lock (book)
+            {
+                List<DedupDecision> old = new List<DedupDecision>(book.Decisions);
+                book.Decisions.RemoveAll(delegate(DedupDecision d) { return d.Action == "skip"; });
+                try { DedupStore.Save(jobId); }
+                catch { book.Decisions = old; throw; }
+            }
         }
     }
 }

@@ -98,7 +98,14 @@ namespace AutoCopy
             if (!Directory.Exists(PathUtil.Long(dst))) { Save(res); return res; }
 
             ScanResult ds = Scanner.Scan(dst, true, null, true, ct);
-            ScanResult ss = Scanner.Scan(src, job.IncludeSubdirs, null, false, ct);
+            ScanResult ss = Scanner.Scan(src, job.IncludeSubdirs, new ExcludeMatcher(job.Exclude), false, ct);
+            JobFileScope scope = JobFileScope.Build(job, app, ct);
+            ExcludeMatcher scopeMatcher = new ExcludeMatcher(job.Exclude);
+            List<string> protectedFiles = new List<string>();
+            foreach (string rel in ds.Files.Keys)
+                if (scope.Protects(PathUtil.Combine(dst, rel), false) || !scopeMatcher.InScope(rel)) protectedFiles.Add(rel);
+            foreach (string rel in protectedFiles) ds.Files.Remove(rel);
+            ds.Dirs.RemoveWhere(delegate(string rel) { return scope.Protects(PathUtil.Combine(dst, rel), true); });
 
             HashSet<string> orphans = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (string k in ds.Files.Keys)
@@ -156,7 +163,7 @@ namespace AutoCopy
                         if (!orphans.Contains(r) && recs.TryGetValue(r, out rec) && rec.Hash != null && rec.Size == ds.Files[r].Size
                             && (rec.DestMtime == 0 || Math.Abs(rec.DestMtime - ds.Files[r].Mtime) < TimeSpan.TicksPerSecond * 3))
                             h = BitConverter.ToString(rec.Hash);
-                        if (h == null) h = FullHash(PathUtil.Combine(dst, r));
+                        if (h == null) h = FullHash(PathUtil.Combine(dst, r), ct);
                         if (h == null) continue;
                         string key = g.Key + ":" + h;
                         List<string> l;
@@ -214,6 +221,7 @@ namespace AutoCopy
                 DirAgg ao, ac;
                 if (!agg.TryGetValue(po, out ao)) continue;
                 if (!agg.TryGetValue(pc, out ac)) ac = new DirAgg();
+                if (scope.Protects(PathUtil.Combine(dst, po), true)) continue;
                 if (!ao.AllOrphan || ao.Count < 2 || fg.Value.Count * 10 < ao.Count * 9) continue;
                 DupGroup g = new DupGroup();
                 g.Kind = "folder";
@@ -513,16 +521,13 @@ namespace AutoCopy
             catch (Exception) { return null; }
         }
 
-        internal static string FullHash(string path)
+        internal static string FullHash(string path, CancellationToken token = default(CancellationToken))
         {
             try
             {
-                using (FileStream fs = new FileStream(PathUtil.Long(path), FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 1024 * 1024, FileOptions.SequentialScan))
-                using (MD5 md5 = MD5.Create())
-                {
-                    return BitConverter.ToString(md5.ComputeHash(fs));
-                }
+                return BitConverter.ToString(SafeFs.HashOf(PathUtil.Long(path), token));
             }
+            catch (OperationCanceledException) { throw; }
             catch (Exception) { return null; }
         }
 
@@ -534,16 +539,18 @@ namespace AutoCopy
         {
             string dst = CopyEngine.ResolvedDest(job, app);
             List<DupEntry> ok = new List<DupEntry>();
+            JobFileScope scope = JobFileScope.Build(job, app, CancellationToken.None);
             foreach (DupEntry e in sel)
             {
-                if (e.Status != "old" || e.IsFolder) { ok.Add(e); continue; }
+                if (scope.Protects(PathUtil.Combine(dst, e.Rel), e.IsFolder)) { skipped.Add(e.Rel); continue; }
+                if (e.Status != "old") { ok.Add(e); continue; }
                 DupGroup g = r != null ? r.Groups.Find(delegate(DupGroup x) { return x.Entries.Contains(e); }) : null;
                 bool same = false;
                 if (g != null)
                     foreach (DupEntry c in g.Entries)
                     {
-                        if (c.Status != "current" || c.Size != e.Size) continue;
-                        try { if (SafeFs.SameBytes(PathUtil.Combine(dst, e.Rel), PathUtil.Combine(dst, c.Rel))) { same = true; break; } }
+                        if (c.Status != "current" || (!e.IsFolder && c.Size != e.Size)) continue;
+                        try { if (e.IsFolder ? SameTree(PathUtil.Combine(dst, e.Rel), PathUtil.Combine(dst, c.Rel)) : SafeFs.SameBytes(PathUtil.Combine(dst, e.Rel), PathUtil.Combine(dst, c.Rel))) { same = true; break; } }
                         catch (Exception ex) { Logger.Error(job.Name, "中身を比べられません: " + e.Rel + "　" + ex.Message); }
                     }
                 if (same) ok.Add(e);
@@ -559,6 +566,21 @@ namespace AutoCopy
         /// <summary>選ばれたものをコピー先の「削除済み」へ移す</summary>
         public static int DeleteSelected(JobConfig job, AppSettings app, JobState state, List<DupEntry> entries)
         {
+            return DeleteSelected(job, app, state, entries, new List<DupEntry>(), new List<string>());
+        }
+
+        public static bool SameTree(string a, string b)
+        {
+            ScanResult sa = Scanner.Scan(a, true, null, false, CancellationToken.None);
+            ScanResult sb = Scanner.Scan(b, true, null, false, CancellationToken.None);
+            if (sa.FailedDirs.Count > 0 || sb.FailedDirs.Count > 0) return false;
+            foreach (string rel in sa.Files.Keys)
+                if (!sb.Files.ContainsKey(rel) || !SafeFs.SameBytes(PathUtil.Combine(a, rel), PathUtil.Combine(b, rel))) return false;
+            return true;
+        }
+
+        public static int DeleteSelected(JobConfig job, AppSettings app, JobState state, List<DupEntry> entries, List<DupEntry> completed, List<string> errors)
+        {
             string dst = CopyEngine.ResolvedDest(job, app);
             NetAccess.Ensure(dst, job.RetryCount, job.RetryIntervalSeconds, CancellationToken.None, null);
             string batch = DateTime.Now.ToString("yyyyMMdd-HHmmss");
@@ -567,7 +589,7 @@ namespace AutoCopy
             {
                 if (!e.CanDelete) continue;
                 string p = PathUtil.Long(PathUtil.Combine(dst, e.Rel));
-                if (!File.Exists(p) && !Directory.Exists(p)) continue;
+                if (!File.Exists(p) && !Directory.Exists(p)) { completed.Add(e); continue; }
                 if (e.Status == "empty")
                 {
                     // チェックの後にファイルが入ったかもしれないので、削除の直前に空かどうかを確かめ直す
@@ -581,9 +603,10 @@ namespace AutoCopy
                         SafeFs.MoveToTrash(dst, e.Rel, "削除済み", batch);
                         Logger.Write(job.Name, "DELETE", e.Rel + "（空のフォルダ）　（重複チェック）", 0, -1);
                         n++;
+                        completed.Add(e);
                     }
                     catch (SourceProtectedException) { throw; }
-                    catch (Exception ex) { Logger.Write(job.Name, "ERROR", e.Rel + "　削除できません: " + ex.Message, -1, -1); }
+                    catch (Exception ex) { errors.Add(e.Rel + ": " + ex.Message); Logger.Write(job.Name, "ERROR", e.Rel + "　削除できません: " + ex.Message, -1, -1); }
                     continue;
                 }
                 try
@@ -601,10 +624,12 @@ namespace AutoCopy
                         else state.Files.Remove(e.Rel);
                     }
                     n += Math.Max(1, e.FileCount);
+                    completed.Add(e);
                 }
                 catch (SourceProtectedException) { throw; }
                 catch (Exception ex)
                 {
+                    errors.Add(e.Rel + ": " + ex.Message);
                     Logger.Write(job.Name, "ERROR", e.Rel + "　削除できません: " + ex.Message, -1, -1);
                 }
             }
@@ -683,7 +708,9 @@ namespace AutoCopy
                 {
                     string ext = System.IO.Path.GetExtension(rel);
                     string stem = rel.Substring(0, rel.Length - ext.Length);
-                    target = PathUtil.Combine(destRoot, stem + " (復元)" + ext);
+                    int suffix = 1;
+                    do { target = PathUtil.Combine(destRoot, stem + " (復元" + (suffix == 1 ? "" : " " + suffix) + ")" + ext); suffix++; }
+                    while (File.Exists(PathUtil.Long(target)) || Directory.Exists(PathUtil.Long(target)));
                 }
                 SafeFs.Move(f, target);
                 Logger.Write(jobName, "RESTORE", rel + "（" + b.Kind + " " + b.Name + " から）", -1, -1);
@@ -765,7 +792,7 @@ namespace AutoCopy
                 {
                     done++;
                     if (progress != null && (done & 15) == 0) progress("中身を比べています（" + Fmt.Count(done) + " / " + Fmt.Count(cand) + "件）");
-                    string fp = g.Key <= 131072 ? DupChecker.FullHash(PathUtil.Combine(root, r)) : DupChecker.Fingerprint(PathUtil.Combine(root, r));
+                    string fp = g.Key <= 131072 ? DupChecker.FullHash(PathUtil.Combine(root, r), ct) : DupChecker.Fingerprint(PathUtil.Combine(root, r));
                     if (fp == null) { res.Errors.Add("読めません: " + r); continue; }
                     List<string> l;
                     if (!byFp.TryGetValue(fp, out l)) { l = new List<string>(); byFp[fp] = l; }
@@ -781,7 +808,7 @@ namespace AutoCopy
                         {
                             ct.ThrowIfCancellationRequested();
                             if (progress != null) progress("中身を比べています（" + Fmt.Count(done) + " / " + Fmt.Count(cand) + "件）　" + r);
-                            string h = DupChecker.FullHash(PathUtil.Combine(root, r));
+                            string h = DupChecker.FullHash(PathUtil.Combine(root, r), ct);
                             if (h == null) { res.Errors.Add("読めません: " + r); continue; }
                             List<string> l;
                             if (!byHash.TryGetValue(h, out l)) { l = new List<string>(); byHash[h] = l; }

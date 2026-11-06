@@ -298,30 +298,44 @@ namespace AutoCopy
                 }
             }
 
-            string old = target + ".old";
-            if (File.Exists(old)) File.Delete(old);
-            File.Move(target, old);              // 動いている exe でも名前は変えられる
-            try { File.Move(tmp, target); }
-            catch
-            {
-                try { File.Move(old, target); } catch (Exception rex) { Logger.Error(null, "更新に失敗し、前の版を戻せませんでした: " + rex.Message); }
-                throw;
-            }
-            foreach (string name in staged)
-            {
-                string f = Path.Combine(dir, name);
-                try
-                {
-                    if (File.Exists(f + ".old")) File.Delete(f + ".old");
-                    if (File.Exists(f)) File.Move(f, f + ".old");
-                    File.Move(f + ".new", f);
-                }
-                catch (Exception ex) { Logger.Error(null, "更新：" + name + " を入れ替えられませんでした（前のものを使います）: " + ex.Message); }
-            }
+            List<string> targets = new List<string>(); targets.Add(target);
+            foreach (string name in staged) targets.Add(Path.Combine(dir, name));
+            ReplaceStagedFiles(targets);
             return target;
         }
 
         /// <summary>起動し直した後：前の版の exe が終わるのを待つ</summary>
+        public static void ReplaceStagedFiles(IList<string> targets)
+        {
+            List<string> moved = new List<string>(), installed = new List<string>();
+            try
+            {
+                foreach (string f in targets)
+                {
+                    SafeFs.Guard(f);
+                    if (!File.Exists(f + ".new")) throw new FileNotFoundException("更新ファイルがありません", f + ".new");
+                    if (File.Exists(f + ".old")) File.Delete(f + ".old");
+                    if (File.Exists(f)) { File.Move(f, f + ".old"); moved.Add(f); }
+                    File.Move(f + ".new", f); installed.Add(f);
+                }
+            }
+            catch (Exception ex)
+            {
+                List<string> errors = new List<string>();
+                for (int i = targets.Count - 1; i >= 0; i--)
+                {
+                    string f = targets[i];
+                    try
+                    {
+                        if (installed.Contains(f) && File.Exists(f)) File.Delete(f);
+                        if (moved.Contains(f)) File.Move(f + ".old", f);
+                    }
+                    catch (Exception restore) { errors.Add(f + ": " + restore.Message); }
+                }
+                throw new IOException("更新を中止しました。" + (errors.Count == 0 ? "前の版に戻しました。" : "復元できなかったファイル: " + string.Join(" / ", errors.ToArray())), ex);
+            }
+        }
+
         public static void WaitForExit(int pid, int seconds)
         {
             try

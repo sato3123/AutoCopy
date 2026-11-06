@@ -42,10 +42,12 @@ jobs:
           Line ("版: " + $ver.FileVersion + " / 製品: " + $ver.ProductName + " / 会社: " + $ver.CompanyName)
           $env:AUTOCOPY_HOME = "$env:RUNNER_TEMP\rel-home"
           $p = Start-Process -FilePath $exe -ArgumentList '/screenshots', "`"$pwd\shots`"" -PassThru
-          if (-not $p.WaitForExit(420000)) { $p.Kill(); Line "画面の確認: 時間切れ" }
+          $timedOut = -not $p.WaitForExit(420000)
+          if ($timedOut) { $p.Kill(); Line "画面の確認: 時間切れ" }
           Line ("画面の確認のエラー: " + (Get-Content -Encoding utf8 shots\errors.txt -Raw))
           Line ("表示切れ: " + (Get-Content shots\layout-count.txt))
-          $ok = ($s2.Status -eq 'Valid') -and ((Get-Content -Encoding utf8 shots\errors.txt -Raw).Trim() -eq 'なし')
+          $layoutCounts = (Get-Content shots\layout-count.txt).Split(' ')
+          $ok = (-not $timedOut) -and ($p.ExitCode -eq 0) -and ([int]$layoutCounts[-1] -eq 0) -and ($s2.Status -eq 'Valid') -and ((Get-Content -Encoding utf8 shots\errors.txt -Raw).Trim() -eq 'なし')
           Line ("結果: " + $(if ($ok) { 'OK' } else { 'NG' }))
           $out | Out-File -Encoding utf8 verify.txt
           if (-not $ok) { exit 1 }

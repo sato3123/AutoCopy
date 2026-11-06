@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
@@ -82,7 +82,10 @@ namespace AutoCopy
 
         public static DistPayload Decrypt(DistEnvelope env, string password)
         {
+            if (env == null || env.Iterations < 0 || env.Iterations > 1000000) throw new InvalidDataException("配布設定の暗号化回数が不正です");
+            if (env.Data == null || env.Data.Length > 16 * 1024 * 1024) throw new InvalidDataException("配布設定が大きすぎます");
             byte[] salt = Convert.FromBase64String(env.Salt), iv = Convert.FromBase64String(env.Iv);
+            if (salt.Length != 16 || iv.Length != 16) throw new InvalidDataException("配布設定の形式が不正です");
             byte[] encKey, macKey;
             DeriveKeys(password ?? "", salt, env.Iterations > 0 ? env.Iterations : Iterations, out encKey, out macKey);
             byte[] mac = Mac(macKey, env);

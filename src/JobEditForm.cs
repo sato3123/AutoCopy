@@ -28,7 +28,7 @@ namespace AutoCopy
         private Label lPreview;
         // 除外
         private readonly Dictionary<string, CheckBox> presetBoxes = new Dictionary<string, CheckBox>();
-        private TextBox tExt, tPat, tInc;
+        private TextBox tExt, tPat, tInc, tOnlyFolders, tOnlyExt;
         private CheckBox cMax, cZero, cOlder, cHidden, cSystem;
         private NumericUpDown nMax;
         private ComboBox cbMaxUnit;
@@ -59,7 +59,7 @@ namespace AutoCopy
             tabs.TabPages.Add(BuildExclude());
             tabs.TabPages.Add(BuildConnect());
 
-            Button ok = Btn.MakePrimary(Ui.B("OK", delegate { if (Collect()) { DialogResult = DialogResult.OK; Close(); } }));
+            Button ok = Btn.MakePrimary(Ui.B("設定を保存", delegate { if (Collect()) { DialogResult = DialogResult.OK; Close(); } }));
             ok.MinimumSize = new Size(Ui.S(88), Ui.S(28));
             Button cancel = Ui.B("キャンセル", delegate { DialogResult = DialogResult.Cancel; Close(); });
             Button test = Ui.B("テスト（コピーせずに結果を確認）", delegate { RunTest(); });
@@ -405,8 +405,23 @@ namespace AutoCopy
 
         private TabPage BuildExclude()
         {
-            TabPage p = new TabPage("除外ルール");
+            TabPage p = new TabPage("対象・除外");
             FlowLayoutPanel b = Ui.Body();
+            tOnlyFolders = Ui.T("", 460);
+            tOnlyExt = Ui.T("", 460);
+            b.Controls.Add(Ui.Section("対象を限定する（空欄ならすべて）",
+                Ui.Column(Ui.L("コピー元からの相対フォルダ（配下を含む）"), tOnlyFolders,
+                    Ui.B("対象フォルダを選んで追加…", delegate {
+                        string src = PathUtil.Expand(tSrc.Text, AppCore.Settings.FolderName);
+                        string f = Ui.BrowseFolder(this, src, "コピー対象のフォルダを選択");
+                        if (f == null) return;
+                        string root = PathUtil.Normalize(src).TrimEnd('\\');
+                        if (!PathUtil.IsSameOrInside(f, src) || string.Equals(PathUtil.Normalize(f), root, StringComparison.OrdinalIgnoreCase)) { Ui.Info(this, "コピー元の中のフォルダを選んでください。"); return; }
+                        string rel = PathUtil.Normalize(f).Substring(root.Length + 1);
+                        tOnlyFolders.Text += (tOnlyFolders.Text.Trim().Length == 0 ? "" : "; ") + rel;
+                    })),
+                Ui.Column(Ui.L("対象の拡張子（例：.pdf; .xlsx）"), tOnlyExt),
+                Ui.Hint("両方指定した場合は、指定フォルダ内の指定拡張子だけが対象です。対象外の既存コピーは削除しません。")));
             b.Controls.Add(Ui.Hint("次の条件のどれかに当てはまるファイルはコピーしません。"));
 
             FlowLayoutPanel presets = new FlowLayoutPanel();
@@ -650,6 +665,8 @@ namespace AutoCopy
             cSystem.Checked = x.ExcludeSystem;
             foreach (string f in x.Folders) lbFolders.Items.Add(f);
             tInc.Text = string.Join("; ", x.Includes.ToArray());
+            tOnlyFolders.Text = string.Join("; ", x.OnlyFolders.ToArray());
+            tOnlyExt.Text = string.Join("; ", x.OnlyExtensions.ToArray());
 
             nRetry.Value = Clamp(nRetry, j.RetryCount);
             nRetryInt.Value = Clamp(nRetryInt, j.RetryIntervalSeconds);
@@ -734,6 +751,8 @@ namespace AutoCopy
             x.ExcludeSystem = cSystem.Checked;
             foreach (object o in lbFolders.Items) x.Folders.Add((string)o);
             x.Includes = SplitList(tInc.Text);
+            x.OnlyFolders = SplitList(tOnlyFolders.Text);
+            x.OnlyExtensions = SplitList(tOnlyExt.Text);
             j.Exclude = x;
 
             j.RetryCount = (int)nRetry.Value;
@@ -777,6 +796,11 @@ namespace AutoCopy
             string v = CopyEngine.Validate(j, AppCore.Settings, AppCore.Settings.Jobs);
             if (v != null) { Ui.Error(this, v); return false; }
 
+            if (!isNew && (!string.Equals(job.Source, j.Source, StringComparison.OrdinalIgnoreCase) || !string.Equals(job.Dest, j.Dest, StringComparison.OrdinalIgnoreCase)))
+            {
+                if (!Ui.Confirm(this, "コピー元またはコピー先を変えると、前回までの記録は使いません。次回はすべてのファイルをコピー先と照合します（同じファイルはコピーしません）。よろしいですか？"))
+                    return false;
+            }
             // 資格情報
             SaveServerEdits();
             try
@@ -790,11 +814,6 @@ namespace AutoCopy
             }
             catch (Exception ex) { Ui.Error(this, ex.Message); return false; }
 
-            if (!isNew && (!string.Equals(job.Source, j.Source, StringComparison.OrdinalIgnoreCase) || !string.Equals(job.Dest, j.Dest, StringComparison.OrdinalIgnoreCase)))
-            {
-                if (!Ui.Confirm(this, "コピー元またはコピー先を変えると、前回までの記録は使いません。次回はすべてのファイルをコピー先と照合します（同じファイルはコピーしません）。よろしいですか？"))
-                    return false;
-            }
             Result = j;
             return true;
         }
@@ -806,8 +825,13 @@ namespace AutoCopy
             string v = CopyEngine.Validate(j, AppCore.Settings, AppCore.Settings.Jobs);
             if (v != null) { Ui.Error(this, v); return; }
             SaveServerEdits();
-            foreach (KeyValuePair<string, string[]> kv in credEdits)
-                if (!string.IsNullOrEmpty(kv.Value[0])) { try { CredentialStore.Save(kv.Key, kv.Value[0], kv.Value[1]); } catch (Exception ex) { Logger.Error(null, "ID・パスワードを保存できません（" + kv.Key + "）: " + ex.Message); Ui.Error(this, "ID・パスワードを保存できませんでした（" + kv.Key + "）：" + ex.Message); } }
+            foreach (string path in new string[] { j.Source, j.Dest })
+            {
+                string server = PathUtil.UncServer(path); string[] credential;
+                if (server == null || !credEdits.TryGetValue(server, out credential)) continue;
+                string error = NetAccess.Test(path, credential[0], credential[1]);
+                if (error != null) { Ui.Error(this, error); return; }
+            }
             using (PreviewForm f = new PreviewForm(j, false)) f.ShowDialog(this);
         }
     }

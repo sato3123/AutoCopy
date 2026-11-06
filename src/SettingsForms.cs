@@ -175,7 +175,8 @@ namespace AutoCopy
 
         private bool Save()
         {
-            AppSettings s = AppCore.Settings;
+            AppSettings previous = AppCore.Settings;
+            AppSettings s = Json.Deserialize<AppSettings>(Json.Serialize(previous));
             string root = tLogRoot.Text.Trim();
             s.LogRoot = root.Length == 0 ? null : NetAccess.ToUncIfMapped(root);
             s.AutoStart = cAuto.Checked;
@@ -196,10 +197,11 @@ namespace AutoCopy
             try
             {
                 StartupRegistration.Set(s.AutoStart);
+                AppCore.Settings = s;
                 AppCore.SaveSettings();
                 return true;
             }
-            catch (Exception ex) { Ui.Error(this, ex.Message); return false; }
+            catch (Exception ex) { AppCore.Settings = previous; try { StartupRegistration.Set(previous.AutoStart); } catch { } Ui.Error(this, ex.Message); return false; }
         }
     }
 
@@ -317,7 +319,10 @@ namespace AutoCopy
             string oldName = AppCore.Settings.FolderName, newName = tName.Text.Trim();
             List<FolderMove> moves = PlanMoves(oldName, newName);
             if (!Ui.Confirm(this, "フォルダ名を「" + oldName + "」から「" + newName + "」に変えます。\nコピー先・ログ保管先のフォルダも名前を変えます。よろしいですか？")) return;
-            foreach (JobConfig j in AppCore.Settings.Jobs) AppCore.CancelJob(j.Id);
+            List<JobConfig> reserved = new List<JobConfig>();
+            try
+            {
+            foreach (JobConfig j in AppCore.Settings.Jobs) { Ui.Busy<int>(this, "停止を待っています…", delegate { AppCore.StopJobAndWait(j.Id); return 0; }); reserved.Add(j); }
             List<string> errors = new List<string>();
             foreach (FolderMove m in moves)
             {
@@ -331,11 +336,12 @@ namespace AutoCopy
                 }
                 catch (Exception ex) { errors.Add(m.From + "：" + ex.Message); }
             }
-            AppCore.Settings.FolderName = newName;
-            AppCore.SaveSettings();
+            AppCore.Settings.FolderName = newName; AppCore.SaveSettings();
             if (errors.Count > 0) Ui.Error(this, "名前を変えられなかったフォルダがあります（次回のコピーで新しいフォルダに作り直します）：\n" + string.Join("\n", errors.ToArray()));
             else Ui.Info(this, "フォルダ名を変えました。");
             Close();
+            }
+            finally { foreach (JobConfig j in reserved) AppCore.EndResolve(j); }
         }
     }
 

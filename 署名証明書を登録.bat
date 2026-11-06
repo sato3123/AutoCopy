@@ -1,21 +1,22 @@
 @echo off
-rem �����R�s�[�F�f�W�^�������̏ؖ������A����PC�ɓo�^���܂��B
-rem �o�^����ƁAAutoCopy.exe �̔��s�����u�����R�s�[�v�Ƃ��ĐM������܂��i�u�s���Ȕ��s���v�Əo�Ȃ��Ȃ�܂��j�B
-rem ���̏ؖ����̓v���O�����̏�����p�ł��i�ق��̏ؖ����𔭍s���邱�Ƃ͂ł��܂���j�B
+chcp 65001 >nul
+rem 自動コピー：デジタル署名の証明書を、このPCに登録します。
+rem 登録すると、AutoCopy.exe の発行元が「自動コピー」として信頼されます（「不明な発行元」と出なくなります）。
+rem この証明書はプログラムの署名専用です（ほかの証明書を発行することはできません）。
 setlocal
 cd /d "%~dp0"
 net session >nul 2>&1
 if errorlevel 1 (
-  echo ���̃t�@�C���́u�Ǘ��҂Ƃ��Ď��s�v���Ă��������B
-  echo �i�E�N���b�N ���u�Ǘ��҂Ƃ��Ď��s�v�j
+  echo このファイルは「管理者として実行」してください。
+  echo （右クリック →「管理者として実行」）
   pause
   exit /b 1
 )
 set CER=
-for %%f in (*�����ؖ���.cer) do set "CER=%%f"
+for %%f in (*署名証明書.cer) do set "CER=%%f"
 if "%CER%"=="" for %%f in (*.cer) do set "CER=%%f"
 if "%CER%"=="" (
-  echo �ؖ����i�����R�s�[_�����ؖ���.cer�j�������t�H���_�ɂ���܂���B
+  echo 証明書（自動コピー_署名証明書.cer）が同じフォルダにありません。
   pause
   exit /b 1
 )
@@ -24,11 +25,11 @@ if errorlevel 1 goto fail
 certutil -addstore -f TrustedPublisher "%CER%"
 if errorlevel 1 goto fail
 echo.
-echo �o�^���܂����B
+echo 登録しました。
 pause
 exit /b 0
 :fail
 echo.
-echo �o�^�ł��܂���ł����B
+echo 登録できませんでした。
 pause
 exit /b 1
