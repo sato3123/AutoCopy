@@ -1,0 +1,2 @@
+Built unsigned executable (signing certificate not supplied).
+SHA256 A8588BEC9912BDD5788D7EE5688A984D9674B4A8364DF132D7A4BA793E89830C  dist\AutoCopy.exe
