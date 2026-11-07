@@ -88,6 +88,7 @@ namespace AutoCopy
             CancelButton = cancel;
             Controls.Add(b);
             FlowLayoutPanel foot = Ui.Footer(cancel, start);
+            foot.Controls.Add(Ui.HelpButton(Help.Setup));
             Label fh = Ui.Hint("開始すると、最初のコピーを1分後に行います。");
             fh.Margin = new Padding(3, 10, 120, 3);
             if (firstRun) foot.Controls.Add(fh);

@@ -135,7 +135,7 @@ namespace AutoCopy
             if (t.Contains("コピーせずに") || t.Contains("結果の予測")) return "preview";
             if (t.Contains("実行")) return "run";
             if (t.Contains("再読み込み") || t.Contains("最新にする") || t.Contains("もう一度") || t.Contains("今すぐ確認") || t.Contains("再チェック")) return "refresh";
-            if (t.Contains("検索") || t.Contains("探す") || t.StartsWith("重複チェック")) return "search";
+            if (t.Contains("検索") || t.Contains("探す") || t.StartsWith("重複チェック") || t.StartsWith("重複・整理")) return "search";
             if (t.Contains("追加")) return "add";
             if (t.StartsWith("編集") || t.StartsWith("変更")) return "edit";
             if (t.StartsWith("複製")) return "copy";

@@ -439,7 +439,7 @@ namespace AutoCopy
             DateTime last;
             lock (st) { last = st.LastDupCheckTicks > 0 ? new DateTime(st.LastDupCheckTicks, DateTimeKind.Utc).ToLocalTime() : DateTime.MinValue; }
             if (last >= prev) return false;
-            if ((now - prev).TotalMinutes > 5) catchUp = "重複チェックの予定（" + prev.ToString("M/d HH:mm") + "）に動いていなかったため、起動後に実行します";
+            if ((now - prev).TotalMinutes > 5) catchUp = "コピー先の整理（重複チェック）の予定（" + prev.ToString("M/d HH:mm") + "）に動いていなかったため、起動後に実行します";
             return true;
         }
 
@@ -654,6 +654,7 @@ namespace AutoCopy
         {
             // 同じ原因のエラーは1時間に1回まで
             string key = job.Id + "|" + error;
+            error = ErrorKind.WithAdvice(error, credError);   // 「次にすること」を付ける（同じ原因かは元の文で判断）
             lock (lastErrorNotice)
             {
                 DateTime t;
@@ -711,7 +712,7 @@ namespace AutoCopy
                 if (rt.Running || rt.DupRunning || rt.Resolving || OverlappingRunning(job) != null) return false;
                 rt.Idle.Reset();
                 rt.DupRunning = true;
-                rt.Phase = "重複チェック中";
+                rt.Phase = "コピー先の整理中";
                 rt.Cts = new CancellationTokenSource();
             }
             RaiseChanged();
@@ -733,7 +734,7 @@ namespace AutoCopy
                         Notify(NoticeLevel.Warning, "大きいファイルの重複 " + r.LargePending + "件：扱いを選んでください",
                             job.Name + "：中身が同じ大きいファイルがあります。テキストにする（容量を節約）か、普通にコピーするかを選んでください。", "dup", job.Id);
                     if (r.Groups.Count > 0)
-                        Notify(NoticeLevel.Info, "重複チェック：" + (n > 0 ? "削除候補 " + n + "件（" + Fmt.Size(r.DeleteCandidateBytes()) + "）" : "情報 " + r.Groups.Count + "件"),
+                        Notify(NoticeLevel.Info, "コピー先の整理（重複チェック）：" + (n > 0 ? "削除候補 " + n + "件（" + Fmt.Size(r.DeleteCandidateBytes()) + "）" : "情報 " + r.Groups.Count + "件"),
                             job.Name + "：結果を確認してください。削除は確認後に行います。", "dup", job.Id);
                 }
                 catch (OperationCanceledException) { }
@@ -741,7 +742,7 @@ namespace AutoCopy
                 {
                     lock (st) { st.LastDupCheckTicks = DateTime.UtcNow.Ticks; }
                     Logger.Error(job.Name, "重複チェックでエラー: " + ex.Message);
-                    Notify(NoticeLevel.Error, job.Name + "：重複チェックのエラー", ex.Message, "log", job.Id);
+                    Notify(NoticeLevel.Error, job.Name + "：コピー先の整理（重複チェック）のエラー", ErrorKind.WithAdvice(ex.Message, false), "log", job.Id);
                 }
                 RaiseChanged();
                 }

@@ -55,7 +55,8 @@ namespace AutoCopy
                 Ui.B("ログフォルダを開く", delegate { OpenLogFolder(); }));
             FlowLayoutPanel row2 = Ui.WrapRow(
                 Ui.Row(Ui.L("設備（PC）"), cbDevice), Ui.Row(Ui.L("ジョブ"), cbJob), Ui.Row(Ui.L("種類"), cbType), Ui.Row(Ui.L("検索"), tSearch),
-                Ui.B("絞り込みを解除", delegate { ClearFilter(); }));
+                Ui.B("絞り込みを解除", delegate { ClearFilter(); }),
+                Ui.HelpButton(Help.Log));
             FlowLayoutPanel top = Ui.Column(row1, row2);
             top.Dock = DockStyle.Top;
             top.Padding = new Padding(8, 6, 8, 2);
@@ -177,7 +178,7 @@ namespace AutoCopy
                 if (r != null) dupc += r.DeleteCandidateCount();
             }
             foreach (Notice n in AppCore.RecentNotices()) if (!n.Handled && n.Level == NoticeLevel.Error) err++;
-            return "いま残っている確認：上書きの確認 " + conf + "件・大きいファイルの重複の扱い " + dedup + "件・重複チェックの削除候補 " + dupc + "件・ミラーの削除保留 " + pend + "件・同期の削除 " + sdel + "件・未対応のエラー " + err + "件";
+            return "いま残っている確認：上書きの確認 " + conf + "件・大きいファイルの重複の扱い " + dedup + "件・コピー先の整理の削除候補 " + dupc + "件・ミラーの削除保留 " + pend + "件・同期の削除 " + sdel + "件・未対応のエラー " + err + "件";
         }
 
         private void FillStatus()
@@ -599,7 +600,7 @@ namespace AutoCopy
 
             Controls.Add(tabs);
             Controls.Add(top);
-            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Ui.B("CSVに書き出す", delegate { Export(); }), saveImg));
+            Controls.Add(Ui.WithHelp(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Ui.B("CSVに書き出す", delegate { Export(); }), saveImg), Help.Log));
             pcChart.SetData(LogStats.Aggregate(lines, false));
             pcHost.Fit();
             dailyChart.SetData(LogStats.Daily(lines));

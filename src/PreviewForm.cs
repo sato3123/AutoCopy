@@ -112,9 +112,9 @@ namespace AutoCopy
             Controls.Add(kinds);
             Controls.Add(liveBand);
             Controls.Add(top);
-            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(), runNow, Btn.Gap(),
+            Controls.Add(Ui.WithHelp(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(), runNow, Btn.Gap(),
                 Ui.B("一覧をCSVに書き出す", delegate { Export(); }),
-                againBtn));
+                againBtn), Help.Preview));
             Shown += delegate { if (result == null && live == null) Analyze(); };
             FormClosed += delegate { tick.Stop(); if (cts != null) cts.Cancel(); };
         }

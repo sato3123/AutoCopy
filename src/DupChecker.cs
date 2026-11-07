@@ -778,6 +778,15 @@ namespace AutoCopy
 
         public long SizeAt(int i) { return i >= 0 && i < Sizes.Count ? Sizes[i] : Size; }
 
+        /// <summary>先頭を残す候補にした理由（並べた順：パスが短い → 更新日時が古い → 名前の順）</summary>
+        public string KeepReason()
+        {
+            if (Files.Count < 2) return "1件だけ";
+            if (Files[0].Length < Files[1].Length) return "場所（パス）がいちばん短い";
+            if (Mtimes.Count >= 2 && Mtimes[0] < Mtimes[1]) return "いちばん古い（最初のもの）";
+            return "名前の順で先";
+        }
+
         /// <summary>先頭を残してほかを移したときに空く容量</summary>
         public long Wasted()
         {

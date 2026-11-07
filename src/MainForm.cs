@@ -63,6 +63,7 @@ namespace AutoCopy
                 Sep(),
                 Ui.B("上書きの確認", delegate { TrayApp.Instance.ShowConflicts(); }),
                 DupMenuButton(),
+                RestoreMenuButton(),
                 Sep(),
                 Ui.B("作業状況", delegate { TrayApp.Instance.ShowProgress(FirstSelected()); }),
                 Ui.B("結果の予測", delegate { string id = FirstSelected(); if (id == null && AppCore.Settings.Jobs.Count > 0) id = AppCore.Settings.Jobs[0].Id; if (id != null) TrayApp.Instance.ShowPreview(id); }),
@@ -182,16 +183,37 @@ namespace AutoCopy
             RefreshView();
         }
 
-        /// <summary>「重複チェック ▾」：ジョブの重複チェックの結果／フォルダを指定して探す（コピーと関係なく）</summary>
+        /// <summary>「重複・整理 ▾」：コピー先の整理（重複チェック）の結果／フォルダを指定して探す（コピーと関係なく）</summary>
         private Button DupMenuButton()
         {
-            Button b = Ui.B("重複チェック ▾", null);
+            Button b = Ui.B("重複・整理 ▾", null);
             Btn.SetIcon(b, "search", Ui.Quiet);
             ContextMenuStrip m = new ContextMenuStrip();
             m.Font = Ui.Base;
-            m.Items.Add("ジョブの重複チェックの結果（コピー先）…", null, delegate { TrayApp.Instance.ShowDup(FirstSelected()); });
-            m.Items.Add("フォルダを指定して重複ファイルを探す（コピーと関係なく）…", null, delegate { TrayApp.Instance.ShowFolderDup(null); });
+            m.Items.Add("コピー先の整理（重複チェック）の結果…", null, delegate { TrayApp.Instance.ShowDup(FirstSelected()); });
+            m.Items.Add("フォルダの重複ファイル探し（コピーと関係なく）…", null, delegate { TrayApp.Instance.ShowFolderDup(null); });
             b.Click += delegate { m.Show(b, new Point(0, b.Height)); };
+            return b;
+        }
+
+        /// <summary>「元に戻す ▾」：選んだジョブ（または一覧から選ぶジョブ）の、削除・上書きの前に退避したファイルを戻す</summary>
+        private Button RestoreMenuButton()
+        {
+            Button b = Ui.B("元に戻す ▾", null);
+            Btn.SetIcon(b, "undo", Ui.Quiet);
+            b.Click += delegate
+            {
+                string id = FirstSelected();
+                if (id != null && SelectedIds().Count == 1) { TrayApp.Instance.ShowRestore(id); return; }
+                ContextMenuStrip m = new ContextMenuStrip();
+                m.Font = Ui.Base;
+                ToolStripMenuItem t = TrayApp.RestoreMenu();
+                if (!t.Enabled) { Ui.Info(this, "ジョブがありません。"); return; }
+                ToolStripItem head = m.Items.Add("どのジョブのファイルを元に戻しますか？");
+                head.Enabled = false;
+                while (t.DropDownItems.Count > 0) m.Items.Add(t.DropDownItems[0]);
+                m.Show(b, new Point(0, b.Height));
+            };
             return b;
         }
 
@@ -232,8 +254,8 @@ namespace AutoCopy
             m.Items.Add("このジョブだけ1時間止める", null, delegate { foreach (string id in SelectedIds()) AppCore.Pause(id, 60); RefreshView(); });
             m.Items.Add("このジョブを再開", null, delegate { foreach (string id in SelectedIds()) AppCore.Resume(id); RefreshView(); });
             m.Items.Add(new ToolStripSeparator());
-            m.Items.Add("重複チェック", null, delegate { string id = FirstSelected(); if (id != null) { AppCore.RunDup(id); Ui.Info(this, "重複チェックを始めました。終わったらお知らせします。"); } });
-            m.Items.Add("削除済み・退避から元に戻す…", null, delegate
+            m.Items.Add("コピー先の整理（重複チェック）を今すぐ実行", null, delegate { string id = FirstSelected(); if (id != null) { AppCore.RunDup(id); Ui.Info(this, "コピー先の整理（重複チェック）を始めました。終わったらお知らせします。"); } });
+            m.Items.Add("元に戻す（削除・上書きしたファイル）…", null, delegate
             {
                 string id = FirstSelected();
                 JobConfig j = id != null ? AppCore.FindJob(id) : null;
@@ -474,7 +496,7 @@ namespace AutoCopy
                     if (!rt.Running && (rt.QueuedManual || rt.WaitingFor != null)) { result = "待機中（「" + rt.WaitingFor + "」が終わってから実行）　" + result; color = Ui.Accent; }
                     if (conflicts > 0) result = "確認待ち " + conflicts + "件　" + result;
                     if (pending > 0) result = "削除保留 " + pending + "件　" + result;
-                    if (!j.Enabled) { result = "無効"; color = Ui.Quiet; }
+                    if (!j.Enabled) { result = "無効（自動ではコピーしません。左のチェックで有効）"; color = Ui.Warn; }
 
                     string next;
                     if (!j.Enabled) next = "—";
@@ -566,7 +588,28 @@ namespace AutoCopy
                 if (f.ShowDialog(this) != DialogResult.OK) return;
                 AppCore.Settings.Jobs.Add(f.Result);
                 AppCore.SaveSettings();
+                j = f.Result;
             }
+            RefreshView();
+            if (!j.Enabled) AskEnable(j);
+        }
+
+        /// <summary>保存したばかりの無効のジョブ：テストしてから有効にする／今すぐ有効にする／あとで</summary>
+        private void AskEnable(JobConfig j)
+        {
+            int choice;
+            using (EnableJobForm d = new EnableJobForm(j)) { d.ShowDialog(this); choice = d.Choice; }
+            if (choice == EnableJobForm.Test)
+            {
+                using (PreviewForm p = new PreviewForm(j, false)) p.ShowDialog(this);
+                if (!Ui.Confirm(this, "テストの結果でよければ、ジョブ「" + j.Name + "」を有効にします。\n有効にすると、決めたタイミングで自動でコピーします。\n\n（やめると無効のままです。あとでジョブの左のチェックで有効にできます）")) return;
+            }
+            else if (choice != EnableJobForm.EnableNow) return;
+            JobConfig cur = AppCore.FindJob(j.Id);
+            if (cur == null || cur.Enabled) return;
+            cur.Enabled = true;
+            AppCore.SaveSettings();
+            Logger.Info(cur.Name, "ジョブを有効にしました");
             RefreshView();
         }
 

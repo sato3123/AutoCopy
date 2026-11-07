@@ -43,7 +43,7 @@ namespace AutoCopy
                 Ui.Hint("一時停止中でも、PC を再起動すると自動コピーは必ず再開します。Windows 7〜11 で動作します。")));
 
             cErr = Ui.C("エラーを通知する", s.NotifyErrors);
-            cConf = Ui.C("上書き確認・重複チェック・ミラーの保留を通知する", s.NotifyConfirm);
+            cConf = Ui.C("上書き確認・コピー先の整理（重複チェック）・ミラーの保留を通知する", s.NotifyConfirm);
             cDone = Ui.C("コピーが正常に終わったときも通知する", s.NotifyDone);
             cBlink = Ui.C("アイコンを点滅させる（確認が済むまで）", s.AttentionBlink);
             cPopup = Ui.C("画面右下に「確認が必要です」のメッセージを出す", s.AttentionPopup);
@@ -51,7 +51,7 @@ namespace AutoCopy
             cAutoClose = Ui.C("メッセージを自動で閉じる", s.AttentionAutoClose);
             nCloseSec = Ui.N(5, 3600, s.AttentionCloseSeconds, 72);
             b.Controls.Add(Ui.Section("通知", cErr, cConf, cDone,
-                Ui.L("確認が必要なとき（上書きの確認・ミラーの保留・重複チェックの結果・エラー）"),
+                Ui.L("確認が必要なとき（上書きの確認・ミラーの保留・コピー先の整理の結果・エラー）"),
                 cBlink, cPopup,
                 Ui.Row(Ui.L("　", 140), cAutoClose, nCloseSec, Ui.L("秒たったら（マウスを重ねている間は閉じない）")),
                 Ui.Row(Ui.L("　確認が済むまで", 140), nRemind, Ui.L("分ごとにメッセージを出し直す")),
@@ -76,7 +76,7 @@ namespace AutoCopy
 
             cbShortcut = Ui.Combo(320, "強制データ送信（すべてのジョブを今すぐ実行）");
             foreach (JobConfig j in s.Jobs) cbShortcut.Items.Add(j.Name + " を今すぐ実行");
-            cbShortcut.Items.Add("重複チェックを実行");
+            cbShortcut.Items.Add("コピー先の整理（重複チェック）を実行");
             b.Controls.Add(Ui.Section("デスクトップのショートカット",
                 Ui.Row(cbShortcut, Ui.B("作成", delegate { MakeShortcut(); })),
                 Ui.Hint("ダブルクリックすると、動いている自動コピーに実行を指示します。")));
@@ -84,7 +84,7 @@ namespace AutoCopy
             Button ok = Btn.MakePrimary(Ui.B("OK", delegate { if (Save()) Close(); }));
             ok.MinimumSize = new Size(Ui.S(88), Ui.S(28));
             Controls.Add(b);
-            Controls.Add(Ui.Footer(Ui.B("キャンセル", delegate { Close(); }), ok, Ui.B("操作説明書を開く", delegate { Ui.OpenManual(); })));
+            Controls.Add(Ui.Footer(Ui.B("キャンセル", delegate { Close(); }), ok, Ui.HelpButton(Help.Settings)));
             EventHandler h = delegate { UpdateEnabled(); };
             cPopup.CheckedChanged += h;
             cAutoClose.CheckedChanged += h;
@@ -136,7 +136,7 @@ namespace AutoCopy
                 string path;
                 if (i <= 0) path = Shortcuts.CreateOnDesktop(Shortcuts.ForceSendName, "/run");
                 else if (i <= jobs.Count) path = Shortcuts.CreateOnDesktop(Shortcuts.ForceSendName + "（" + jobs[i - 1].Name + "）", "/run \"" + jobs[i - 1].Name + "\"");
-                else path = Shortcuts.CreateOnDesktop("自動コピー（重複チェック）", "/dupcheck");
+                else path = Shortcuts.CreateOnDesktop("自動コピー（コピー先の整理）", "/dupcheck");
                 Ui.Info(this, "デスクトップにショートカットを作りました：\n" + Path.GetFileName(path));
             }
             catch (Exception ex) { Ui.Error(this, "作れませんでした：" + ex.Message); }

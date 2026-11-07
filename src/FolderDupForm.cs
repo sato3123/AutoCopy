@@ -17,8 +17,7 @@ namespace AutoCopy
         public const int MaxRows = 5000;
         private readonly TextBox tFolder;
         private readonly CheckBox cSub, cbContent, cbName, cbMtime, cbSize;
-        private readonly NumericUpDown nMin;
-        private readonly ComboBox cbUnit;
+        private readonly ComboBox cbMin;   // 小さいファイルを探さない（よく使う大きさから選ぶ）
         private readonly ListView lv;
         private readonly Label summary, total, protectNote;
         private readonly Button bMove;
@@ -34,7 +33,7 @@ namespace AutoCopy
 
         public FolderDupForm(string folder)
         {
-            Ui.SetupForm(this, "フォルダ内の重複ファイル検索", 1040, 660);
+            Ui.SetupForm(this, "フォルダの重複ファイル探し", 1040, 660);
             tFolder = Ui.T(folder ?? "", 420);
             Button browse = Ui.B("参照…", delegate { string f = Ui.BrowseFolder(this, tFolder.Text, "重複を探すフォルダを選んでください"); if (f != null) tFolder.Text = f; });
             Button fromJob = Ui.B("ジョブのフォルダ ▾", null);
@@ -67,8 +66,7 @@ namespace AutoCopy
             basisChanged(null, EventArgs.Empty);
             new ToolTip().SetToolTip(cbMtime, "2秒以内の差は同じとみなします（NAS・USBメモリの丸めのため）");
             new ToolTip().SetToolTip(cbName, "フォルダは問いません。大文字・小文字は区別しません");
-            nMin = Ui.N(0, 1000000, 0, 80);
-            cbUnit = Ui.Combo(60, "KB", "MB");
+            cbMin = Ui.SizeChoice(0, "小さいファイルも探す（すべて）", "{0} より小さいファイルは探さない");
             Button search = Ui.B("検索", delegate { Search(); });
             Btn.MakePrimary(search);
             Btn.SetIcon(fromJob, "folder", Ui.Quiet);
@@ -78,17 +76,17 @@ namespace AutoCopy
             protectNote.ForeColor = Ui.Warn;
             Ui.FitToForm(protectNote, 980);
             FlowLayoutPanel top = Ui.Column(
-                Ui.Heading("フォルダ内の重複ファイルを探す"),
+                Ui.Heading("フォルダの重複ファイル探し（コピーと関係なく、指定したフォルダの中を調べます）"),
                 Ui.Hint("コピーとは関係なく、指定したフォルダの中で同じファイルを探します。探すだけでは、ファイルは何も変わりません。"),
                 Ui.WrapRow(Ui.L("フォルダ"), tFolder, browse, fromJob),
                 Ui.WrapRow(Ui.L("同じとみなす基準"), cbContent, cbName, cbMtime, cbSize, Ui.Hint("（選んだものがすべて同じなら重複。中身を選ばないときはファイルを読まないので速い）")),
-                Ui.WrapRow(cSub, Ui.L("小さいファイルは探さない："), nMin, cbUnit, Ui.L("より小さいファイルを除く（0 = すべて探す）"), search),
+                Ui.WrapRow(cSub, Ui.L("小さいファイル"), cbMin, search),
                 summary, protectNote);
             top.Dock = DockStyle.Top;
             top.Padding = new Padding(10, 8, 10, 4);
             Resize += delegate { foreach (Control c in top.Controls) if (c is FlowLayoutPanel) c.MaximumSize = new Size(Math.Max(Ui.S(300), ClientSize.Width - Ui.S(30)), 0); };
 
-            lv = Ui.List("扱い|70", "ファイル（フォルダの中の場所）|480", "サイズ|90", "更新日時|130");
+            lv = Ui.List("扱い|200", "ファイル（フォルダの中の場所）|480", "サイズ|90", "更新日時|130");
             lv.CheckBoxes = true;
             lv.Dock = DockStyle.Fill;
             lv.ItemCheck += OnItemCheck;
@@ -121,11 +119,22 @@ namespace AutoCopy
             Controls.Add(bar);
             Controls.Add(top);
             Controls.Add(bottom);
-            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(), bMove));
+            Controls.Add(Ui.WithHelp(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(), bMove), Help.FolderDup));
             bMove.Enabled = false;
+            // 灰色のときは、押せない理由を出す
+            reasons.Set(bMove, delegate
+            {
+                if (result == null) return "まだ検索していません。フォルダを選んで「検索」を押してください";
+                if (protectedFolder) return "自動コピーのコピー元のフォルダです。コピー元のファイルは移しません（元データを守るため）";
+                if (result.Groups.Count == 0) return "重複が見つかりませんでした";
+                return null;
+            });
         }
 
-        private long MinBytes { get { return (long)nMin.Value * (cbUnit.SelectedIndex == 1 ? 1024L * 1024 : 1024L); } }
+        private readonly ReasonTips reasons = new ReasonTips();
+        private bool protectedFolder;
+
+        private long MinBytes { get { return Ui.SizeChoiceKB(cbMin) * 1024L; } }
 
         /// <summary>画面で選んだ「同じとみなす基準」</summary>
         public int Basis
@@ -149,7 +158,7 @@ namespace AutoCopy
         }
 
         /// <summary>小さいファイルを除く大きさ（画面の確認用にも使う）</summary>
-        public void SetMin(int value, bool mb) { nMin.Value = Math.Max(nMin.Minimum, Math.Min(nMin.Maximum, value)); cbUnit.SelectedIndex = mb ? 1 : 0; }
+        public void SetMin(int value, bool mb) { Ui.SetSizeChoice(cbMin, Math.Max(0, mb ? value * 1024 : value)); }
 
         public void Search()
         {
@@ -202,7 +211,7 @@ namespace AutoCopy
                 for (int i = 0; i < g.Files.Count; i++)
                 {
                     Row row = new Row(); row.Group = g; row.Rel = g.Files[i]; row.Keep = i == 0;
-                    ListViewItem it = new ListViewItem(i == 0 ? "残す候補" : "重複", lg);
+                    ListViewItem it = new ListViewItem(i == 0 ? "残す候補（" + g.KeepReason() + "）" : "重複", lg);
                     it.SubItems.Add(g.Files[i]);
                     it.SubItems.Add(Fmt.Size(g.SizeAt(i)));
                     it.SubItems[2].Tag = g.SizeAt(i);
@@ -224,6 +233,7 @@ namespace AutoCopy
                 + (r.Errors.Count > 0 ? "　読めなかったもの " + r.Errors.Count + "件。" : "")
                 + (r.Groups.Count == 0 ? "　重複はありませんでした。" : "")
                 + (r.Groups.Count > 0 && !DupBasis.Has(r.Basis, DupBasis.Content) ? "　※中身は比べていません。移すときは、残すファイルと中身が同じものだけを移します。" : "");
+            protectedFolder = prot;
             bMove.Enabled = !prot && r.Groups.Count > 0;
             UpdateTotal();
         }
@@ -264,7 +274,7 @@ namespace AutoCopy
         private void SelectByCondition()
         {
             if (result == null) return;
-            using (SelectDialog d = new SelectDialog("フォルダ内の重複", SelectDialog.TagsOf(lv, Map), delegate(SelectCriteria c) { return SelectDialog.Count(lv, Map, c); }, true))
+            using (SelectDialog d = new SelectDialog("フォルダの重複ファイル", SelectDialog.TagsOf(lv, Map), delegate(SelectCriteria c) { return SelectDialog.Count(lv, Map, c); }, true))
             {
                 if (d.ShowDialog(this) != DialogResult.OK) return;
                 filling = true;

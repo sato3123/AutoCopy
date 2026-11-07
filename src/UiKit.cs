@@ -531,10 +531,92 @@ namespace AutoCopy
 
         public static void OpenManual()
         {
+            OpenManual(null);
+        }
+
+        /// <summary>操作説明書を開く。anchor を渡すと、その章（id）の場所を開く</summary>
+        public static void OpenManual(string anchor)
+        {
+            string f = ManualPath();
+            if (f == null) { Error(null, "操作説明書（" + AppPaths.ManualFileName + "）が見つかりません。AutoCopy.exe と同じフォルダに置いてください。"); return; }
+            try
+            {
+                if (string.IsNullOrEmpty(anchor)) { Process.Start(f); return; }
+                // ファイルを直接開くと「#章」が渡らないため、章へ移る小さなページを経由する
+                string jump = Path.Combine(Path.GetTempPath(), "autocopy-help.html");
+                string url = new Uri(f).AbsoluteUri + "#" + anchor;
+                File.WriteAllText(jump, "<!DOCTYPE html><meta charset=\"utf-8\"><meta http-equiv=\"refresh\" content=\"0; url=" + url + "\"><a href=\"" + url + "\">操作説明書を開く</a>", new System.Text.UTF8Encoding(false));
+                Process.Start(jump);
+            }
+            catch (Exception) { try { Process.Start(f); } catch (Exception ex) { Error(null, "操作説明書を開けません：" + ex.Message); } }
+        }
+
+        public static string ManualPath()
+        {
             string f = Path.Combine(AppPaths.ExeDir, AppPaths.ManualFileName);
             if (!File.Exists(f)) f = Path.Combine(AppPaths.BinDir, AppPaths.ManualFileName);
-            if (File.Exists(f)) { try { Process.Start(f); return; } catch (Exception) { } }
-            Error(null, "操作説明書（" + AppPaths.ManualFileName + "）が見つかりません。AutoCopy.exe と同じフォルダに置いてください。");
+            return File.Exists(f) ? f : null;
+        }
+
+        /// <summary>画面ごとの「？ 説明」ボタン（操作説明書のその画面の章を開く）</summary>
+        /// <summary>下のボタンの帯の左端に「？ 説明」を置く</summary>
+        public static FlowLayoutPanel WithHelp(FlowLayoutPanel footer, string anchor)
+        {
+            footer.Controls.Add(HelpButton(anchor));
+            return footer;
+        }
+
+        public static Button HelpButton(string anchor)
+        {
+            Help.Used(anchor);
+            Button b = B("？ 説明", delegate { OpenManual(anchor); });
+            new ToolTip().SetToolTip(b, "この画面の説明（操作説明書）を開きます");
+            b.AccessibleName = "この画面の説明";
+            return b;
+        }
+
+        /// <summary>日付欄（表示は yyyy/MM/dd に固定。Windows の地域の設定で「1/ 1/2020」のようにならないように）</summary>
+        public static DateTimePicker DateBox(DateTime value)
+        {
+            DateTimePicker d = new DateTimePicker();
+            d.Format = DateTimePickerFormat.Custom;
+            d.CustomFormat = "yyyy/MM/dd";
+            d.Width = S(120);
+            d.Value = value < d.MinDate || value > d.MaxDate ? DateTime.Today : value;   // 未設定（MinValue）でも落ちない
+            return d;
+        }
+
+        /// <summary>
+        /// 「小さいファイルは探さない」などの大きさの選択肢（KB）。0 = すべて。今の値が選択肢にないときは、その値も選択肢に足す。
+        /// </summary>
+        public static ComboBox SizeChoice(int currentKB, string zeroText, string format)
+        {
+            ComboBox cb = Combo(220);
+            List<int> values = new List<int>(new int[] { 0, 1, 10, 100, 1024, 10240 });
+            if (currentKB > 0 && !values.Contains(currentKB)) { values.Add(currentKB); values.Sort(); }
+            foreach (int v in values) cb.Items.Add(new SizeItem(v, v == 0 ? zeroText : string.Format(format, Fmt.Size(v * 1024L))));
+            SetSizeChoice(cb, currentKB);
+            return cb;
+        }
+
+        public static void SetSizeChoice(ComboBox cb, int kb)
+        {
+            for (int i = 0; i < cb.Items.Count; i++) if (((SizeItem)cb.Items[i]).KB == kb) { cb.SelectedIndex = i; return; }
+            cb.Items.Add(new SizeItem(kb, Fmt.Size(kb * 1024L)));
+            cb.SelectedIndex = cb.Items.Count - 1;
+        }
+
+        public static int SizeChoiceKB(ComboBox cb)
+        {
+            SizeItem it = cb.SelectedItem as SizeItem;
+            return it == null ? 0 : it.KB;
+        }
+
+        public class SizeItem
+        {
+            public readonly int KB; private readonly string text;
+            public SizeItem(int kb, string text) { KB = kb; this.text = text; }
+            public override string ToString() { return text; }
         }
 
         /// <summary>
@@ -1103,5 +1185,65 @@ namespace AutoCopy
             Point at = new Point(Math.Max(0, Ui.S(4) - 1), (Height - gs.Height) / 2);
             CheckBoxRenderer.DrawCheckBox(e.Graphics, at, cs);
         }
+    }
+
+    /// <summary>
+    /// 灰色（操作できない）の項目に、マウスを重ねると「なぜ操作できないか」を出す。
+    /// Windows では操作できない部品はマウスの動きを受け取らないため、入れ物の側で見て出す。
+    /// </summary>
+    public class ReasonTips
+    {
+        private readonly Dictionary<Control, Func<string>> reasons = new Dictionary<Control, Func<string>>();
+        private readonly ToolTip tip = new ToolTip();
+        private readonly HashSet<Control> hooked = new HashSet<Control>();
+        private Control shownFor;
+
+        public ReasonTips() { tip.ShowAlways = true; tip.InitialDelay = 200; tip.AutoPopDelay = 15000; }
+
+        /// <summary>c が灰色のときに出す理由（その時点の設定に合わせて変わるもの）</summary>
+        public void Set(Control c, Func<string> reason) { reasons[c] = reason; Hook(c.Parent); c.ParentChanged += delegate { Hook(c.Parent); }; }
+
+        public void Set(Control c, string reason) { Set(c, delegate { return reason; }); }
+
+        /// <summary>今、灰色で理由が出ないもの（確認用）。ラベル・入れ物は除く</summary>
+        public string ReasonFor(Control c)
+        {
+            Func<string> f;
+            return reasons.TryGetValue(c, out f) ? f() : null;
+        }
+
+        public bool Has(Control c) { return reasons.ContainsKey(c); }
+
+        private void Hook(Control parent)
+        {
+            if (parent == null || hooked.Contains(parent)) return;
+            hooked.Add(parent);
+            parent.MouseMove += delegate(object s, MouseEventArgs e)
+            {
+                Control child = parent.GetChildAtPoint(e.Location, GetChildAtPointSkip.Invisible);
+                Func<string> f;
+                if (child != null && !child.Enabled && reasons.TryGetValue(child, out f))
+                {
+                    if (shownFor == child) return;
+                    shownFor = child;
+                    string r = f();
+                    if (!string.IsNullOrEmpty(r)) tip.Show("操作できない理由：" + r, parent, e.X + 12, e.Y + 18, 8000);
+                }
+                else if (shownFor != null) { tip.Hide(parent); shownFor = null; }
+            };
+            parent.MouseLeave += delegate { if (shownFor != null) { tip.Hide(parent); shownFor = null; } };
+        }
+    }
+
+    /// <summary>操作説明書の章（id）。画面の「？ 説明」ボタンが使う。すべて説明書にあることをテストで確かめる</summary>
+    public static class Help
+    {
+        public const string Jobs = "c3", Preview = "preview", Main = "c5", Notices = "notices", Conflicts = "c7", Mirror = "c8",
+            Sync = "c8s", SyncDelete = "syncdel", DupCheck = "c9", FolderDup = "folderdup", Dedup = "dedup", Log = "c11",
+            Usage = "usage", Settings = "appsettings", Select = "list", Restore = "restore", Exclude = "c4", Setup = "c2", Skip = "skiplist", Trouble = "c12";
+        public static readonly string[] All = { Jobs, Preview, Main, Notices, Conflicts, Mirror, Sync, SyncDelete, DupCheck, FolderDup, Dedup, Log, Usage, Settings, Select, Restore, Exclude, Setup, Skip, Trouble };
+        private static readonly HashSet<string> used = new HashSet<string>();
+        public static void Used(string anchor) { lock (used) used.Add(anchor ?? ""); }
+        public static string[] UsedAnchors() { lock (used) { string[] a = new string[used.Count]; used.CopyTo(a); return a; } }
     }
 }

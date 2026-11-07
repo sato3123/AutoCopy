@@ -22,7 +22,14 @@ namespace AutoCopy
         private CheckBox cAlwaysRename;
         private Label lSyncNote, lDedupNote;
         private RadioButton rDist, rLocal, rAppend, rMirror, rSync, rAsk, rSkip, rOver;
-        private NumericUpDown nSyncCache, nDupMin;
+        private NumericUpDown nSyncCache;
+        private ComboBox cbDupMin, cbSyncPreset;
+        private CheckBox cAdvanced, cParAuto, cBwLimit, cSyncCache;
+        private FlowLayoutPanel syncChoices;
+        private Label lExclCount;
+        private readonly List<Control> advanced = new List<Control>();   // 「詳しい設定」のときだけ見せるもの
+        public readonly ReasonTips Tips = new ReasonTips();
+        private ExclusionCounter counter;
         private NumericUpDown nInterval, nDelay, nTol, nPar, nBw, nMirrorCount, nMirrorPct, nDedup;
         private ComboBox cbUnit;
         private Label lPreview;
@@ -64,26 +71,39 @@ namespace AutoCopy
             Button cancel = Ui.B("キャンセル", delegate { DialogResult = DialogResult.Cancel; Close(); });
             Button test = Ui.B("テスト（コピーせずに結果を確認）", delegate { RunTest(); });
             FlowLayoutPanel foot = Ui.Footer(cancel, ok);
-            test.Margin = new Padding(3, 3, 200, 3);
+            test.Margin = new Padding(3, 3, Ui.S(60), 3);
             foot.Controls.Add(test);
+            foot.Controls.Add(Ui.HelpButton(Help.Jobs));
             AcceptButton = ok;
             CancelButton = cancel;
 
             Controls.Add(tabs);
+            // 上の帯：詳しい設定の表示・はじめての設定の順番
+            cAdvanced = Ui.C("詳しい設定も表示する（時間帯・同時にコピーする数・上書きのルール・除外の細かい条件 など）", false);
+            cAdvanced.CheckedChanged += delegate { ApplyAdvanced(); if (!loading) { AppCore.Settings.ShowAdvancedJobSettings = cAdvanced.Checked; } };
+            FlowLayoutPanel topBar = Ui.Column(cAdvanced);
             if (isNew)
             {
-                Label nl = Ui.L("新しいジョブは「無効」で作られます（自動では実行されません）。「テスト」で結果を確かめてから、メイン画面のジョブの左のチェックを入れて有効にしてください。");
+                Label nl = Ui.L("はじめての設定：「基本」タブの ①コピー元 → ②コピー先 → ③コピーの方式 → ④実行のタイミング を決め、下の「テスト」で結果を確かめてから「設定を保存」を押してください。"
+                    + "新しいジョブは「無効」で作られ、保存した後に有効にするかを尋ねます。");
                 Ui.FitToForm(nl, 760);
                 Panel nb = Ui.Banner(Ui.InfoBack, nl);
-                nb.Dock = DockStyle.Top;
-                Controls.Add(nb);
+                topBar.Controls.Add(nb);
             }
+            topBar.Dock = DockStyle.Top;
+            topBar.Padding = new Padding(Ui.S(8), Ui.S(4), Ui.S(8), 0);
+            Controls.Add(topBar);
             Controls.Add(foot);
             LoadValues();
             loading = false;
             WireEnabled();
+            SetReasons();
             UpdateEnabled();
             UpdatePreview();
+            ApplyAdvanced();
+            counter = new ExclusionCounter(this, lExclCount, delegate { return BuildSnapshot(); });
+            FormClosed += delegate { counter.Dispose(); };
+            tabs.SelectedIndexChanged += delegate { if (tabs.SelectedIndex == 1) counter.Request(); };
         }
 
         // ================= 基本 =================
@@ -102,13 +122,13 @@ namespace AutoCopy
 
             tSrc = Ui.T("", 440);
             tSrc.TextChanged += delegate { UpdatePreview(); };
-            b.Controls.Add(Ui.Row(Ui.L("コピー元フォルダ", 130), tSrc, Ui.B("参照…", delegate { string f = Ui.BrowseFolder(this, tSrc.Text, "コピー元フォルダを選んでください"); if (f != null) tSrc.Text = f; })));
+            b.Controls.Add(Ui.Row(Ui.L("① コピー元フォルダ", 130), tSrc, Ui.B("参照…", delegate { string f = Ui.BrowseFolder(this, tSrc.Text, "コピー元フォルダを選んでください"); if (f != null) tSrc.Text = f; })));
             cSub = Ui.C("サブフォルダも含める", true);
             b.Controls.Add(Ui.Row(Ui.L("", 130), cSub));
 
             tDst = Ui.T("", 440);
             tDst.TextChanged += delegate { UpdatePreview(); };
-            b.Controls.Add(Ui.Row(Ui.L("コピー先フォルダ", 130), tDst, Ui.B("参照…", delegate { string f = Ui.BrowseFolder(this, PathUtil.Expand(tDst.Text, AppCore.Settings.FolderName), "コピー先フォルダを選んでください"); if (f != null) tDst.Text = f; })));
+            b.Controls.Add(Ui.Row(Ui.L("② コピー先フォルダ", 130), tDst, Ui.B("参照…", delegate { string f = Ui.BrowseFolder(this, PathUtil.Expand(tDst.Text, AppCore.Settings.FolderName), "コピー先フォルダを選んでください"); if (f != null) tDst.Text = f; })));
             lPreview = Ui.Hint("");
             Ui.FitToForm(lPreview, 600);
             Button ins = Ui.B("{フォルダ名} を末尾に入れる", delegate
@@ -145,13 +165,34 @@ namespace AutoCopy
             FlowLayoutPanel syncPush = Ui.Column(Ui.Hint("このPCにだけあって、共有フォルダにないファイル："), rSyncNoPush, rSyncPush);
             syncPush.Margin = new Padding(Ui.S(22), 0, 3, 4);
             // 共有フォルダの詳しい確認を省略する時間（複数PCで同期するときの待ち時間を減らす）
-            nSyncCache = Ui.N(0, 1440, 30, 72);
-            Label lCacheNote = Ui.Wrap("共有フォルダの中を全部調べるのは時間がかかるため、前回の詳しい確認からこの時間以内で、どのPCも自動コピーで共有フォルダを変えていなければ、前回の確認の結果を使います（0 = 毎回詳しく確認）。自動コピー以外の方法で共有フォルダを直接変えた場合は、この時間がたってから反映されます。", 540);
+            // よく使う組み合わせ（選ぶと下の2つが決まる。下を自分で変えると「自分で選ぶ」になる）
+            cbSyncPreset = Ui.Combo(470, SyncPresets.Labels);
+            cbSyncPreset.SelectedIndexChanged += delegate
+            {
+                if (loading || cbSyncPreset.SelectedIndex < 0) return;
+                bool take, push;
+                if (SyncPresets.Values(cbSyncPreset.SelectedIndex, out take, out push))
+                {
+                    rSyncTake.Checked = take; rSyncNoTake.Checked = !take;
+                    rSyncPush.Checked = push; rSyncNoPush.Checked = !push;
+                }
+                ApplyAdvanced();
+            };
+            EventHandler syncRadio = delegate { if (!loading) SelectSyncPreset(); };
+            foreach (RadioButton r in new RadioButton[] { rSyncTake, rSyncNoTake, rSyncPush, rSyncNoPush }) r.CheckedChanged += syncRadio;
+            FlowLayoutPanel syncPresetRow = Ui.Row(Ui.Hint("同期のしかた："), cbSyncPreset);
+            syncPresetRow.Margin = new Padding(Ui.S(22), 0, 3, 4);
+            syncChoices = Ui.Column(syncNew, syncPush);
+            syncChoices.Margin = new Padding(0);
+            cSyncCache = Ui.C("共有フォルダの詳しい確認を省略する（前回から", true);
+            nSyncCache = Ui.N(1, 1440, 30, 72);
+            Label lCacheNote = Ui.Wrap("共有フォルダの中を全部調べるのは時間がかかるため、前回の詳しい確認からこの時間以内で、どのPCも自動コピーで共有フォルダを変えていなければ、前回の確認の結果を使います。チェックを外すと毎回詳しく確認します。自動コピー以外の方法で共有フォルダを直接変えた場合は、この時間がたってから反映されます。", 540);
             lCacheNote.ForeColor = Ui.Quiet;
-            FlowLayoutPanel syncCache = Ui.Column(Ui.Row(Ui.Hint("共有フォルダの詳しい確認を、前回から"), nSyncCache, Ui.Hint("分以内なら省略する")), lCacheNote);
+            FlowLayoutPanel syncCache = Ui.Column(Ui.Row(cSyncCache, nSyncCache, Ui.Hint("分以内）")), lCacheNote);
             syncCache.Margin = new Padding(Ui.S(22), 0, 3, 4);
-            FlowLayoutPanel modes = Ui.Column(rAppend, rMirror, mirrorLimit, rSync, lSyncNote, syncNew, syncPush, syncCache);
-            b.Controls.Add(Ui.Row(Ui.L("コピーの方式", 130), modes));
+            advanced.Add(syncCache);
+            FlowLayoutPanel modes = Ui.Column(rAppend, rMirror, mirrorLimit, rSync, lSyncNote, syncPresetRow, syncChoices, syncCache);
+            b.Controls.Add(Ui.Row(Ui.L("③ コピーの方式", 130), modes));
 
             // 実行のタイミング：一定の間隔で（＋ログオン時）／ログオン時のみ
             nInterval = Ui.N(1, 1440, 30, 72);
@@ -169,18 +210,18 @@ namespace AutoCopy
             Label lOnlyNote = Ui.Wrap("Windows にサインインしてアプリが起動したときに1回だけ実行します（下の「起動後の初回」の待ち時間の後）。その後は、次にログオンするまで自動では実行しません（手動の実行・強制データ送信はいつでもできます）。", 540);
             lOnlyNote.ForeColor = Ui.Quiet;
             lOnlyNote.Margin = new Padding(Ui.S(22), 0, 3, 4);
-            b.Controls.Add(Ui.Row(Ui.L("実行のタイミング", 130), Ui.Column(
+            b.Controls.Add(Ui.Row(Ui.L("④ 実行のタイミング", 130), Ui.Column(
                 Ui.Row(rInterval, nInterval, cbUnit, Ui.Hint("ごと（1分〜24時間）")),
                 cRunAtStartup, lStartupNote, rStartupOnly, lOnlyNote)));
 
             cWindow = Ui.C("時間帯を限定する", false);
             tStart = Ui.T("08:00", 60);
             tEnd = Ui.T("20:00", 60);
-            b.Controls.Add(Ui.Row(Ui.L("実行する時間帯", 130), cWindow, tStart, Ui.L("〜"), tEnd));
+            Adv(b, Ui.Row(Ui.L("実行する時間帯", 130), cWindow, tStart, Ui.L("〜"), tEnd));
 
             cDelay = Ui.C("PC起動後", true);
             nDelay = Ui.N(0, 120, 1, 56);
-            b.Controls.Add(Ui.Row(Ui.L("起動後の初回", 130), cDelay, nDelay, Ui.L("分待ってから実行する")));
+            Adv(b, Ui.Row(Ui.L("起動後の初回", 130), cDelay, nDelay, Ui.L("分待ってから実行する")));
 
 
             cFollow = Ui.C("名前やフォルダ名を変えたら、コピー先も同じ名前に変える（再コピーしない）", true);
@@ -189,7 +230,7 @@ namespace AutoCopy
             rOver = Ui.R("常に上書き", false);
             nTol = Ui.N(0, 3600, 2, 56);
             cBackup = Ui.C("上書きする前に、コピー先の古いファイルを「_AutoCopy\\退避」に残す", false);
-            b.Controls.Add(Ui.Section("名前変更と上書きのルール",
+            Adv(b, Ui.Section("名前変更と上書きのルール",
                 cFollow,
                 Ui.Row(Ui.L("コピー先が古いとき", 160), Ui.L("自動で上書きする")),
                 Ui.Row(Ui.L("コピー先が新しいとき", 160), Ui.Row(rAsk, rSkip, rOver)),
@@ -201,19 +242,117 @@ namespace AutoCopy
             rDedupOn = Ui.R("自動でテキストにする：2つ目以降はコピーせず、1つ目の保管場所を書いたテキストを置く", false);
             rDedupOn.CheckedChanged += delegate { UpdateEnabled(); };
             nDedup = Ui.N(1, 1000000, 10, 72);
-            lDedupNote = Ui.Wrap("「テキスト」は「〇〇" + AppPaths.PlaceholderSuffix + "」で、1つ目の保管場所を書きます。中身はファイル全体で比べます（同じ大きさのものだけ読みます）。毎回選ぶ場合は、重複チェックの画面で「テキストにする」か「普通にコピー」を選びます。普通にコピー済みの重複も、重複チェックの画面でテキストにできます。", 600);
+            lDedupNote = Ui.Wrap("「テキスト」は「〇〇" + AppPaths.PlaceholderSuffix + "」で、1つ目の保管場所を書きます。中身はファイル全体で比べます（同じ大きさのものだけ読みます）。毎回選ぶ場合は、コピー先の整理（重複チェック）の画面で「テキストにする」か「普通にコピー」を選びます。普通にコピー済みの重複も、その画面でテキストにできます。", 600);
             lDedupNote.ForeColor = Ui.Quiet;
-            b.Controls.Add(Ui.Section("大きいファイルの重複（コピー元の中で中身が同じファイル）",
+            Adv(b, Ui.Section("大きいファイルの重複をテキストに置き換える（コピー元の中で中身が同じ大きいファイル・容量の節約）",
                 Ui.Column(rDedupOff, rDedupAsk, rDedupOn),
                 Ui.Row(Ui.L("　　対象の大きさ", 160), nDedup, Ui.L("MB 以上")),
                 lDedupNote));
 
-            nPar = Ui.N(0, 8, 0, 56);
-            b.Controls.Add(Ui.Row(Ui.L("同時にコピーする数", 130), nPar, Ui.Hint("0 = 自動（ネットワークは 2、PC内は 4）")));
-            nBw = Ui.N(0, 1000000, 0, 90);
-            b.Controls.Add(Ui.Row(Ui.L("転送速度の上限", 130), nBw, Ui.Hint("KB/秒（0 = 制限なし）")));
+            cParAuto = Ui.C("自動（おすすめ：ネットワークは 2、PC内は 4）", true);
+            nPar = Ui.N(1, 8, 2, 56);
+            Adv(b, Ui.Row(Ui.L("同時にコピーする数", 130), cParAuto, nPar, Ui.Hint("個")));
+            cBwLimit = Ui.C("転送速度を制限する", false);
+            nBw = Ui.N(1, 1000000, 1000, 90);
+            Adv(b, Ui.Row(Ui.L("転送速度の上限", 130), cBwLimit, nBw, Ui.Hint("KB/秒（1000 KB/秒 ≒ 1 MB/秒）")));
             p.Controls.Add(b);
             return p;
+        }
+
+        /// <summary>「詳しい設定」のときだけ見せる部品として加える</summary>
+        private Control Adv(FlowLayoutPanel b, Control c)
+        {
+            b.Controls.Add(c);
+            advanced.Add(c);
+            return c;
+        }
+
+        /// <summary>詳しい設定の表示・非表示（隠しても設定の内容はそのまま使う）</summary>
+        private void ApplyAdvanced()
+        {
+            if (cAdvanced == null) return;
+            bool adv = cAdvanced.Checked;
+            SuspendLayout();
+            foreach (Control c in advanced) c.Visible = adv;
+            // 同期の細かい選択：詳しい設定のとき、または「自分で選ぶ」のときに見せる
+            if (syncChoices != null) syncChoices.Visible = adv || cbSyncPreset.SelectedIndex == SyncPresets.Custom;
+            ResumeLayout(true);
+        }
+
+        /// <summary>このジョブに、初期値と違う「詳しい設定」があるか（あれば最初から見せる）</summary>
+        public static bool HasAdvancedValues(JobConfig j)
+        {
+            JobConfig d = new JobConfig();
+            ExcludeRules x = j.Exclude ?? ExcludeRules.CreateDefault();
+            return j.UseTimeWindow || !j.UseStartupDelay || j.StartupDelayMinutes != d.StartupDelayMinutes || j.Parallel > 0 || j.BandwidthKBps > 0
+                || j.NewerDestPolicy != NewerPolicy.Ask || j.BackupBeforeOverwrite || !j.FollowRename || j.ToleranceSeconds != d.ToleranceSeconds
+                || j.Dedup != d.Dedup || j.DedupMinMB != d.DedupMinMB
+                || j.RetryCount != d.RetryCount || j.RetryIntervalSeconds != d.RetryIntervalSeconds
+                || (j.Sync && j.SyncRemoteCacheMinutes != d.SyncRemoteCacheMinutes)
+                || x.MaxSizeBytes > 0 || x.ExcludeZeroByte || !string.IsNullOrEmpty(x.OlderThan) || !x.ExcludeHidden || !x.ExcludeSystem
+                || (x.Includes != null && x.Includes.Count > 0) || (x.OnlyFolders != null && x.OnlyFolders.Count > 0) || (x.OnlyExtensions != null && x.OnlyExtensions.Count > 0)
+                || j.DupShowOrphans != d.DupShowOrphans || j.DupShowSameContent != d.DupShowSameContent || j.DupShowEmptyFolders != d.DupShowEmptyFolders || j.DupMinSizeKB > 0;
+        }
+
+        /// <summary>同期の2つの選択に合う「同期のしかた」を選ぶ（合うものがなければ「自分で選ぶ」）</summary>
+        private void SelectSyncPreset()
+        {
+            int k = SyncPresets.Find(rSyncTake.Checked, rSyncPush.Checked);
+            bool keep = loading;
+            loading = true;
+            cbSyncPreset.SelectedIndex = k;
+            loading = keep;
+            ApplyAdvanced();
+        }
+
+        /// <summary>灰色（操作できない）の項目に、マウスを重ねたときに出す理由</summary>
+        private void SetReasons()
+        {
+            Func<string> notSync = delegate { return "「③ コピーの方式」で「複数PCで同期」を選んだときだけ使います"; };
+            Func<string> dupOff = delegate { return rSync.Checked ? "「複数PCで同期」では、コピー先の整理（重複チェック）は行いません" : "「コピー先の整理（重複チェック）を行う」にチェックを入れると使えます"; };
+            Tips.Set(nMirrorCount, "「ミラー」を選んだときだけ使います");
+            Tips.Set(nMirrorPct, "「ミラー」を選んだときだけ使います");
+            foreach (Control c in new Control[] { rSyncTake, rSyncNoTake, rSyncPush, rSyncNoPush, cbSyncPreset, cSyncCache }) Tips.Set(c, notSync);
+            Tips.Set(nSyncCache, delegate { return !rSync.Checked ? notSync() : "「共有フォルダの詳しい確認を省略する」にチェックを入れると使えます"; });
+            Tips.Set(tStart, "「時間帯を限定する」にチェックを入れると使えます");
+            Tips.Set(tEnd, "「時間帯を限定する」にチェックを入れると使えます");
+            Tips.Set(nDelay, "「PC起動後」にチェックを入れると使えます");
+            foreach (Control c in new Control[] { nInterval, cbUnit, cRunAtStartup }) Tips.Set(c, "「ログオン時（アプリの起動時）のみ」を選んでいるため使いません");
+            Tips.Set(cBackup, "「コピー先が新しいとき」で「上書きしない」を選んでいるため使いません");
+            foreach (Control c in new Control[] { rDedupOff, rDedupAsk, rDedupOn }) Tips.Set(c, "「複数PCで同期」では使えません（他のPCのファイルがあるため）");
+            Tips.Set(nDedup, delegate { return rSync.Checked ? "「複数PCで同期」では使えません" : "「使わない」を選んでいるため使いません"; });
+            Tips.Set(nPar, "「自動」のチェックを外すと、数を決められます");
+            Tips.Set(nBw, "「転送速度を制限する」にチェックを入れると使えます");
+            Tips.Set(nMax, "左のチェックを入れると、大きさで除外できます");
+            Tips.Set(cbMaxUnit, "左のチェックを入れると、大きさで除外できます");
+            Tips.Set(dOlder, "左のチェックを入れると、日付で除外できます");
+            Tips.Set(cDup, "「複数PCで同期」では、コピー先の整理（重複チェック）は行いません");
+            foreach (Control c in new Control[] { rStartupDup, rDaily, rWeekly, rMonthly, rYearly, rManual, cEmpty, cSame, cOrphan, cbDupMin }) Tips.Set(c, dupOff);
+            Tips.Set(cbWeekday, delegate { return !(cDup.Checked && !rSync.Checked) ? dupOff() : "「毎週」を選んだときだけ使います"; });
+            Tips.Set(cbDupDay, delegate { return !(cDup.Checked && !rSync.Checked) ? dupOff() : "「毎月」「毎年」を選んだときだけ使います"; });
+            Tips.Set(cbDupMonth, delegate { return !(cDup.Checked && !rSync.Checked) ? dupOff() : "「毎年」を選んだときだけ使います"; });
+            Tips.Set(tDupTime, delegate { return !(cDup.Checked && !rSync.Checked) ? dupOff() : "「ログオン時」「手動のみ」では時刻を使いません"; });
+            Tips.Set(cAlwaysRename, "いつも探すため、外せません（コピー先に古い名前のファイルが残らないようにするため）");
+            foreach (Control c in new Control[] { cbServer, cSaveCred, tUser, tPass }) Tips.Set(c, "コピー元・コピー先がネットワークのフォルダではないため、入力は不要です");
+            Tips.Set(nRetryInt, "再試行の回数が 0 のため使いません");
+        }
+
+        /// <summary>確認用：今、灰色なのに理由が出ない入力欄（あれば名前）</summary>
+        public List<string> MissingReasons()
+        {
+            List<string> bad = new List<string>();
+            Stack<Control> st = new Stack<Control>();
+            st.Push(this);
+            while (st.Count > 0)
+            {
+                Control c = st.Pop();
+                if (!(c is NumericUpDown || c is ComboBox || c is DateTimePicker)) foreach (Control ch in c.Controls) st.Push(ch);
+                bool input = c is CheckBox || c is RadioButton || c is NumericUpDown || c is TextBox || c is ComboBox || c is DateTimePicker || c is Button || c is ListBox;
+                if (!input || c.Enabled || c.Parent == null || !c.Parent.Enabled) continue;
+                string r = Tips.ReasonFor(c);
+                if (string.IsNullOrEmpty(r)) bad.Add(c.GetType().Name + "「" + c.Text + "」");
+            }
+            return bad;
         }
 
         private void OnSyncChanged(object sender, EventArgs e)
@@ -226,7 +365,7 @@ namespace AutoCopy
                 + "・削除は「削除の確認」で選んでから伝えます。両方で変えたファイルは確認画面で選びます。\n"
                 + "・共有フォルダにだけあるファイルは、初期値ではこのPCに取り込みます。このPCにだけあるファイルは、初期値では共有フォルダにコピーしません（どちらも下で選べます）。\n"
                 + "・このPCの古い版は、置き換える前に控え（" + AppPaths.SyncBackupDir + "）に残します。\n"
-                + "・重複チェックと大きいファイルの重複の省略は、同期では行いません。\n\n同期にしますか？";
+                + "・コピー先の整理（重複チェック）と、大きいファイルの重複のテキストへの置き換えは、同期では行いません。\n\n同期にしますか？";
             if (!Ui.Confirm(this, msg))
             {
                 loading = true;
@@ -242,7 +381,7 @@ namespace AutoCopy
         private void WireEnabled()
         {
             EventHandler h = delegate { UpdateEnabled(); };
-            foreach (CheckBox c in new CheckBox[] { cWindow, cDelay, cMax, cOlder, cDup }) c.CheckedChanged += h;
+            foreach (CheckBox c in new CheckBox[] { cWindow, cDelay, cMax, cOlder, cDup, cParAuto, cBwLimit, cSyncCache }) c.CheckedChanged += h;
             foreach (RadioButton r in new RadioButton[] { rInterval, rStartupOnly, rAppend, rMirror, rSync, rAsk, rSkip, rOver, rStartupDup, rDaily, rWeekly, rMonthly, rYearly, rManual, rDedupOff, rDedupAsk, rDedupOn }) r.CheckedChanged += h;
             nRetry.ValueChanged += h;
         }
@@ -259,7 +398,10 @@ namespace AutoCopy
             lSyncNote.Enabled = sync;
             rSyncNoTake.Enabled = rSyncTake.Enabled = sync;
             rSyncNoPush.Enabled = rSyncPush.Enabled = sync;
-            nSyncCache.Enabled = sync;
+            cbSyncPreset.Enabled = cSyncCache.Enabled = sync;
+            nSyncCache.Enabled = sync && cSyncCache.Checked;
+            nPar.Enabled = !cParAuto.Checked;
+            nBw.Enabled = cBwLimit.Checked;
             // 実行する時間帯・起動後の待ち
             tStart.Enabled = tEnd.Enabled = cWindow.Checked;
             nDelay.Enabled = cDelay.Checked;
@@ -282,7 +424,7 @@ namespace AutoCopy
             cbDupDay.Enabled = dup && (rMonthly.Checked || rYearly.Checked);
             cbDupMonth.Enabled = dup && rYearly.Checked;
             tDupTime.Enabled = dup && !rManual.Checked && !rStartupDup.Checked;
-            cEmpty.Enabled = cSame.Enabled = cOrphan.Enabled = nDupMin.Enabled = dup;
+            cEmpty.Enabled = cSame.Enabled = cOrphan.Enabled = cbDupMin.Enabled = dup;
             cAlwaysRename.Enabled = false;   // 常に探す（変えられない）
             // ネットワークの接続：ネットワークのフォルダがないとき、保存しないときは入力できない
             bool net = cbServer.Items.Count > 0;
@@ -318,6 +460,24 @@ namespace AutoCopy
                 expect(!cDup.Enabled && !cbWeekday.Enabled && !tDupTime.Enabled, "同期のとき重複チェックを変えられる");
                 expect(rSyncTake.Enabled && rSyncNoTake.Enabled, "同期なのに共有フォルダにだけあるファイルの扱いを選べない");
                 expect(rSyncPush.Enabled && rSyncNoPush.Enabled, "同期なのにこのPCにだけあるファイルの扱いを選べない");
+                cSyncCache.Checked = false; UpdateEnabled();
+                expect(cSyncCache.Enabled && !nSyncCache.Enabled, "省略しないのに省略する時間を変えられる");
+                cSyncCache.Checked = true; UpdateEnabled();
+                expect(nSyncCache.Enabled, "省略するのに時間を変えられない");
+                // 同期のしかた（よく使う組み合わせ）を選ぶと、2つの選択が決まる。自分で変えると「自分で選ぶ」になる
+                loading = false;
+                for (int k = 0; k < SyncPresets.Custom; k++)
+                {
+                    cbSyncPreset.SelectedIndex = k;
+                    bool tk, ps; SyncPresets.Values(k, out tk, out ps);
+                    expect(rSyncTake.Checked == tk && rSyncPush.Checked == ps, "同期のしかた「" + SyncPresets.Labels[k] + "」を選んでも、取り込む・送るの選択が合わない");
+                }
+                cbSyncPreset.SelectedIndex = 0;
+                bool push0 = rSyncPush.Checked;
+                if (push0) rSyncNoPush.Checked = true; else rSyncPush.Checked = true;
+                expect(cbSyncPreset.SelectedIndex == SyncPresets.Find(rSyncTake.Checked, rSyncPush.Checked), "取り込む・送るを変えても、同期のしかたが合わない");
+                loading = true;
+                cbSyncPreset.SelectedIndex = 0; rSyncTake.Checked = true; rSyncNoPush.Checked = true;
                 bool takeBefore = rSyncTake.Checked;
                 rSyncPush.Checked = true;
                 expect(rSyncTake.Checked == takeBefore && rSyncNoTake.Checked != takeBefore && rSync.Checked, "共有へコピーするを選ぶと、取り込みや方式の選択が変わる（同じ入れ物に入っている）");
@@ -328,7 +488,15 @@ namespace AutoCopy
                 rAppend.Checked = true; UpdateEnabled();
                 expect(!rSync.Checked && !rMirror.Checked, "追加・更新を選んでも他の方式の選択が外れない");
                 expect(!rSyncTake.Enabled && !rSyncNoTake.Enabled && !rSyncPush.Enabled && !rSyncNoPush.Enabled, "同期でないのに、共有フォルダ／このPCにだけあるファイルの扱いを選べる");
-                expect(!nSyncCache.Enabled, "同期でないのに、共有フォルダの確認を省略する時間を変えられる");
+                expect(!nSyncCache.Enabled && !cSyncCache.Enabled && !cbSyncPreset.Enabled, "同期でないのに、共有フォルダの確認を省略する時間・同期のしかたを変えられる");
+                cParAuto.Checked = true; UpdateEnabled();
+                expect(!nPar.Enabled, "同時にコピーする数が自動なのに数を変えられる");
+                cParAuto.Checked = false; UpdateEnabled();
+                expect(nPar.Enabled, "自動でないのに数を変えられない");
+                cBwLimit.Checked = false; UpdateEnabled();
+                expect(!nBw.Enabled, "転送速度を制限しないのに上限を変えられる");
+                cBwLimit.Checked = true; UpdateEnabled();
+                expect(nBw.Enabled, "転送速度を制限するのに上限を変えられない");
                 rDedupOff.Checked = true; UpdateEnabled();
                 expect(rDedupOn.Enabled && !nDedup.Enabled, "重複の省略を使わないのに大きさを変えられる");
                 expect(!rDedupAsk.Checked && !rDedupOn.Checked, "使わないを選んでも他の選択が外れない");
@@ -355,7 +523,7 @@ namespace AutoCopy
                 cOlder.Checked = false; UpdateEnabled();
                 expect(!dOlder.Enabled, "日付で除外しないのに日付を変えられる");
                 cDup.Checked = false; UpdateEnabled();
-                expect(!rDaily.Enabled && !tDupTime.Enabled && !cEmpty.Enabled && !cSame.Enabled && !cOrphan.Enabled && !nDupMin.Enabled, "重複チェックをしないのに日時・探すものを変えられる");
+                expect(!rDaily.Enabled && !tDupTime.Enabled && !cEmpty.Enabled && !cSame.Enabled && !cOrphan.Enabled && !cbDupMin.Enabled, "重複チェックをしないのに日時・探すものを変えられる");
                 cDup.Checked = true; rManual.Checked = true; UpdateEnabled();
                 expect(!tDupTime.Enabled && !cbWeekday.Enabled && !cbDupDay.Enabled && !cbDupMonth.Enabled, "手動のみなのに時刻・曜日・日・月を変えられる");
                 rStartupDup.Checked = true; UpdateEnabled();
@@ -371,6 +539,17 @@ namespace AutoCopy
                 expect(!cAlwaysRename.Enabled, "常に探す項目のチェックを外せる");
                 nRetry.Value = 0; UpdateEnabled();
                 expect(!nRetryInt.Enabled, "再試行しないのに間隔を変えられる");
+                // 灰色の項目には、どれも理由が出る（いろいろな組み合わせで確かめる）
+                foreach (Action set in new Action[] {
+                    delegate { rSync.Checked = true; cSyncCache.Checked = false; },
+                    delegate { rAppend.Checked = true; cDup.Checked = false; rDedupOff.Checked = true; cMax.Checked = false; cOlder.Checked = false; cWindow.Checked = false; cDelay.Checked = false; rStartupOnly.Checked = true; rSkip.Checked = true; cParAuto.Checked = true; cBwLimit.Checked = false; nRetry.Value = 0; },
+                    delegate { rMirror.Checked = true; cDup.Checked = true; rManual.Checked = true; rInterval.Checked = true; },
+                    delegate { rAppend.Checked = true; cDup.Checked = true; rDaily.Checked = true; } })
+                {
+                    set(); UpdateEnabled();
+                    List<string> missing = MissingReasons();
+                    expect(missing.Count == 0, "灰色なのに理由が出ない：" + string.Join("、", missing.ToArray()));
+                }
             }
             finally { loading = saveLoading; }
             return bad;
@@ -407,9 +586,15 @@ namespace AutoCopy
         {
             TabPage p = new TabPage("対象・除外");
             FlowLayoutPanel b = Ui.Body();
+            // この設定で、コピー元のうち何件をコピー・除外するか（入力するたびに数え直す）
+            lExclCount = Ui.L("");
+            lExclCount.Font = Ui.Bold;
+            lExclCount.ForeColor = Ui.Accent;
+            Ui.FitToForm(lExclCount, 700);
+            b.Controls.Add(lExclCount);
             tOnlyFolders = Ui.T("", 460);
             tOnlyExt = Ui.T("", 460);
-            b.Controls.Add(Ui.Section("対象を限定する（空欄ならすべて）",
+            Adv(b, Ui.Section("対象を限定する（空欄ならすべて）",
                 Ui.Column(Ui.L("コピー元からの相対フォルダ（配下を含む）"), tOnlyFolders,
                     Ui.B("対象フォルダを選んで追加…", delegate {
                         string src = PathUtil.Expand(tSrc.Text, AppCore.Settings.FolderName);
@@ -436,22 +621,21 @@ namespace AutoCopy
             }
             tExt = Ui.T("", 460);
             tPat = Ui.T("", 460);
+            Button pickExt = Ui.B("コピー元にある種類から選ぶ…", delegate { PickExtensions(); });
+            Btn.SetIcon(pickExt, "add", Ui.Ok);
             b.Controls.Add(Ui.Section("ファイルの種類", presets,
-                Ui.Row(Ui.L("追加の拡張子", 110), Ui.Column(tExt, Ui.Hint("例：.log; .psd"))),
-                Ui.Row(Ui.L("ファイル名", 110), Ui.Column(tPat, Ui.Hint("* と ? が使えます")))));
+                Ui.Row(Ui.L("追加の拡張子", 110), Ui.Column(Ui.Row(tExt, pickExt), Ui.Hint("例：.log; .psd　（「;」で区切る。右のボタンで、コピー元にある種類を件数・大きさを見ながら選べます）"))),
+                Ui.Row(Ui.L("ファイル名", 110), Ui.Column(tPat, Ui.Hint("* と ? が使えます（例：~$*　→「~$」で始まる名前）")))));
 
             cMax = Ui.C("", false);
             nMax = Ui.N(1, 1000000, 500, 72);
             cbMaxUnit = Ui.Combo(56, "MB", "GB");
             cZero = Ui.C("0 バイトのファイル", false);
             cOlder = Ui.C("", false);
-            dOlder = new DateTimePicker();
-            dOlder.Format = DateTimePickerFormat.Short;
-            dOlder.Width = Ui.S(120);
-            dOlder.Value = new DateTime(2020, 1, 1);
+            dOlder = Ui.DateBox(new DateTime(2020, 1, 1));
             cHidden = Ui.C("隠しファイル", true);
             cSystem = Ui.C("システムファイル", true);
-            b.Controls.Add(Ui.Section("サイズ・日付・属性",
+            Adv(b, Ui.Section("サイズ・日付・属性",
                 Ui.Row(cMax, nMax, cbMaxUnit, Ui.L("より大きい")),
                 cZero,
                 Ui.Row(cOlder, dOlder, Ui.L("より前に更新")),
@@ -463,13 +647,20 @@ namespace AutoCopy
                 Ui.Row(lbFolders, Ui.Column(
                     Ui.B("フォルダを選んで追加…", delegate { AddFolderByBrowse(); }),
                     Ui.B("名前で追加…", delegate { AddFolderByName(); }),
-                    Ui.B("一覧から外す", delegate { if (lbFolders.SelectedIndex >= 0) lbFolders.Items.RemoveAt(lbFolders.SelectedIndex); })))));
+                    Ui.B("一覧から外す", delegate { if (lbFolders.SelectedIndex >= 0) { lbFolders.Items.RemoveAt(lbFolders.SelectedIndex); if (counter != null) counter.Request(); } })))));
 
             tInc = Ui.T("", 460);
-            b.Controls.Add(Ui.Section("例外（必ずコピー）", Ui.Row(tInc, Ui.Hint("例：会議録画\\*.mp4"))));
+            Button pickInc = Ui.B("ファイルを選んで追加…", delegate { PickInclude(); });
+            Btn.SetIcon(pickInc, "add", Ui.Ok);
+            Adv(b, Ui.Section("例外（必ずコピー）", Ui.Row(tInc, pickInc), Ui.Hint("例：会議録画\\*.mp4　（除外の条件に当てはまっても、これに当てはまるファイルはコピーします）")));
 
             // 「テスト」のボタンは下の帯の1つだけにする（同じボタンが2つあると迷うため）
-            b.Controls.Add(Ui.Hint("除外されるファイルは、下の「テスト（コピーせずに結果を確認）」で開く結果の画面の「除外」で確認できます。"));
+            b.Controls.Add(Ui.Hint("除外されるファイルの一覧は、下の「テスト（コピーせずに結果を確認）」で開く結果の画面の「除外」で確認できます。"));
+            EventHandler recount = delegate { if (!loading && counter != null) counter.Request(); };
+            foreach (Control c in new Control[] { tExt, tPat, tInc, tOnlyFolders, tOnlyExt }) c.TextChanged += recount;
+            foreach (CheckBox c in new CheckBox[] { cMax, cZero, cOlder, cHidden, cSystem }) c.CheckedChanged += recount;
+            foreach (CheckBox c in presetBoxes.Values) c.CheckedChanged += recount;
+            nMax.ValueChanged += recount; cbMaxUnit.SelectedIndexChanged += recount; dOlder.ValueChanged += recount;
             p.Controls.Add(b);
             return p;
         }
@@ -483,19 +674,70 @@ namespace AutoCopy
                 lbFolders.Items.Add(PathUtil.Normalize(f).Substring(PathUtil.Normalize(src).TrimEnd('\\').Length + 1));
             else
                 Ui.Info(this, "コピー元の中のフォルダを選んでください。");
+            if (counter != null) counter.Request();
+        }
+
+        /// <summary>コピー元にあるファイルの種類（拡張子）を、件数・大きさを見ながら選んで「追加の拡張子」に足す</summary>
+        private void PickExtensions()
+        {
+            JobConfig j = BuildSnapshot();
+            string src = CopyEngine.ResolvedSource(j, AppCore.Settings);
+            if (string.IsNullOrEmpty(src) || !Directory.Exists(PathUtil.Long(src))) { Ui.Info(this, "先に「基本」タブで、① コピー元フォルダを指定してください。"); return; }
+            bool stopped;
+            List<ExtCount> list = Ui.BusyCancel<List<ExtCount>>(this, "コピー元にあるファイルの種類を数えています…", delegate(System.Threading.CancellationToken ct, BusyProgress bp)
+            {
+                return ExtCount.Of(Scanner.Scan(src, j.IncludeSubdirs, null, true, ct, delegate(int n) { bp.Text = Fmt.Count(n) + "件"; }));
+            }, out stopped);
+            if (stopped || list == null) return;
+            if (list.Count == 0) { Ui.Info(this, "コピー元にファイルがありません。"); return; }
+            List<string> already = SplitList(tExt.Text);
+            using (Form f = new Form())
+            {
+                Ui.SetupDialog(f, "除外する種類を選ぶ", 560, 480);
+                CheckedListBox cl = new CheckedListBox();
+                cl.CheckOnClick = true; cl.Dock = DockStyle.Fill; cl.Font = Ui.Base; cl.IntegralHeight = false;
+                foreach (ExtCount e in list) cl.Items.Add(e, already.Exists(delegate(string x) { return string.Equals(x, e.Ext, StringComparison.OrdinalIgnoreCase); }));
+                Label head = Ui.L("チェックした種類はコピーしません（大きい順）。");
+                head.Dock = DockStyle.Top; head.Padding = new Padding(Ui.S(8));
+                Button ok = Btn.MakePrimary(Ui.B("追加", delegate { f.DialogResult = DialogResult.OK; f.Close(); }));
+                f.Controls.Add(cl); f.Controls.Add(head);
+                f.Controls.Add(Ui.Footer(Ui.B("キャンセル", delegate { f.Close(); }), ok));
+                if (f.ShowDialog(this) != DialogResult.OK) return;
+                foreach (object o in cl.CheckedItems)
+                {
+                    string ext = ((ExtCount)o).Ext;
+                    if (ext.Length > 1 && !already.Exists(delegate(string x) { return string.Equals(x, ext, StringComparison.OrdinalIgnoreCase); })) already.Add(ext);
+                }
+                tExt.Text = string.Join("; ", already.ToArray());
+            }
+        }
+
+        /// <summary>コピー元のファイルを選んで「例外（必ずコピー）」に足す</summary>
+        private void PickInclude()
+        {
+            string src = CopyEngine.ResolvedSource(BuildSnapshot(), AppCore.Settings);
+            using (OpenFileDialog d = new OpenFileDialog())
+            {
+                d.Title = "必ずコピーするファイルを選んでください（コピー元の中）";
+                try { if (!string.IsNullOrEmpty(src) && Directory.Exists(src)) d.InitialDirectory = src; } catch (Exception) { }
+                if (d.ShowDialog(this) != DialogResult.OK) return;
+                if (string.IsNullOrEmpty(src) || !PathUtil.IsSameOrInside(d.FileName, src)) { Ui.Info(this, "コピー元の中のファイルを選んでください。"); return; }
+                string rel = PathUtil.Normalize(d.FileName).Substring(PathUtil.Normalize(src).TrimEnd('\\').Length + 1);
+                tInc.Text += (tInc.Text.Trim().Length == 0 ? "" : "; ") + rel;
+            }
         }
 
         private void AddFolderByName()
         {
             string name = InputBox.Show(this, "除外するフォルダ名", "フォルダ名（例：node_modules）または コピー元からの相対パス", "");
-            if (!string.IsNullOrEmpty(name) && name.Trim().Length > 0) lbFolders.Items.Add(name.Trim());
+            if (!string.IsNullOrEmpty(name) && name.Trim().Length > 0) { lbFolders.Items.Add(name.Trim()); if (counter != null) counter.Request(); }
         }
 
         // ================= 接続・重複チェック =================
 
         private TabPage BuildConnect()
         {
-            TabPage p = new TabPage("接続・重複チェック");
+            TabPage p = new TabPage("接続・コピー先の整理");
             FlowLayoutPanel b = Ui.Body();
             cbServer = Ui.Combo(260);
             cbServer.SelectedIndexChanged += delegate { SwitchServer(); };
@@ -516,11 +758,11 @@ namespace AutoCopy
 
             nRetry = Ui.N(0, 99, 3, 56);
             nRetryInt = Ui.N(5, 3600, 30, 72);
-            b.Controls.Add(Ui.Section("接続できないとき",
+            Adv(b, Ui.Section("接続できないとき",
                 Ui.Row(Ui.L("再試行", 110), nRetry, Ui.L("回、"), nRetryInt, Ui.L("秒おきに試す")),
                 Ui.Wrap("すべて失敗したらエラーを通知し、次の実行時刻にもう一度試します。ID・パスワードの誤りのときは再試行しません。", 640)));
 
-            cDup = Ui.C("重複チェックを行う", true);
+            cDup = Ui.C("コピー先の整理（重複チェック）を行う：古い名前のコピー・空のフォルダなどを探して知らせる", true);
             rStartupDup = Ui.R("ログオン時（起動時）", false);
             rDaily = Ui.R("毎日", true);
             rWeekly = Ui.R("毎週", false);
@@ -539,14 +781,17 @@ namespace AutoCopy
             cSame = Ui.C("中身が同じファイル（情報として表示のみ）", true);
             cOrphan = Ui.C("コピー元にないファイル（孤立ファイル）も表示する", false);
             cEmpty = Ui.C("空のフォルダ（コピー元にないもの）", true);
-            nDupMin = Ui.N(0, 10000000, 0, 90);
-            b.Controls.Add(Ui.Section("重複チェック",
+            cbDupMin = Ui.SizeChoice(0, "小さいファイルも探す（すべて）", "{0} より小さいファイルは探さない");
+            FlowLayoutPanel findWhat = Ui.Row(Ui.L("探すもの", 110), Ui.Column(cAlwaysRename = Ui.C("ファイル名・フォルダ名の変更や移動の取りこぼし（常に探します）", true), cEmpty, cSame, cOrphan));
+            FlowLayoutPanel smallRow = Ui.Row(Ui.L("小さいファイル", 110), cbDupMin, Ui.Hint("（古いコピー・中身が同じファイルを探すとき）"));
+            advanced.Add(findWhat); advanced.Add(smallRow);
+            b.Controls.Add(Ui.Section("コピー先の整理（重複チェック）",
                 cDup,
                 Ui.Row(Ui.L("実行", 110), Ui.WrapRow(rStartupDup, rDaily, rWeekly, rMonthly, rYearly, rManual)),
                 Ui.Row(Ui.L("", 110), Ui.WrapRow(Ui.L("曜日"), cbWeekday, Ui.L("月"), cbDupMonth, Ui.L("日"), cbDupDay, Ui.L("時刻"), tDupTime)),
                 Ui.Row(Ui.L("", 110), Ui.Wrap("PCが止まっていて予定の日時に実行できなかったときは、その後にアプリが起動したときに実行します。", 520)),
-                Ui.Row(Ui.L("探すもの", 110), Ui.Column(cAlwaysRename = Ui.C("ファイル名・フォルダ名の変更や移動の取りこぼし（常に探します）", true), cEmpty, cSame, cOrphan)),
-                Ui.Row(Ui.L("小さいファイル", 110), Ui.WrapRow(nDupMin, Ui.L("KB より小さいファイルの重複（中身が同じ・古いコピー）は探さない（0 = すべて探す）"))),
+                findWhat,
+                smallRow,
                 Ui.Wrap("削除したファイルは「コピー先\\_AutoCopy\\削除済み」に移し、アプリ設定の保存日数が過ぎたら完全に削除します。", 640)));
             p.Controls.Add(b);
             return p;
@@ -623,7 +868,8 @@ namespace AutoCopy
             rSyncTake.Checked = j.SyncTakeNew;
             rSyncNoTake.Checked = !j.SyncTakeNew;
             rSyncPush.Checked = j.SyncPushNew;
-            nSyncCache.Value = Clamp(nSyncCache, j.SyncRemoteCacheMinutes);
+            cSyncCache.Checked = j.SyncRemoteCacheMinutes > 0;
+            nSyncCache.Value = Clamp(nSyncCache, j.SyncRemoteCacheMinutes > 0 ? j.SyncRemoteCacheMinutes : 30);
             rSyncNoPush.Checked = !j.SyncPushNew;
             cRunAtStartup.Checked = j.RunAtStartup;
             rStartupOnly.Checked = j.StartupOnly;
@@ -647,8 +893,10 @@ namespace AutoCopy
             rOver.Checked = j.NewerDestPolicy == NewerPolicy.Overwrite;
             nTol.Value = Clamp(nTol, j.ToleranceSeconds);
             cBackup.Checked = j.BackupBeforeOverwrite;
-            nPar.Value = Clamp(nPar, j.Parallel);
-            nBw.Value = Clamp(nBw, j.BandwidthKBps);
+            cParAuto.Checked = j.Parallel <= 0;
+            nPar.Value = Clamp(nPar, j.Parallel > 0 ? j.Parallel : 2);
+            cBwLimit.Checked = j.BandwidthKBps > 0;
+            nBw.Value = Clamp(nBw, j.BandwidthKBps > 0 ? j.BandwidthKBps : 1000);
 
             ExcludeRules x = j.Exclude ?? ExcludeRules.CreateDefault();
             foreach (KeyValuePair<string, CheckBox> kv in presetBoxes) kv.Value.Checked = x.Presets.Contains(kv.Key);
@@ -684,9 +932,12 @@ namespace AutoCopy
             cbDupMonth.SelectedIndex = Math.Max(0, Math.Min(11, j.DupMonth - 1));
             tDupTime.Text = j.DupTime;
             cSame.Checked = j.DupShowSameContent;
-            nDupMin.Value = Clamp(nDupMin, j.DupMinSizeKB);
+            Ui.SetSizeChoice(cbDupMin, Math.Max(0, j.DupMinSizeKB));
             cOrphan.Checked = j.DupShowOrphans;
             cEmpty.Checked = j.DupShowEmptyFolders;
+            cbSyncPreset.SelectedIndex = SyncPresets.Find(j.SyncTakeNew, j.SyncPushNew);
+            // 詳しい設定：前に表示していた・このジョブに初期値と違う詳しい設定がある・同期の細かい選択をしている → 見せる
+            cAdvanced.Checked = AppCore.Settings.ShowAdvancedJobSettings || HasAdvancedValues(j);
             loading = false;
             RefreshServers();
             loading = true;
@@ -722,7 +973,7 @@ namespace AutoCopy
             j.Sync = rSync.Checked;
             j.SyncTakeNew = rSync.Checked && rSyncTake.Checked;
             j.SyncPushNew = rSync.Checked && rSyncPush.Checked;
-            j.SyncRemoteCacheMinutes = (int)nSyncCache.Value;
+            j.SyncRemoteCacheMinutes = cSyncCache.Checked ? (int)nSyncCache.Value : 0;
             j.RunAtStartup = cRunAtStartup.Checked;
             j.StartupOnly = rStartupOnly.Checked;
             j.Dedup = rDedupOff.Checked ? DedupMode.Off : rDedupOn.Checked ? DedupMode.Auto : DedupMode.Ask;
@@ -740,8 +991,8 @@ namespace AutoCopy
             j.NewerDestPolicy = rOver.Checked ? NewerPolicy.Overwrite : rSkip.Checked ? NewerPolicy.Skip : NewerPolicy.Ask;
             j.ToleranceSeconds = (int)nTol.Value;
             j.BackupBeforeOverwrite = cBackup.Checked;
-            j.Parallel = (int)nPar.Value;
-            j.BandwidthKBps = (int)nBw.Value;
+            j.Parallel = cParAuto.Checked ? 0 : (int)nPar.Value;
+            j.BandwidthKBps = cBwLimit.Checked ? (int)nBw.Value : 0;
 
             ExcludeRules x = new ExcludeRules();
             foreach (KeyValuePair<string, CheckBox> kv in presetBoxes) if (kv.Value.Checked) x.Presets.Add(kv.Key);
@@ -768,7 +1019,7 @@ namespace AutoCopy
             j.DupMonth = cbDupMonth.SelectedIndex + 1;
             j.DupTime = tDupTime.Text.Trim();
             j.DupShowSameContent = cSame.Checked;
-            j.DupMinSizeKB = (int)nDupMin.Value;
+            j.DupMinSizeKB = Ui.SizeChoiceKB(cbDupMin);
             j.DupShowOrphans = cOrphan.Checked;
             j.DupShowEmptyFolders = cEmpty.Checked;
             return j;
@@ -796,7 +1047,7 @@ namespace AutoCopy
             if (j.UseTimeWindow && (!TimeUtil.TryParseHm(j.WindowStart, out ts) || !TimeUtil.TryParseHm(j.WindowEnd, out ts)))
             { Ui.Error(this, "時間帯は 08:00 の形で入力してください。"); return false; }
             if (j.DupCheckEnabled && j.DupSchedule != DupScheduleKind.Manual && j.DupSchedule != DupScheduleKind.Startup && !TimeUtil.TryParseHm(j.DupTime, out ts))
-            { Ui.Error(this, "重複チェックの時刻は 12:00 の形で入力してください。"); return false; }
+            { Ui.Error(this, "コピー先の整理（重複チェック）の時刻は 12:00 の形で入力してください。"); return false; }
             string v = CopyEngine.Validate(j, AppCore.Settings, AppCore.Settings.Jobs);
             if (v != null) { Ui.Error(this, v); return false; }
 
@@ -862,6 +1113,136 @@ namespace AutoCopy
                 f.AcceptButton = ok; f.CancelButton = cancel;
                 return f.ShowDialog(owner) == DialogResult.OK ? t.Text : null;
             }
+        }
+    }
+
+    /// <summary>同期のしかた（よく使う組み合わせ）</summary>
+    public static class SyncPresets
+    {
+        public static readonly string[] Labels = {
+            "共有フォルダのファイルを受け取る（初期値。このPCだけにあるファイルは送らない）",
+            "すべてのPCで同じにする（このPCで追加したファイルも、他のPCへ送る）",
+            "自分で選ぶ（下の2つを選ぶ）" };
+        public const int Custom = 2;
+
+        public static bool Values(int index, out bool take, out bool push)
+        {
+            take = true; push = false;
+            if (index == 0) return true;
+            if (index == 1) { push = true; return true; }
+            return false;
+        }
+
+        public static int Find(bool take, bool push)
+        {
+            for (int i = 0; i < Custom; i++) { bool t, p; Values(i, out t, out p); if (t == take && p == push) return i; }
+            return Custom;
+        }
+    }
+
+    /// <summary>拡張子ごとの件数・大きさ</summary>
+    public class ExtCount
+    {
+        public string Ext; public int Count; public long Bytes;
+        public override string ToString() { return (Ext.Length > 0 ? Ext : "（拡張子なし）") + "　" + Fmt.Count(Count) + "件・" + Fmt.Size(Bytes); }
+
+        public static List<ExtCount> Of(ScanResult sc)
+        {
+            Dictionary<string, ExtCount> d = new Dictionary<string, ExtCount>(StringComparer.OrdinalIgnoreCase);
+            foreach (KeyValuePair<string, ScanItem> kv in sc.Files)
+            {
+                string e = Path.GetExtension(kv.Key).ToLowerInvariant();
+                ExtCount c;
+                if (!d.TryGetValue(e, out c)) { c = new ExtCount(); c.Ext = e; d[e] = c; }
+                c.Count++; c.Bytes += kv.Value.Size;
+            }
+            List<ExtCount> l = new List<ExtCount>(d.Values);
+            l.Sort(delegate(ExtCount a, ExtCount b) { return b.Bytes.CompareTo(a.Bytes); });
+            return l;
+        }
+    }
+
+    /// <summary>
+    /// 除外ルールを変えるたびに、コピー元のうち何件をコピー・除外するかを数えて表示する（別のスレッドで。30秒で打ち切る）。
+    /// コピー元の全件数は、コピー元が変わったときだけ数え直す。
+    /// </summary>
+    public sealed class ExclusionCounter : IDisposable
+    {
+        public static int TimeoutSeconds = 30;
+        private readonly Control owner;
+        private readonly Label label;
+        private readonly Func<JobConfig> snapshot;
+        private readonly Timer timer = new Timer();
+        private System.Threading.CancellationTokenSource cts;
+        private string cachedKey;
+        private int cachedTotal = -1;
+        private bool disposed;
+
+        public ExclusionCounter(Control owner, Label label, Func<JobConfig> snapshot)
+        {
+            this.owner = owner; this.label = label; this.snapshot = snapshot;
+            timer.Interval = 700;
+            timer.Tick += delegate { timer.Stop(); Start(); };
+        }
+
+        /// <summary>少し待ってから数え直す（続けて入力しているときは最後の入力の後に1回）</summary>
+        public void Request()
+        {
+            if (disposed || label == null) return;
+            timer.Stop();
+            timer.Start();
+        }
+
+        /// <summary>数える（確認用にも使う）：コピーする件数を返し、total にコピー元の全件数</summary>
+        public static int Count(string src, bool sub, ExcludeRules rules, System.Threading.CancellationToken ct, out int total)
+        {
+            // コピーするときと同じ調べ方（CopyEngine と同じ：_AutoCopy の扱いも同じ）
+            total = Scanner.Scan(src, sub, null, false, ct).Files.Count;
+            return Scanner.Scan(src, sub, new ExcludeMatcher(rules), false, ct).Files.Count;
+        }
+
+        private void Start()
+        {
+            if (disposed) return;
+            JobConfig j = snapshot();
+            string src = CopyEngine.ResolvedSource(j, AppCore.Settings);
+            if (string.IsNullOrEmpty(src) || !Directory.Exists(PathUtil.Long(src))) { label.Text = "「基本」タブで ① コピー元フォルダを指定すると、コピーする件数をここに表示します。"; return; }
+            if (cts != null) cts.Cancel();
+            System.Threading.CancellationTokenSource my = new System.Threading.CancellationTokenSource();
+            cts = my;
+            my.CancelAfter(TimeoutSeconds * 1000);
+            label.Text = "この設定でコピーする件数を数えています…";
+            string key = src + "|" + j.IncludeSubdirs;
+            int knownTotal = key == cachedKey ? cachedTotal : -1;
+            bool sub = j.IncludeSubdirs;
+            ExcludeRules rules = j.Exclude;
+            System.Threading.Tasks.Task.Factory.StartNew(delegate()
+            {
+                string text;
+                try
+                {
+                    int total = knownTotal;
+                    if (total < 0) total = Scanner.Scan(src, sub, null, false, my.Token).Files.Count;
+                    int inc = Scanner.Scan(src, sub, new ExcludeMatcher(rules), false, my.Token).Files.Count;
+                    cachedKey = key; cachedTotal = total;
+                    text = "この設定で：コピーする " + Fmt.Count(inc) + "件・除外 " + Fmt.Count(Math.Max(0, total - inc)) + "件（コピー元 " + Fmt.Count(total) + "件）";
+                }
+                catch (OperationCanceledException)
+                {
+                    if (my != cts) return;   // 次の数え直しに替わった
+                    text = "ファイルが多いため数えきれませんでした（「テスト」で確認できます）";
+                }
+                catch (Exception ex) { text = "コピー元を読めないため数えられません：" + ex.Message; }
+                if (my != cts || disposed) return;
+                try { owner.BeginInvoke(new Action(delegate() { if (!disposed && my == cts) label.Text = text; })); } catch (Exception) { }
+            });
+        }
+
+        public void Dispose()
+        {
+            disposed = true;
+            timer.Stop(); timer.Dispose();
+            if (cts != null) cts.Cancel();
         }
     }
 }

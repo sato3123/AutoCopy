@@ -290,9 +290,9 @@ namespace AutoCopy
             foreach (JobConfig j in Settings.Jobs.ToArray())
             {
                 int lp = DedupStore.PendingCount(j.Id);
-                if (lp > 0 && j.DedupOn) list.Add(Item(j.Name + "：大きいファイルの重複 " + lp + "件 の扱いを選んでください", "dup", j.Id, false));
+                if (lp > 0 && j.DedupOn) list.Add(Item(j.Name + "：大きいファイルの重複（テキストへの置き換え）" + lp + "件 の扱いを選んでください", "dup", j.Id, false));
                 int n = DupChecker.UnseenCandidates(j.Id);
-                if (n > 0) list.Add(Item(j.Name + "：重複チェックで削除候補が " + n + "件 見つかりました", "dup", j.Id, false));
+                if (n > 0) list.Add(Item(j.Name + "：コピー先の整理（重複チェック）で削除候補が " + n + "件 見つかりました", "dup", j.Id, false));
             }
             foreach (JobConfig j in Settings.Jobs.ToArray())
             {

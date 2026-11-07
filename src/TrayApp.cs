@@ -271,7 +271,7 @@ namespace AutoCopy
                 if (j == null) Balloon("ジョブが見つかりません", "「" + name + "」というジョブはありません。", ToolTipIcon.Warning);
                 else { AppCore.RunJob(j.Id, true, false); Balloon("今すぐ実行", j.Name + " を実行しています。", ToolTipIcon.Info); }
             }
-            else if (cmd == "dupcheck") { AppCore.RunDupAll(); Balloon("重複チェック", "重複チェックを始めました。終わったらお知らせします。", ToolTipIcon.Info); }
+            else if (cmd == "dupcheck") { AppCore.RunDupAll(); Balloon("コピー先の整理", "コピー先の整理（重複チェック）を始めました。終わったらお知らせします。", ToolTipIcon.Info); }
             else if (cmd.StartsWith("import|")) ImportSetup(cmd.Substring(7));
             else if (cmd == "checkupdate") CheckUpdate(false);
             else if (cmd.StartsWith("updated|"))
@@ -354,7 +354,7 @@ namespace AutoCopy
                 if (p.TotalFiles > 0) return "コピー中 " + p.Percent.ToString("0") + "%（" + Fmt.Count(p.DoneFiles) + "/" + Fmt.Count(p.TotalFiles) + "件）";
                 return p.Phase;
             }
-            return "重複チェック中";
+            return "コピー先の整理中";
         }
 
         private void BuildMenu()
@@ -410,8 +410,9 @@ namespace AutoCopy
             if (pend > 0) menu.Items.Add("ミラーの保留中の削除（" + pend + "件）", null, delegate { ShowPending(null); });
             int sdel = AppCore.TotalSyncDeletes();
             if (sdel > 0) menu.Items.Add("同期：削除の確認（" + sdel + "件）", null, delegate { ShowSyncDeletes(null); });
-            menu.Items.Add("重複チェック結果", null, delegate { ShowDup(null); });
-            menu.Items.Add("フォルダ内の重複ファイルを探す…", null, delegate { ShowFolderDup(null); });
+            menu.Items.Add("コピー先の整理（重複チェック）の結果", null, delegate { ShowDup(null); });
+            menu.Items.Add("フォルダの重複ファイル探し…", null, delegate { ShowFolderDup(null); });
+            menu.Items.Add(RestoreMenu());
             menu.Items.Add("ログを見る", null, delegate { ShowLog(); });
             menu.Items.Add("エラー・確認の対応状況", null, delegate { ShowLog(); if (logForm != null && !logForm.IsDisposed) logForm.ShowStatusTab(); });
             menu.Items.Add("設定", null, delegate { ShowSettings(); });
@@ -491,6 +492,30 @@ namespace AutoCopy
                 f.TopMost = top;
             }
             catch (Exception ex) { Logger.Error(null, "画面を開けませんでした：" + ex.Message); }
+        }
+
+        /// <summary>「元に戻す」：ジョブごとに、削除・上書きの前に退避したファイルを戻す画面を開く</summary>
+        public static ToolStripMenuItem RestoreMenu()
+        {
+            ToolStripMenuItem restore = new ToolStripMenuItem(RestoreMenuText);
+            foreach (JobConfig j0 in AppCore.Settings.Jobs)
+            {
+                string id = j0.Id;
+                restore.DropDownItems.Add(j0.Name + "…", null, delegate { Instance.ShowRestore(id); });
+            }
+            if (restore.DropDownItems.Count == 0) restore.Enabled = false;
+            return restore;
+        }
+
+        public const string RestoreMenuText = "元に戻す（削除・上書きしたファイル）";
+
+        public void ShowRestore(string jobId)
+        {
+            JobConfig j = jobId != null ? AppCore.FindJob(jobId) : null;
+            if (j == null) return;
+            TrashForm f = new TrashForm(j);
+            f.Show();
+            Bring(f);
         }
 
         public void ShowFolderDup(string folder)

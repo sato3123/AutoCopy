@@ -237,7 +237,7 @@ namespace AutoCopy
 
             Controls.Add(tabs);
             Controls.Add(top);
-            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), csv, saveImg, open));
+            Controls.Add(Ui.WithHelp(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), csv, saveImg, open), Help.Usage));
             UpdateButtons();
         }
 

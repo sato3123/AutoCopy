@@ -63,8 +63,8 @@ namespace AutoCopy
             Controls.Add(files);
             Controls.Add(detail);
             Controls.Add(jobs);
-            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }),
-                Ui.B("ログを見る", delegate { if (TrayApp.Instance != null) TrayApp.Instance.ShowLog(); })));
+            Controls.Add(Ui.WithHelp(Ui.Footer(Ui.B("閉じる", delegate { Close(); }),
+                Ui.B("ログを見る", delegate { if (TrayApp.Instance != null) TrayApp.Instance.ShowLog(); })), Help.Main));
 
             timer.Interval = 500;
             timer.Tick += delegate { Refresh2(); };
@@ -105,7 +105,7 @@ namespace AutoCopy
                     }
                 }
                 else if (rt.Running) state = rt.Phase;
-                else if (rt.DupRunning) state = "重複チェック中";
+                else if (rt.DupRunning) state = "コピー先の整理中";
                 else if (!j.Enabled) state = "無効";
                 else if (p != null && p.Finished != DateTime.MinValue)
                 {

@@ -73,6 +73,40 @@ namespace AutoCopy
         /// <summary>ジョブを止めるべき原因か（続けても同じ失敗をくり返す）</summary>
         public static bool IsFatal(string kind) { return kind == Network || kind == DiskFull; }
 
+        public const string AdvicePrefix = "次にすること：";
+
+        /// <summary>
+        /// エラーの文から、利用者が次にすることを案内する（分からないときは null）。
+        /// 「【ネットワークの切断】」などの分類の印と、IDやパスワードの誤りを見て決める。
+        /// </summary>
+        public static string Advice(string text, bool credError)
+        {
+            string t = text ?? "";
+            if (credError || t.Contains("パスワード") || t.Contains("ユーザー名") || t.Contains("資格情報") || t.Contains("ログオン失敗"))
+                return AdvicePrefix + "ジョブの設定の「接続・コピー先の整理」で、共有フォルダのIDとパスワードが正しいか確かめてください。";
+            if (t.Contains("【" + Label(Network) + "】") || t.Contains("接続できません") || t.Contains("ネットワーク"))
+                return AdvicePrefix + "ネットワーク（Wi-Fi・LANケーブル）と、コピー先のPC・NASの電源を確かめてください。つながれば、次の実行で続きからコピーします。";
+            if (t.Contains("【" + Label(DiskFull) + "】") || t.Contains("空き容量") || t.Contains("ディスクに十分な空き領域"))
+                return AdvicePrefix + "コピー先の空き容量を増やしてください（メイン画面の「容量の内訳」で大きいフォルダを確かめられます）。空けば次の実行で続きからコピーします。";
+            if (t.Contains("【" + Label(AccessDenied) + "】") || t.Contains("アクセスが拒否"))
+                return AdvicePrefix + "そのフォルダに書き込む権限があるか、読み取り専用になっていないかを確かめてください（会社のPCは管理者に相談してください）。";
+            if (t.Contains("【" + Label(Locked) + "】") || t.Contains("別のプロセスが使用中"))
+                return AdvicePrefix + "そのファイルを開いているアプリ（Excel など）を閉じてください。次の実行でコピーし直します。";
+            if (t.Contains("【" + Label(TooLong) + "】"))
+                return AdvicePrefix + "フォルダの階層を浅くするか、フォルダ名・ファイル名を短くしてください。";
+            if (t.Contains("【" + Label(NotFound) + "】") || t.Contains("見つかりません"))
+                return AdvicePrefix + "コピー元・コピー先のフォルダがあるか（名前を変えていないか、USBメモリ・外付けディスクがつながっているか）を確かめてください。";
+            return null;
+        }
+
+        /// <summary>エラーの文の後ろに「次にすること」を付ける（付けられないとき・付いているときはそのまま）</summary>
+        public static string WithAdvice(string text, bool credError)
+        {
+            if (text == null || text.Contains(AdvicePrefix)) return text;
+            string a = Advice(text, credError);
+            return a == null ? text : text + "　" + a;
+        }
+
         /// <summary>「【容量不足】…」の形の説明</summary>
         public static string Describe(Exception ex)
         {

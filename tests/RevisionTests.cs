@@ -42,6 +42,12 @@ namespace AutoCopy.Tests
             Add("T114", "表示切れの自動確認が、下のボタンの折り返し・スクロールの下端の欠けを見つける", LayoutCheckDetects);
             Add("T115", "フォルダ内の重複：中身・ファイル名・更新日時・大きさを組み合わせて探す・小さいファイルを除く", FolderDupBasis);
             Add("T116", "重複チェック：小さいファイルの重複（古いコピー・中身が同じ）を探さない設定", JobDupMinSize);
+            Add("T117", "「？ 説明」：画面から開く操作説明書の場所（id）がすべてあり、説明書の中のリンクも切れていない", HelpAnchors);
+            Add("T118", "ジョブ設定：同期のよく使う組み合わせ・「詳しい設定」を最初から見せるかの判断・大きさの選択・日付の形", JobFormHelpers);
+            Add("T119", "除外の件数の表示：数えた「コピーする件数」が、実際にコピーした件数と同じ", ExclusionCountMatchesCopy);
+            Add("T120", "エラーのお知らせに「次にすること」を付ける（ネットワーク・容量・権限・使用中・ID/パスワード）", ErrorAdvice);
+            Add("T121", "フォルダの重複ファイル探し：残す候補の理由（パスが短い・古い・名前の順）", KeepReason);
+            Add("T122", "新しいジョブの保存後の案内：既定は「あとで（無効のまま）」・有効にするには選ぶ必要がある", EnableJobChoice);
             Add("T112", "終了時の停止待ちは上限まで（止まらない処理があっても終了できる）", StopTimeout);
         }
 
@@ -424,6 +430,211 @@ namespace AutoCopy.Tests
                 Eq(5, inv2.CachedEntries, "持っている件数");
             }
             finally { DestinationInventory.MaxEntries = keep; }
+        }
+
+        /// <summary>リポジトリの中のファイルを探す（テストの実行場所・exe の場所から上へ）</summary>
+        private static string FindRepoFile(string name)
+        {
+            foreach (string start in new string[] { Environment.CurrentDirectory, AppDomain.CurrentDomain.BaseDirectory })
+            {
+                string d = start;
+                for (int i = 0; i < 5 && !string.IsNullOrEmpty(d); i++)
+                {
+                    string f = Path.Combine(d, name);
+                    if (File.Exists(f) || Directory.Exists(f)) return f;
+                    d = Path.GetDirectoryName(d.TrimEnd('\\', '/'));
+                }
+            }
+            return null;
+        }
+
+        private static void HelpAnchors()
+        {
+            string manual = FindRepoFile("操作説明書.html");
+            True(manual != null, "操作説明書.html が見つかる");
+            string html = File.ReadAllText(manual, Encoding.UTF8);
+            HashSet<string> ids = new HashSet<string>();
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(html, "id=\"([^\"]+)\"")) ids.Add(m.Groups[1].Value);
+            foreach (string a in Help.All) True(ids.Contains(a), "説明書に id=\"" + a + "\" がある");
+            // 説明書の中のリンク（#〜）がすべて飛べる
+            foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(html, "href=\"#([^\"]+)\"")) True(ids.Contains(m.Groups[1].Value), "説明書のリンク #" + m.Groups[1].Value + " の飛び先がある");
+            // ソースの Help.〇〇 がすべて Help.All にある（「？ 説明」で開く場所に抜けがない）
+            string src = FindRepoFile("src");
+            True(src != null, "src フォルダが見つかる");
+            HashSet<string> used = new HashSet<string>();
+            foreach (string f in Directory.GetFiles(src, "*.cs"))
+                foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(f, Encoding.UTF8), "(?<![\\w.])Help\\.([A-Z]\\w*)"))
+                {
+                    string n = m.Groups[1].Value;
+                    if (n == "All" || n == "Used" || n == "UsedAnchors") continue;
+                    System.Reflection.FieldInfo fi = typeof(Help).GetField(n);
+                    True(fi != null, "Help." + n + " がある（" + Path.GetFileName(f) + "）");
+                    string v = (string)fi.GetValue(null);
+                    True(Array.IndexOf(Help.All, v) >= 0, "Help." + n + " が Help.All にある");
+                    used.Add(v);
+                }
+            True(used.Count >= 14, "多くの画面に「？ 説明」がある（" + used.Count + "か所）");
+            foreach (string a in Help.UsedAnchors()) True(a.Length == 0 || ids.Contains(a), "開いた画面の説明の場所 " + a);
+        }
+
+        private static void JobFormHelpers()
+        {
+            bool take, push;
+            True(SyncPresets.Values(0, out take, out push) && take && !push, "受け取る（初期値）");
+            True(SyncPresets.Values(1, out take, out push) && take && push, "すべてのPCで同じ");
+            True(!SyncPresets.Values(SyncPresets.Custom, out take, out push), "自分で選ぶ");
+            Eq(0, SyncPresets.Find(true, false), "初期値の組み合わせ");
+            Eq(1, SyncPresets.Find(true, true), "送る・受け取る");
+            Eq(SyncPresets.Custom, SyncPresets.Find(false, false), "受け取らない → 自分で選ぶ");
+            Eq(SyncPresets.Custom, SyncPresets.Find(false, true), "送るだけ → 自分で選ぶ");
+            JobConfig d0 = new JobConfig();
+            Eq(0, SyncPresets.Find(d0.SyncTakeNew, d0.SyncPushNew), "新しいジョブの初期値は「受け取る」");
+
+            // 初期値のジョブは「詳しい設定」を隠してよい。初期値と違うものが1つでもあれば最初から見せる（隠れた設定に気づかないことがない）
+            True(!JobEditForm.HasAdvancedValues(new JobConfig()), "初期値のジョブ");
+            Action<string, Action<JobConfig>> adv = delegate(string what, Action<JobConfig> change)
+            {
+                JobConfig j = new JobConfig(); change(j);
+                True(JobEditForm.HasAdvancedValues(j), "詳しい設定を見せる：" + what);
+            };
+            adv("同時にコピーする数", delegate(JobConfig j) { j.Parallel = 2; });
+            adv("転送速度", delegate(JobConfig j) { j.BandwidthKBps = 500; });
+            adv("時間帯", delegate(JobConfig j) { j.UseTimeWindow = true; });
+            adv("上書きのルール", delegate(JobConfig j) { j.NewerDestPolicy = NewerPolicy.Skip; });
+            adv("上書き前に退避", delegate(JobConfig j) { j.BackupBeforeOverwrite = true; });
+            adv("名前変更の追従", delegate(JobConfig j) { j.FollowRename = false; });
+            adv("再試行", delegate(JobConfig j) { j.RetryCount = 5; });
+            adv("例外", delegate(JobConfig j) { j.Exclude.Includes.Add("会議録画\\*.mp4"); });
+            adv("対象を限定", delegate(JobConfig j) { j.Exclude.OnlyExtensions.Add(".xlsx"); });
+            adv("サイズ", delegate(JobConfig j) { j.Exclude.MaxSizeBytes = 1024; });
+            adv("日付", delegate(JobConfig j) { j.Exclude.OlderThan = "2020-01-01"; });
+            adv("隠しファイルもコピー", delegate(JobConfig j) { j.Exclude.ExcludeHidden = false; });
+            adv("小さいファイルの重複", delegate(JobConfig j) { j.DupMinSizeKB = 100; });
+            adv("同期の共有フォルダの確認", delegate(JobConfig j) { j.Sync = true; j.SyncRemoteCacheMinutes = 0; });
+            JobConfig nc = new JobConfig(); nc.Exclude.Includes = null; nc.Exclude.OnlyFolders = null; nc.Exclude.OnlyExtensions = null;
+            True(!JobEditForm.HasAdvancedValues(nc), "古い設定（一覧がない）でも落ちない");
+
+            // 大きさの選択：よく使う大きさ＋今の値、0 は「すべて」
+            System.Windows.Forms.ComboBox cb = Ui.SizeChoice(0, "すべて", "{0} より小さいものは除く");
+            Eq(0, Ui.SizeChoiceKB(cb), "初期値は 0（すべて）");
+            Eq("すべて", cb.SelectedItem.ToString(), "0 の表示");
+            Ui.SetSizeChoice(cb, 100); Eq(100, Ui.SizeChoiceKB(cb), "100 KB を選ぶ");
+            True(cb.SelectedItem.ToString().Contains("より小さいものは除く"), "大きさの表示: " + cb.SelectedItem);
+            int n0 = cb.Items.Count;
+            Ui.SetSizeChoice(cb, 1024); Eq(n0, cb.Items.Count, "一覧にある値は増やさない");
+            System.Windows.Forms.ComboBox cb2 = Ui.SizeChoice(300, "すべて", "{0} 未満");
+            Eq(300, Ui.SizeChoiceKB(cb2), "一覧にない今の値（300 KB）も残す");
+            Ui.SetSizeChoice(cb2, 7); Eq(7, Ui.SizeChoiceKB(cb2), "一覧にない値も選べる");
+
+            // 日付の欄：地域の設定に関係なく yyyy/MM/dd、未設定（MinValue）でも落ちない
+            System.Windows.Forms.DateTimePicker dp = Ui.DateBox(new DateTime(2024, 3, 5));
+            Eq("yyyy/MM/dd", dp.CustomFormat, "日付の形");
+            Eq(System.Windows.Forms.DateTimePickerFormat.Custom, dp.Format, "形を固定");
+            Eq(new DateTime(2024, 3, 5), dp.Value.Date, "値");
+            Eq(DateTime.Today, Ui.DateBox(DateTime.MinValue).Value.Date, "未設定は今日");
+        }
+
+        private static void ExclusionCountMatchesCopy()
+        {
+            Box b = new Box("T119");
+            b.W("a.txt", "a"); b.W("b.tmp", "b"); b.W(@"sub\c.mp4", "c"); b.W(@"sub\d.xlsx", "d"); b.W(@"skip\e.txt", "e"); b.W("~$f.docx", "f");
+            b.Job.Exclude.Presets.Add("video");
+            b.Job.Exclude.Folders.Add("skip");
+            b.Apply();
+            int total;
+            int inc = ExclusionCounter.Count(b.Src, b.Job.IncludeSubdirs, b.Job.Exclude, CancellationToken.None, out total);
+            Eq(6, total, "コピー元の全件数");
+            Eq(2, inc, "コピーする件数（a.txt・sub\\d.xlsx）");
+            RunResult r = b.Run();
+            Eq(inc, r.Copied, "数えた件数と実際にコピーした件数が同じ");
+            True(b.DE("a.txt") && b.DE(@"sub\d.xlsx") && !b.DE("b.tmp") && !b.DE(@"sub\c.mp4") && !b.DE(@"skip\e.txt"), "コピーされたもの");
+            // 拡張子の一覧（除外に加える候補）：大きい順・拡張子なしも数える
+            b.W("big.psd", new string('x', 5000)); b.W("noext", "n");
+            List<ExtCount> ec = ExtCount.Of(Scanner.Scan(b.Src, true, null, false, CancellationToken.None));
+            Eq(".psd", ec[0].Ext, "大きい順");
+            True(ec.Exists(delegate(ExtCount e) { return e.Ext == "" && e.Count == 1; }), "拡張子なし");
+            True(ec.Exists(delegate(ExtCount e) { return e.Ext == ".txt" && e.Count == 2; }), ".txt は2件");
+            // 中止できる
+            CancellationTokenSource cts = new CancellationTokenSource(); cts.Cancel();
+            bool canceled = false;
+            try { ExclusionCounter.Count(b.Src, true, b.Job.Exclude, cts.Token, out total); } catch (OperationCanceledException) { canceled = true; }
+            True(canceled, "中止したら数えない");
+        }
+
+        private static void ErrorAdvice()
+        {
+            Func<string, bool, string> adv = delegate(string t, bool cred) { return ErrorKind.Advice(t, cred) ?? ""; };
+            True(adv("【" + ErrorKind.Label(ErrorKind.Network) + "】ネットワークにつながっていないため、\\\\nas に接続できません", false).Contains("Wi-Fi"), "ネットワーク");
+            True(adv("\\\\fs02\\設計部 に接続できません（3回再試行しました）", false).Contains("Wi-Fi"), "接続できません");
+            True(adv("【" + ErrorKind.Label(ErrorKind.DiskFull) + "】ディスクがいっぱいです", false).Contains("空き容量"), "容量不足");
+            True(adv("【" + ErrorKind.Label(ErrorKind.AccessDenied) + "】a.txt", false).Contains("権限"), "アクセス拒否");
+            True(adv("【" + ErrorKind.Label(ErrorKind.Locked) + "】a.xlsx", false).Contains("閉じて"), "使用中");
+            True(adv("【" + ErrorKind.Label(ErrorKind.TooLong) + "】", false).Contains("短く"), "パスが長すぎる");
+            True(adv("コピー元が見つかりません: D:\\data", false).Contains("USBメモリ"), "見つからない");
+            True(adv("どこかの原因", true).Contains("パスワード"), "ID・パスワードの誤り");
+            True(adv("ユーザー名またはパスワードが正しくありません", false).Contains("パスワード"), "ID・パスワードの文");
+            Eq(null, ErrorKind.Advice("よく分からないエラー", false), "分からないときは付けない");
+            // 例外の分類から（容量不足：Win32 112）
+            string desc = ErrorKind.Describe(new IOException("書けません", unchecked((int)0x80070070)));
+            True(desc.StartsWith("【" + ErrorKind.Label(ErrorKind.DiskFull) + "】"), "分類: " + desc);
+            string w = ErrorKind.WithAdvice(desc, false);
+            True(w.StartsWith(desc) && w.Contains(ErrorKind.AdvicePrefix) && w.Contains("空き容量"), "元の文の後ろに付ける: " + w);
+            Eq(w, ErrorKind.WithAdvice(w, false), "2回付けない");
+            Eq("よく分からないエラー", ErrorKind.WithAdvice("よく分からないエラー", false), "分からないときはそのまま");
+            Eq(null, ErrorKind.WithAdvice(null, false), "null のまま");
+            True(!w.Contains("\n"), "一覧で1行に収まる（改行を入れない）");
+        }
+
+        private static void KeepReason()
+        {
+            Box b = new Box("T121");
+            string root = Path.Combine(b.Root, "free");
+            DateTime t = DateTime.UtcNow.AddDays(-3);
+            Action<string, DateTime> put = delegate(string rel, DateTime m)
+            {
+                string f = Path.Combine(root, rel);
+                Directory.CreateDirectory(Path.GetDirectoryName(f));
+                File.WriteAllBytes(f, Encoding.ASCII.GetBytes("SAME"));
+                File.SetLastWriteTimeUtc(f, m);
+            };
+            put(@"a.txt", t); put(@"sub.txt", t.AddHours(-5));
+            FolderDupResult r = FolderDup.Find(root, true, 0, DupBasis.Content, CancellationToken.None, null);
+            Eq(1, r.Groups.Count, "1まとまり");
+            Eq("a.txt", r.Groups[0].Files[0], "パスが短いものを残す（古くても）");
+            Eq("場所（パス）がいちばん短い", r.Groups[0].KeepReason(), "理由：パス");
+
+            string root2 = Path.Combine(b.Root, "free2");
+            root = root2;
+            put(@"x1.txt", t); put(@"x2.txt", t.AddHours(-2));
+            r = FolderDup.Find(root2, true, 0, DupBasis.Content, CancellationToken.None, null);
+            Eq(@"x\b2.txt", r.Groups[0].Files[0], "同じ長さなら古いものを残す");
+            Eq("いちばん古い（最初のもの）", r.Groups[0].KeepReason(), "理由：古い");
+
+            string root3 = Path.Combine(b.Root, "free3");
+            root = root3;
+            put(@"y\c2.txt", t); put(@"y\c1.txt", t);
+            r = FolderDup.Find(root3, true, 0, DupBasis.Content, CancellationToken.None, null);
+            Eq(@"y\c1.txt", r.Groups[0].Files[0], "同じ長さ・同じ日時なら名前の順");
+            Eq("名前の順で先", r.Groups[0].KeepReason(), "理由：名前");
+            FolderDupGroup one = new FolderDupGroup(); one.Files.Add("z.txt"); one.Mtimes.Add(0);
+            Eq("1件だけ", one.KeepReason(), "1件のとき");
+        }
+
+        private static void EnableJobChoice()
+        {
+            JobConfig j = new JobConfig(); j.Name = "新しいジョブ"; j.Enabled = false;
+            using (EnableJobForm f = new EnableJobForm(j))
+            {
+                Eq(EnableJobForm.Later, f.Choice, "選ばずに閉じたら「あとで（無効のまま）」");
+                List<string> texts = new List<string>();
+                Stack<System.Windows.Forms.Control> st = new Stack<System.Windows.Forms.Control>(); st.Push(f);
+                while (st.Count > 0) { System.Windows.Forms.Control c = st.Pop(); if (c is System.Windows.Forms.Button) texts.Add(c.Text); foreach (System.Windows.Forms.Control k in c.Controls) st.Push(k); }
+                True(texts.Exists(delegate(string s) { return s.Contains("テストしてから有効にする"); }), "テストしてから有効にする");
+                True(texts.Exists(delegate(string s) { return s.Contains("今すぐ有効にする"); }), "今すぐ有効にする");
+                True(texts.Exists(delegate(string s) { return s.Contains("あとで"); }), "あとで");
+                True(f.CancelButton != null && ((System.Windows.Forms.Button)f.CancelButton).Text.Contains("あとで"), "Esc は「あとで」");
+            }
+            True(!j.Enabled, "案内を出しただけでは有効にしない");
         }
 
         private static void MessageFits()

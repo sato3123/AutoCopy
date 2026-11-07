@@ -8,6 +8,7 @@ namespace AutoCopy
     [DataContract]
     public class AppSettings
     {
+        [DataMember] public bool ShowAdvancedJobSettings;   // ジョブ設定で「詳しい設定も表示する」（前回の選択）
         [DataMember] public int FormatVersion;
         [DataMember] public string InstanceId;        // このPCの識別子（配布しない）
         [DataMember] public string FolderName;        // このPCのフォルダ名（配布しない）

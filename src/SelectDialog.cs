@@ -104,7 +104,7 @@ namespace AutoCopy
 
             Controls.Add(b);
             Controls.Add(actions);
-            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); })));
+            Controls.Add(Ui.WithHelp(Ui.Footer(Ui.B("閉じる", delegate { Close(); })), Help.Select));
 
             EventHandler h = delegate { UpdateCount(); };
             foreach (Control c in new Control[] { tWords, tExt }) c.TextChanged += h;
@@ -118,10 +118,8 @@ namespace AutoCopy
 
         private static DateTimePicker DatePicker(DateTime v)
         {
-            DateTimePicker d = new DateTimePicker();
-            d.Format = DateTimePickerFormat.Short;
+            DateTimePicker d = Ui.DateBox(v);   // yyyy/MM/dd に固定
             d.Width = Math.Max(Ui.S(120), Ui.TextWidth("0000/00/00", Ui.Base) + Ui.S(44));
-            d.Value = v;
             return d;
         }
 

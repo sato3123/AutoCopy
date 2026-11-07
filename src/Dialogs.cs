@@ -41,7 +41,7 @@ namespace AutoCopy
             agree.CheckedChanged += delegate { ok.Enabled = agree.Checked; };
             CancelButton = cancel;
             Controls.Add(b);
-            Controls.Add(Ui.Footer(cancel, ok));
+            Controls.Add(Ui.WithHelp(Ui.Footer(cancel, ok), Help.Mirror));
 
             List<string> planned = new List<string>();
             list.Click += delegate
@@ -111,7 +111,7 @@ namespace AutoCopy
             Controls.Add(checkBar);
             Controls.Add(top);
             Controls.Add(bottom);
-            Controls.Add(Ui.Footer(Ui.B("閉じる（後で決める）", delegate { Close(); }), Ui.B("最新にする", delegate { Reload(); })));
+            Controls.Add(Ui.WithHelp(Ui.Footer(Ui.B("閉じる（後で決める）", delegate { Close(); }), Ui.B("最新にする", delegate { Reload(); })), Help.Conflicts));
             Reload();
         }
 
@@ -252,7 +252,7 @@ namespace AutoCopy
             });
             Controls.Add(lv);
             Controls.Add(top);
-            Controls.Add(Ui.Footer(Ui.B("後で決める", delegate { Close(); }), Btn.Gap(), del, Btn.Gap(), keep));
+            Controls.Add(Ui.WithHelp(Ui.Footer(Ui.B("後で決める", delegate { Close(); }), Btn.Gap(), del, Btn.Gap(), keep), Help.Mirror));
         }
     }
 
@@ -275,8 +275,8 @@ namespace AutoCopy
             h.Height = Ui.S(34);
             Controls.Add(lv);
             Controls.Add(h);
-            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(), Btn.MakeCaution(Ui.B("選んだものを元に戻す", delegate { Restore(); })), Btn.Gap(),
-                Ui.B("フォルダを開く", delegate { Ui.OpenFolder(PathUtil.Combine(CopyEngine.ResolvedDest(job, AppCore.Settings), AppPaths.DestMetaFolder)); })));
+            Controls.Add(Ui.WithHelp(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(), Btn.MakeCaution(Ui.B("選んだものを元に戻す", delegate { Restore(); })), Btn.Gap(),
+                Ui.B("フォルダを開く", delegate { Ui.OpenFolder(PathUtil.Combine(CopyEngine.ResolvedDest(job, AppCore.Settings), AppPaths.DestMetaFolder)); })), Help.Restore));
             Shown += delegate { Reload(); };
         }
 
@@ -345,7 +345,7 @@ namespace AutoCopy
 
         public DupForm()
         {
-            Ui.SetupForm(this, "重複チェック結果", 1040, 680);
+            Ui.SetupForm(this, "コピー先の整理（重複チェック）の結果", 1040, 680);
             cbJob = Ui.Combo(260);
             cbJob.SelectedIndexChanged += delegate { LoadResult(); };
             summary = Ui.L("");
@@ -427,7 +427,7 @@ namespace AutoCopy
             Controls.Add(checkBar);
             Controls.Add(top);
             Controls.Add(bottom);
-            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(), bSkip, bToCopy, bToText, del));
+            Controls.Add(Ui.WithHelp(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(), bSkip, bToCopy, bToText, del), Help.DupCheck));
             FillJobs();
             VisibleChanged += delegate { if (Visible) MarkSeen(); };
         }
@@ -477,7 +477,7 @@ namespace AutoCopy
             int largeCount = largeMode ? AddLargeGroups() : 0;
             if (current == null)
             {
-                summary.Text = "まだ重複チェックをしていません。" + (largeCount > 0 ? "（大きいファイルの重複 " + largeCount + "件）" : "");
+                summary.Text = "まだコピー先の整理（重複チェック）をしていません。" + (largeCount > 0 ? "（大きいファイルの重複 " + largeCount + "件）" : "");
             }
             else
             {
@@ -675,7 +675,7 @@ namespace AutoCopy
         /// <summary>条件で選ぶ（名前・拡張子・大きさ・更新日時・判定）。同じ中身のまとまりでは必ず1つ残す</summary>
         private void SelectByCondition()
         {
-            using (SelectDialog d = new SelectDialog("重複チェック結果", SelectDialog.TagsOf(lv, MapDup), delegate(SelectCriteria c) { return SelectDialog.Count(lv, MapDup, c); }, true))
+            using (SelectDialog d = new SelectDialog("コピー先の整理の結果", SelectDialog.TagsOf(lv, MapDup), delegate(SelectCriteria c) { return SelectDialog.Count(lv, MapDup, c); }, true))
             {
                 if (d.ShowDialog(this) != DialogResult.OK) return;
                 filling = true;
@@ -767,7 +767,7 @@ namespace AutoCopy
         {
             if (currentJob == null) return;
             if (!AppCore.RunDup(currentJob.Id)) { Ui.Info(this, "このジョブは実行中です。終わってからもう一度お試しください。"); return; }
-            summary.Text = "重複チェック中です…（終わると自動で表示が変わります）";
+            summary.Text = "コピー先の整理（重複チェック）中です…（終わると自動で表示が変わります）";
             string id = currentJob.Id;
             System.Windows.Forms.Timer t = new System.Windows.Forms.Timer();
             t.Interval = 2000;
@@ -848,8 +848,8 @@ namespace AutoCopy
             Controls.Add(lv);
             Controls.Add(bar);
             Controls.Add(top);
-            Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(),
-                Btn.MakeCaution(Ui.B("チェックしたものを取り消す（また確認する）", delegate { Forget(); }))));
+            Controls.Add(Ui.WithHelp(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(),
+                Btn.MakeCaution(Ui.B("チェックしたものを取り消す（また確認する）", delegate { Forget(); }))), Help.Skip));
             Reload();
         }
 
@@ -963,8 +963,8 @@ namespace AutoCopy
             Controls.Add(lv);
             Controls.Add(bar);
             Controls.Add(top);
-            Controls.Add(Ui.Footer(Ui.B("閉じる（後で決める）", delegate { Close(); }), Btn.Gap(), del, Btn.Gap(),
-                Ui.B("チェックしたものを残す（戻す）", delegate { Apply(false); })));
+            Controls.Add(Ui.WithHelp(Ui.Footer(Ui.B("閉じる（後で決める）", delegate { Close(); }), Btn.Gap(), del, Btn.Gap(),
+                Ui.B("チェックしたものを残す（戻す）", delegate { Apply(false); })), Help.SyncDelete));
             Reload();
         }
 
@@ -1042,6 +1042,31 @@ namespace AutoCopy
             });
             Reload();
             if (errors.Count > 0) Ui.Error(this, "できなかったものがあります：\n" + string.Join("\n", errors.ToArray()));
+        }
+    }
+
+    /// <summary>新しいジョブを保存した後：無効のままにせず、確かめてから有効にするよう案内する</summary>
+    public class EnableJobForm : Form
+    {
+        public const int Test = 0, EnableNow = 1, Later = 2;
+        /// <summary>選んだもの（閉じたときは「あとで」）</summary>
+        public int Choice = Later;
+
+        public EnableJobForm(JobConfig job)
+        {
+            Ui.SetupDialog(this, "ジョブを保存しました", 600, 330);
+            FlowLayoutPanel b = Ui.Body();
+            b.Controls.Add(Ui.Heading("ジョブ「" + job.Name + "」はまだ「無効」です"));
+            b.Controls.Add(Ui.Wrap("無効のジョブは、自動ではコピーしません。\n"
+                + "はじめに「テスト」で、コピーしたらどうなるか（コピーされるファイル・上書き・削除されるもの）を確かめてから有効にすると安心です。", 540));
+            b.Controls.Add(Ui.Hint("あとで有効にするときは、メイン画面のジョブの左のチェックを入れます。"));
+            Button test = Btn.MakePrimary(Ui.B("テストしてから有効にする…", delegate { Choice = Test; DialogResult = DialogResult.OK; Close(); }));
+            Button now = Ui.B("今すぐ有効にする", delegate { Choice = EnableNow; DialogResult = DialogResult.OK; Close(); });
+            Button later = Ui.B("あとで（無効のまま）", delegate { Choice = Later; DialogResult = DialogResult.Cancel; Close(); });
+            CancelButton = later;
+            AcceptButton = test;
+            Controls.Add(b);
+            Controls.Add(Ui.Footer(later, now, test));
         }
     }
 }
