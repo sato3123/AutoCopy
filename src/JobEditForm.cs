@@ -619,7 +619,7 @@ namespace AutoCopy
                 presetBoxes[k] = c;
                 presets.Controls.Add(c);
             }
-            tExt = Ui.T("", 460);
+            tExt = Ui.T("", 380);   // 右に「コピー元にある種類から選ぶ…」を置くため少し狭く
             tPat = Ui.T("", 460);
             Button pickExt = Ui.B("コピー元にある種類から選ぶ…", delegate { PickExtensions(); });
             Btn.SetIcon(pickExt, "add", Ui.Ok);

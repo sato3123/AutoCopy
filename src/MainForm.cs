@@ -199,8 +199,7 @@ namespace AutoCopy
         /// <summary>「元に戻す ▾」：選んだジョブ（または一覧から選ぶジョブ）の、削除・上書きの前に退避したファイルを戻す</summary>
         private Button RestoreMenuButton()
         {
-            Button b = Ui.B("元に戻す ▾", null);
-            Btn.SetIcon(b, "undo", Ui.Quiet);
+            Button b = Btn.MakeCaution(Ui.B("元に戻す ▾", null));   // 戻す操作は橙（戻す前に画面で確認が出る）
             b.Click += delegate
             {
                 string id = FirstSelected();

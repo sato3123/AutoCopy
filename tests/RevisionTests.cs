@@ -583,6 +583,18 @@ namespace AutoCopy.Tests
             Eq("よく分からないエラー", ErrorKind.WithAdvice("よく分からないエラー", false), "分からないときはそのまま");
             Eq(null, ErrorKind.WithAdvice(null, false), "null のまま");
             True(!w.Contains("\n"), "一覧で1行に収まる（改行を入れない）");
+
+            // 実際のジョブのエラー（コピー元がない）で、お知らせに「次にすること」が付く
+            Box b = new Box("T120");
+            b.Job.Source = Path.Combine(b.Root, "ないフォルダ");
+            b.Apply();
+            JobRuntime rt = AppCore.GetRuntime(b.Job.Id);
+            True(AppCore.RunJob(b.Job.Id, true, false), "実行開始");
+            True(rt.Idle.Wait(30000), "終わる");
+            Notice n = AppCore.RecentNotices().Find(delegate(Notice x) { return x.JobId == b.Job.Id && x.Level == NoticeLevel.Error; });
+            True(n != null, "エラーのお知らせ");
+            True(n.Text.Contains(ErrorKind.AdvicePrefix), "お知らせに「次にすること」: " + n.Text);
+            True(Directory.Exists(b.Src), "元データ（テストの元フォルダ）はそのまま");
         }
 
         private static void KeepReason()
@@ -597,7 +609,7 @@ namespace AutoCopy.Tests
                 File.WriteAllBytes(f, Encoding.ASCII.GetBytes("SAME"));
                 File.SetLastWriteTimeUtc(f, m);
             };
-            put(@"a.txt", t); put(@"sub.txt", t.AddHours(-5));
+            put(@"a.txt", t); put(@"sub\a.txt", t.AddHours(-5));
             FolderDupResult r = FolderDup.Find(root, true, 0, DupBasis.Content, CancellationToken.None, null);
             Eq(1, r.Groups.Count, "1まとまり");
             Eq("a.txt", r.Groups[0].Files[0], "パスが短いものを残す（古くても）");
@@ -605,7 +617,7 @@ namespace AutoCopy.Tests
 
             string root2 = Path.Combine(b.Root, "free2");
             root = root2;
-            put(@"x1.txt", t); put(@"x2.txt", t.AddHours(-2));
+            put(@"x\b1.txt", t); put(@"x\b2.txt", t.AddHours(-2));
             r = FolderDup.Find(root2, true, 0, DupBasis.Content, CancellationToken.None, null);
             Eq(@"x\b2.txt", r.Groups[0].Files[0], "同じ長さなら古いものを残す");
             Eq("いちばん古い（最初のもの）", r.Groups[0].KeepReason(), "理由：古い");
