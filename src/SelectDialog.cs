@@ -70,14 +70,13 @@ namespace AutoCopy
 
             lCount = Ui.L("");
             lCount.Font = Ui.Bold;
-            b.Controls.Add(lCount);
 
             Button bCheck = Ui.B("条件に合うものにチェック", delegate { Done(SelectAction.Check); });
             Button bUncheck = Ui.B("条件に合うもののチェックを外す", delegate { Done(SelectAction.Uncheck); });
             Button bOnly = Ui.B("条件に合うものだけチェック（ほかは外す）", delegate { Done(SelectAction.Only); });
             Btn.SetIcon(bUncheck, "close", Ui.Quiet);
             Btn.SetIcon(bOnly, "filter", Ui.Quiet);
-            b.Controls.Add(Ui.WrapRow(bCheck, bUncheck, bOnly));
+            List<Control> acts = new List<Control>(new Control[] { bCheck, bUncheck, bOnly });
 
             rShort = Ui.R("パスが短いもの", true);
             rNew = Ui.R("更新日時が新しいもの", false);
@@ -88,12 +87,23 @@ namespace AutoCopy
                 Button bKeep = Ui.B("各まとまりで1つ残して、ほかにチェック", delegate { Done(SelectAction.KeepOne); });
                 b.Controls.Add(Ui.Section("重複：各まとまりで残すもの",
                     Ui.Column(rShort, rNew, rOld, rMatch),
-                    Ui.Hint("条件を指定したときは、残すもの以外のうち、条件に合うものだけにチェックします（「上の条件に合うもの」を残す場合は、ほかのすべてにチェック）。"),
-                    bKeep));
+                    Ui.Hint("下の「各まとまりで1つ残して、ほかにチェック」で使います。条件を指定したときは、残すもの以外のうち、条件に合うものだけにチェックします（「上の条件に合うもの」を残す場合は、ほかのすべてにチェック）。")));
+                acts.Add(bKeep);
             }
             b.Controls.Add(Ui.Hint("同じ中身のファイルは、どの選び方でも必ず1つは残ります（重複の画面）。選んだ後で、一覧のチェックを1つずつ変えることもできます。"));
 
+            // 件数と選ぶボタンは、スクロールしなくても見える下の帯に置く（文字が大きい・画面が小さいときに隠れないように）
+            FlowLayoutPanel actRow = Ui.WrapRow(acts.ToArray());
+            FlowLayoutPanel actions = Ui.Column(lCount, actRow);
+            actions.Dock = DockStyle.Bottom;
+            actions.Padding = new Padding(Ui.S(12), Ui.S(6), Ui.S(12), Ui.S(2));
+            actions.BackColor = Color.White;
+            EventHandler fit = delegate { actRow.MaximumSize = new Size(Math.Max(Ui.S(200), ClientSize.Width - Ui.S(36)), 0); };
+            SizeChanged += fit;
+            fit(null, EventArgs.Empty);
+
             Controls.Add(b);
+            Controls.Add(actions);
             Controls.Add(Ui.Footer(Ui.B("閉じる", delegate { Close(); })));
 
             EventHandler h = delegate { UpdateCount(); };
