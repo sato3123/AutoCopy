@@ -166,7 +166,7 @@ namespace AutoCopy
             syncPush.Margin = new Padding(Ui.S(22), 0, 3, 4);
             // 共有フォルダの詳しい確認を省略する時間（複数PCで同期するときの待ち時間を減らす）
             // よく使う組み合わせ（選ぶと下の2つが決まる。下を自分で変えると「自分で選ぶ」になる）
-            cbSyncPreset = Ui.Combo(470, SyncPresets.Labels);
+            cbSyncPreset = Ui.Combo(360, SyncPresets.Labels);
             cbSyncPreset.SelectedIndexChanged += delegate
             {
                 if (loading || cbSyncPreset.SelectedIndex < 0) return;
@@ -619,12 +619,12 @@ namespace AutoCopy
                 presetBoxes[k] = c;
                 presets.Controls.Add(c);
             }
-            tExt = Ui.T("", 380);   // 右に「コピー元にある種類から選ぶ…」を置くため少し狭く
+            tExt = Ui.T("", 460);
             tPat = Ui.T("", 460);
             Button pickExt = Ui.B("コピー元にある種類から選ぶ…", delegate { PickExtensions(); });
             Btn.SetIcon(pickExt, "add", Ui.Ok);
             b.Controls.Add(Ui.Section("ファイルの種類", presets,
-                Ui.Row(Ui.L("追加の拡張子", 110), Ui.Column(Ui.Row(tExt, pickExt), Ui.Hint("例：.log; .psd　（「;」で区切る。右のボタンで、コピー元にある種類を件数・大きさを見ながら選べます）"))),
+                Ui.Row(Ui.L("追加の拡張子", 110), Ui.Column(tExt, pickExt, Ui.Hint("例：.log; .psd　（「;」で区切る。上のボタンで、コピー元にある種類を件数・大きさを見ながら選べます）"))),
                 Ui.Row(Ui.L("ファイル名", 110), Ui.Column(tPat, Ui.Hint("* と ? が使えます（例：~$*　→「~$」で始まる名前）")))));
 
             cMax = Ui.C("", false);
@@ -1120,9 +1120,9 @@ namespace AutoCopy
     public static class SyncPresets
     {
         public static readonly string[] Labels = {
-            "共有フォルダのファイルを受け取る（初期値。このPCだけにあるファイルは送らない）",
-            "すべてのPCで同じにする（このPCで追加したファイルも、他のPCへ送る）",
-            "自分で選ぶ（下の2つを選ぶ）" };
+            "共有フォルダのファイルを受け取る（初期値）",
+            "すべてのPCで同じにする（追加したファイルも送る）",
+            "自分で選ぶ（下の2つ）" };
         public const int Custom = 2;
 
         public static bool Values(int index, out bool take, out bool push)

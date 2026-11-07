@@ -649,8 +649,10 @@ namespace AutoCopy
                 if (f.ShowDialog(this) != DialogResult.OK) return;
                 AppCore.Settings.Jobs.Add(f.Result);
                 AppCore.SaveSettings();
+                c = f.Result;
             }
             RefreshView();
+            if (!c.Enabled) AskEnable(c);   // 複製したジョブも無効で作る：確かめてから有効にする案内
         }
 
         private void DeleteJob()
