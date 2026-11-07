@@ -83,7 +83,7 @@ namespace AutoCopy
                 Control last = null; int bottom = 0;
                 foreach (Control c in sc.Controls)
                 {
-                    if (!c.Visible) continue;
+                    if (!c.Visible || Equals(c.Tag, Ui.ScrollSpacerTag)) continue;   // 最後の空白は数えない
                     if (c.Bottom > bottom) { bottom = c.Bottom; last = c; }
                 }
                 int view = sc.ClientSize.Height;

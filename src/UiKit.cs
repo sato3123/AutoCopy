@@ -327,7 +327,30 @@ namespace AutoCopy
             p.AutoScroll = true;
             p.Dock = DockStyle.Fill;
             p.Padding = new Padding(12);
+            AddScrollSpacer(p);
             return p;
+        }
+
+        public const string ScrollSpacerTag = "scroll-spacer";
+
+        /// <summary>
+        /// スクロールできる縦の並びの最後に、空白の部品を置く（常に最後に保つ）。
+        /// Windows のスクロールは、上の余白や最後の部品の下の余白を数えないため、いちばん下までスクロールしても
+        /// 最後の部品の下が数ピクセル欠ける。その分を空白で足して、最後の部品まで必ず見えるようにする。
+        /// </summary>
+        public static void AddScrollSpacer(FlowLayoutPanel p)
+        {
+            Panel spacer = new Panel();
+            spacer.Tag = ScrollSpacerTag;
+            spacer.Width = 1;
+            spacer.Height = p.Padding.Top + p.Padding.Bottom + S(12);
+            spacer.Margin = new Padding(0);
+            spacer.TabStop = false;
+            p.Controls.Add(spacer);
+            p.ControlAdded += delegate(object s, ControlEventArgs e)
+            {
+                if (e.Control != spacer && p.Controls.Contains(spacer)) p.Controls.SetChildIndex(spacer, p.Controls.Count - 1);
+            };
         }
 
         /// <summary>下部のボタン帯（右寄せ）</summary>
