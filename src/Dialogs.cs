@@ -1054,7 +1054,7 @@ namespace AutoCopy
 
         public EnableJobForm(JobConfig job)
         {
-            Ui.SetupDialog(this, "ジョブを保存しました", 600, 330);
+            Ui.SetupDialog(this, "ジョブを保存しました", 600, 270);
             FlowLayoutPanel b = Ui.Body();
             b.Controls.Add(Ui.Heading("ジョブ「" + job.Name + "」はまだ「無効」です"));
             b.Controls.Add(Ui.Wrap("無効のジョブは、自動ではコピーしません。\n"
