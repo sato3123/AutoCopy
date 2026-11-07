@@ -38,6 +38,7 @@ namespace AutoCopy.Tests
             Add("T109", "別ジョブが同期なら、その共有フォルダはまるごと整理の対象にしない", SyncSharedProtected);
             Add("T110", "ログ送信：途中で終了しても二重・途中までにしない・保管先のファイルを書き直さない", LogResume);
             Add("T111", "コピー先一覧：上限を超えたらファイルごとに確かめる", InventoryLimit);
+            Add("T113", "長いメッセージは画面の高さに収まる行数までにする（下のボタンが画面の外に出ない）", MessageFits);
             Add("T112", "終了時の停止待ちは上限まで（止まらない処理があっても終了できる）", StopTimeout);
         }
 
@@ -420,6 +421,28 @@ namespace AutoCopy.Tests
                 Eq(5, inv2.CachedEntries, "持っている件数");
             }
             finally { DestinationInventory.MaxEntries = keep; }
+        }
+
+        private static void MessageFits()
+        {
+            List<string> lines = new List<string>();
+            lines.Add("できなかったものがあります：");
+            for (int i = 0; i < 300; i++) lines.Add(@"\\nas\共有\経理\2026年度\請求書_" + i + ".xlsx：ネットワーク名が見つかりません");
+            string all = string.Join("\n", lines.ToArray());
+            string c = Ui.ClipLines(all, 25, 120);
+            string[] got = c.Split('\n');
+            Eq(25, got.Length, "25行まで");
+            True(got[24].StartsWith("…ほか ") && got[24].Contains("277行"), "残りの行数を書く: " + got[24]);
+            Eq("できなかったものがあります：", got[0], "先頭はそのまま");
+            Eq("短い", Ui.ClipLines("短い", 25, 120), "短いものはそのまま");
+            string longLine = new string('あ', 500);
+            True(Ui.ClipLines(longLine, 25, 120).Length <= 121, "長すぎる1行は切る");
+            // 画面の高さから決める行数：小さい画面でも 8行以上、大きい画面でも 40行まで
+            int small = Ui.MessageMaxLines(582), normal = Ui.MessageMaxLines(728), big = Ui.MessageMaxLines(2000);
+            True(small >= 8 && small <= normal && normal <= big && big <= 40, "行数: " + small + " / " + normal + " / " + big);
+            // 1行あたりの高さ × 行数 ＋ 題名・ボタンの分 が画面に収まる
+            int lineH = System.Windows.Forms.TextRenderer.MeasureText("あ", System.Drawing.SystemFonts.MessageBoxFont).Height + 2;
+            True(normal * lineH + Ui.S(140) <= 728, "1366×768 の画面に収まる: " + normal + "行×" + lineH + "px");
         }
 
         private static void StopTimeout()

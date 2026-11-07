@@ -54,7 +54,7 @@ namespace AutoCopy
                 {
                     string msg = confirm();
                     if (msg == null) return;   // 確認の前に止めた（選んでいない など）
-                    if (MessageBox.Show(b.FindForm(), msg, "確認（元に戻しにくい操作です）", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
+                    if (MessageBox.Show(b.FindForm(), Ui.FitMessage(msg, false), "確認（元に戻しにくい操作です）", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
                 }
                 if (onClick != null) onClick(s, e);
             };

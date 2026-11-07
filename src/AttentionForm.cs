@@ -125,12 +125,44 @@ namespace AutoCopy
             Close();
         }
 
+        private bool anchored;   // 画面右下に合わせて置いている（利用者が動かしたら合わせない）
+        private bool placing;
+
         /// <summary>画面右下（タスクバーのすぐ上）に置く</summary>
         public void PlaceBottomRight()
         {
             Rectangle wa = Ui.WorkArea;
             PerformLayout();
-            Location = new Point(wa.Right - Width - Ui.S(12), wa.Bottom - Height - Ui.S(12));
+            placing = true;
+            try { Location = new Point(wa.Right - Width - Ui.S(12), wa.Bottom - Height - Ui.S(12)); }
+            finally { placing = false; }
+            anchored = true;
+        }
+
+        /// <summary>
+        /// 置いた後に高さが変わったとき（自動で閉じるまでの秒数の行が出た・項目が増えた など）も、
+        /// 下の端がタスクバーに隠れないよう、右下に合わせ直す。動かした後でも画面の外には出さない。
+        /// </summary>
+        protected override void OnSizeChanged(EventArgs e)
+        {
+            base.OnSizeChanged(e);
+            if (!IsHandleCreated && !anchored) return;
+            if (anchored) { PlaceBottomRight(); return; }
+            KeepInside();
+        }
+
+        protected override void OnLocationChanged(EventArgs e)
+        {
+            base.OnLocationChanged(e);
+            if (!placing && Visible) anchored = false;   // 利用者が動かした
+        }
+
+        private void KeepInside()
+        {
+            Rectangle wa = Ui.WorkArea;
+            int x = Math.Max(wa.Left, Math.Min(Left, wa.Right - Width));
+            int y = Math.Max(wa.Top, Math.Min(Top, wa.Bottom - Height));
+            if (x != Left || y != Top) { placing = true; try { Location = new Point(x, y); } finally { placing = false; } }
         }
     }
 }

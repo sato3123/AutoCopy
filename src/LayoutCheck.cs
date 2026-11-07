@@ -14,6 +14,7 @@ namespace AutoCopy
     /// ・位置を決めて置いた部品どうしが重なっていないか
     /// ・横スクロールが出ていないか
     /// ・小さい画面（1366×768）に収まるか
+    /// ・スクロールできる場所を、いちばん下までスクロールしたとき、最後の部品が欠けずに見えるか（最下部の表示切れ）
     /// </summary>
     public static class LayoutCheck
     {
@@ -42,10 +43,55 @@ namespace AutoCopy
                 tc.SelectedIndex = keep;
                 Application.DoEvents();
             }
+            CheckScrollBottoms(f, issues);
             // 重複を除く
             List<string> uniq = new List<string>();
             foreach (string s in issues) if (!uniq.Contains(s)) uniq.Add(s);
             return uniq;
+        }
+
+        /// <summary>縦にスクロールできる場所（表示中のもの）</summary>
+        public static List<ScrollableControl> VerticalScrollers(Form f)
+        {
+            List<ScrollableControl> list = new List<ScrollableControl>();
+            foreach (ScrollableControl sc in FindAll<ScrollableControl>(f))
+                if (IsShown(sc) && sc.AutoScroll && sc.VerticalScroll.Visible) list.Add(sc);
+            return list;
+        }
+
+        /// <summary>縦にスクロールできる場所を、すべていちばん下（true）／いちばん上（false）へ。動かした数を返す</summary>
+        public static int ScrollAll(Form f, bool toBottom)
+        {
+            int n = 0;
+            foreach (ScrollableControl sc in VerticalScrollers(f))
+            {
+                sc.AutoScrollPosition = new Point(-sc.AutoScrollPosition.X, toBottom ? 1000000 : 0);
+                n++;
+            }
+            Application.DoEvents();
+            return n;
+        }
+
+        /// <summary>いちばん下までスクロールしたとき、最後の部品が欠けずに見えるか</summary>
+        private static void CheckScrollBottoms(Form f, List<string> issues)
+        {
+            foreach (ScrollableControl sc in VerticalScrollers(f))
+            {
+                Point keep = sc.AutoScrollPosition;
+                sc.AutoScrollPosition = new Point(-keep.X, 1000000);
+                Application.DoEvents();
+                Control last = null; int bottom = 0;
+                foreach (Control c in sc.Controls)
+                {
+                    if (!c.Visible) continue;
+                    if (c.Bottom > bottom) { bottom = c.Bottom; last = c; }
+                }
+                int view = sc.ClientSize.Height;
+                if (last != null && bottom > view + 1)
+                    issues.Add(Name(sc) + "：いちばん下までスクロールしても、" + Name(last) + " の下が " + (bottom - view) + "px 欠ける");
+                sc.AutoScrollPosition = new Point(-keep.X, -keep.Y);
+                Application.DoEvents();
+            }
         }
 
         private static bool IsShown(Control c)

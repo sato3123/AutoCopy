@@ -438,17 +438,62 @@ namespace AutoCopy
 
         public static void Info(IWin32Window owner, string text)
         {
-            MessageBox.Show(owner, text, "自動コピー", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            MessageBox.Show(owner, FitMessage(text, false), "自動コピー", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         public static void Error(IWin32Window owner, string text)
         {
-            MessageBox.Show(owner, text, "自動コピー", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(owner, FitMessage(text, true), "自動コピー", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
 
         public static bool Confirm(IWin32Window owner, string text)
         {
-            return MessageBox.Show(owner, text, "自動コピー", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK;
+            return MessageBox.Show(owner, FitMessage(text, false), "自動コピー", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK;
+        }
+
+        /// <summary>
+        /// メッセージの行数を、画面の高さに収まる数までにする（Windows のメッセージは長いと画面より高くなり、下のボタンが画面の外に出て押せない）。
+        /// 省いた行は「ほか n行」とし、エラーのときは全文をログに残す。
+        /// </summary>
+        public static string FitMessage(string text, bool logAll)
+        {
+            int max = MessageMaxLines(WorkArea.Height);
+            string clipped = ClipLines(text, max, 120);
+            if (logAll && clipped != text)
+            {
+                try { Logger.Error(null, "（画面に出しきれなかったメッセージの全文）" + (text ?? "").Replace("\r", "").Replace("\n", " / ")); } catch (Exception) { }
+                clipped += "\n（全文はログに記録しました）";
+            }
+            return clipped;
+        }
+
+        /// <summary>画面の高さから、メッセージに出せる行数（題名・ボタン・余白を除く）</summary>
+        public static int MessageMaxLines(int workAreaHeight)
+        {
+            int line = Math.Max(15, TextRenderer.MeasureText("あ", SystemFonts.MessageBoxFont ?? Base).Height + 2);
+            return Math.Max(8, Math.Min(40, (workAreaHeight - S(220)) / line));
+        }
+
+        /// <summary>行数を maxLines までにし（超えた分は「ほか n行」）、長すぎる行は maxChars で切る。表示用の純粋な関数</summary>
+        public static string ClipLines(string text, int maxLines, int maxChars)
+        {
+            if (string.IsNullOrEmpty(text)) return text ?? "";
+            string[] lines = text.Replace("\r\n", "\n").Split('\n');
+            List<string> keep = new List<string>();
+            bool changed = false;
+            foreach (string l in lines)
+            {
+                if (l.Length > maxChars) { keep.Add(l.Substring(0, maxChars) + "…"); changed = true; }
+                else keep.Add(l);
+            }
+            if (keep.Count > maxLines)
+            {
+                int rest = keep.Count - (maxLines - 1);
+                keep = keep.GetRange(0, maxLines - 1);
+                keep.Add("…ほか " + rest + "行");
+                changed = true;
+            }
+            return changed ? string.Join("\n", keep.ToArray()) : text;
         }
 
         public static void OpenFolder(string path)

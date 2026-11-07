@@ -67,7 +67,7 @@ namespace AutoCopy
             Application.ThreadException += delegate(object s, ThreadExceptionEventArgs e)
             {
                 Logger.Error(null, "画面の処理でエラー: " + e.Exception.Message);
-                MessageBox.Show("エラーが発生しました。\n" + e.Exception.Message, "自動コピー", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(Ui.ClipLines("エラーが発生しました。\n" + e.Exception.Message, 20, 120), "自動コピー", MessageBoxButtons.OK, MessageBoxIcon.Error);
             };
             AppDomain.CurrentDomain.UnhandledException += delegate(object s, UnhandledExceptionEventArgs e)
             {

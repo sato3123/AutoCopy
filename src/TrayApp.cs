@@ -155,8 +155,9 @@ namespace AutoCopy
                 };
                 attentionForm.Snoozed += delegate { nextRemind = DateTime.Now.AddHours(1); };
             }
-            attentionForm.SetItems(items);
+            // 先に「自動で閉じるまで」の行を出してから項目を入れて置く（置いた後で高さが変わって下が隠れないように）
             attentionForm.SetAutoClose(AppCore.Settings.AttentionPopup && AppCore.Settings.AttentionAutoClose ? AppCore.Settings.AttentionCloseSeconds : 0);
+            attentionForm.SetItems(items);
             if (!attentionForm.Visible) attentionForm.Show();
             System.Media.SystemSounds.Exclamation.Play();
             // メイン画面を開いていれば、タスクバーのボタンも点滅させる

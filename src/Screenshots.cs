@@ -104,6 +104,28 @@ namespace AutoCopy
                 af.SetAutoClose(60);
                 return af;
             }, delegate(Form f) { ((AttentionForm)f).PlaceBottomRight(); });
+            // 置いた後で高さが変わっても（自動で閉じるまでの秒数の行が後から出る・項目が増える）、下の端が画面（タスクバーの上）に収まるか
+            Capture("33b_確認が必要です（置いた後で高さが変わる）", delegate()
+            {
+                AttentionForm af = new AttentionForm();
+                af.SetItems(AppCore.AttentionItems());
+                return af;
+            }, delegate(Form f)
+            {
+                AttentionForm af = (AttentionForm)f;
+                af.SetAutoClose(0);
+                af.PlaceBottomRight();
+                Pump(300);
+                af.SetAutoClose(60);
+                List<AppCore.AttentionItem> more = AppCore.AttentionItems();
+                for (int i = 0; i < 5; i++) { AppCore.AttentionItem x = new AppCore.AttentionItem(); x.Text = "追加のお知らせ " + (i + 1) + "：上書きの確認が必要です"; more.Add(x); }
+                af.SetItems(more);
+                Pump(300);
+                List<string> where = new List<string>();
+                Rectangle wa = Ui.WorkArea;
+                if (!wa.Contains(f.Bounds)) where.Add("画面（作業領域 " + wa + "）からはみ出す：" + f.Bounds + "（下の端 " + f.Bottom + "／作業領域の下 " + wa.Bottom + "）");
+                layout.Add(new KeyValuePair<string, List<string>>("33b_確認が必要です（置いた後で高さが変わる・画面の中か）", where));
+            });
             SaveIcons();
 
             File.WriteAllText(Path.Combine(outDir, "errors.txt"), errors.Count == 0 ? "なし" : string.Join("\r\n\r\n", errors.ToArray()));
@@ -583,6 +605,8 @@ namespace AutoCopy
                 // 表示切れの確認（画像を保存してから。タブを切り替えるため）
                 try
                 {
+                    // スクロールできる画面は、いちばん下までスクロールした見え方も残す（最下部の表示切れを目で確かめるため）
+                    if (LayoutCheck.ScrollAll(f, true) > 0) { Pump(300); Save(f, name + "_下端"); LayoutCheck.ScrollAll(f, false); Pump(200); }
                     layout.Add(new KeyValuePair<string, List<string>>(name, LayoutCheck.Check(f)));
                     if (f.FormBorderStyle == FormBorderStyle.Sizable && !f.MinimumSize.IsEmpty && f.MinimumSize != f.Size)
                     {
