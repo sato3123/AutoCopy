@@ -99,6 +99,15 @@ jobs:
         shell: pwsh
         run: ./tests/integration.ps1 *>&1 | Tee-Object -FilePath integration-console.txt
 
+      - name: Upgrade test (v1.13.0 auto-updates to this version)
+        if: always()
+        shell: pwsh
+        run: |
+          ./tests/upgrade-from-1.13.ps1 *>&1 | Tee-Object -FilePath upgrade-console.txt
+          $code = $LASTEXITCODE
+          if (Test-Path upgrade-results.md) { Get-Content upgrade-results.md | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY }
+          exit $code
+
       - name: Screenshots of all screens
         if: always()
         shell: pwsh
@@ -171,7 +180,7 @@ jobs:
         run: |
           $dir = "$env:RUNNER_TEMP\results"
           New-Item -ItemType Directory -Force "$dir\${{ matrix.os }}" | Out-Null
-          foreach ($f in 'build-console.txt','test-results.md','test-console.txt','integration-results.md','integration-console.txt','sign-console.txt') { if (Test-Path $f) { Copy-Item $f "$dir\${{ matrix.os }}\" } }
+          foreach ($f in 'build-console.txt','test-results.md','test-console.txt','integration-results.md','integration-console.txt','upgrade-results.md','upgrade-console.txt','sign-console.txt') { if (Test-Path $f) { Copy-Item $f "$dir\${{ matrix.os }}\" } }
           foreach ($x in 'screenshots', 'screenshots-125', 'screenshots-15', 'screenshots-small') { if (Test-Path $x) { Copy-Item -Recurse $x "$dir\${{ matrix.os }}\$x" } }
           if (Test-Path dist) { Copy-Item -Recurse dist "$dir\${{ matrix.os }}\dist" }
           git config --global user.name "ci"
