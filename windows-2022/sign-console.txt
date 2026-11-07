@@ -1,0 +1,50 @@
+Done Adding Additional Store
+Done Adding Additional Store
+SHA256 88AD74A457AC7AA943FE2041B57E102CF8BD0CFD1F3E51AC8E48EB84B48C5375  dist\AutoCopy.exe
+
+
+Verifying: D:\a\_temp\signcheck\dist\AutoCopy.exe
+
+
+Signature Index: 0 (Primary Signature)
+Hash of file (sha1): 93D0C2548AF3CB59A70B154D5EB0FD1883021740
+
+Signing Certificate Chain:
+    Issued to: signing check
+
+    Issued by: signing check
+
+    Expires:   Sun Nov 07 06:13:19 2027
+
+    SHA1 hash: 4D1AB385460EA4F17C78CD6E9E8D6E9675CC5016
+
+
+File is not timestamped.
+
+
+Signature Index: 1
+Hash of file (sha256): E01F08FE8018CEE08AF37FDCD5E432242475BF1CA2D62E8B4471175657C44801
+
+Signing Certificate Chain:
+    Issued to: signing check
+
+    Issued by: signing check
+
+    Expires:   Sun Nov 07 06:13:19 2027
+
+    SHA1 hash: 4D1AB385460EA4F17C78CD6E9E8D6E9675CC5016
+
+
+File is not timestamped.
+
+
+Successfully verified: D:\a\_temp\signcheck\dist\AutoCopy.exe
+
+
+Number of signatures successfully Verified: 2
+
+Number of warnings: 0
+
+Number of errors: 0
+
+
