@@ -48,6 +48,7 @@ namespace AutoCopy.Tests
             Add("T120", "エラーのお知らせに「次にすること」を付ける（ネットワーク・容量・権限・使用中・ID/パスワード）", ErrorAdvice);
             Add("T121", "フォルダの重複ファイル探し：残す候補の理由（パスが短い・古い・名前の順）", KeepReason);
             Add("T122", "新しいジョブの保存後の案内：既定は「あとで（無効のまま）」・有効にするには選ぶ必要がある", EnableJobChoice);
+            Add("T123", "右クリック「エクスプローラーで保存先を開く」：開く場所の決め方（ファイル → コピー元 → 近いフォルダ）と、一覧への付け方", OpenLocation);
             Add("T112", "終了時の停止待ちは上限まで（止まらない処理があっても終了できる）", StopTimeout);
         }
 
@@ -647,6 +648,64 @@ namespace AutoCopy.Tests
                 True(f.CancelButton != null && ((System.Windows.Forms.Button)f.CancelButton).Text.Contains("あとで"), "Esc は「あとで」");
             }
             True(!j.Enabled, "案内を出しただけでは有効にしない");
+        }
+
+        private static void OpenLocation()
+        {
+            Box b = new Box("T123");
+            b.W(@"営業\見積.xlsx", "x");
+            b.Apply();
+            string inSrc = Path.Combine(b.Src, @"営業\見積.xlsx");
+            bool exact;
+            Eq(inSrc, Ui.LocateInExplorer(new string[] { inSrc }, out exact), "あるファイル");
+            True(exact, "ファイルを選んだ状態で開く");
+            string gone = Path.Combine(b.Dst, @"営業\見積.xlsx");
+            Eq(inSrc, Ui.LocateInExplorer(new string[] { gone, inSrc }, out exact), "1つ目がなければ次の候補");
+            True(exact, "次の候補も選んだ状態");
+            string deep = Path.Combine(b.Src, @"営業\消えた\さらに\a.txt");
+            Eq(Path.Combine(b.Src, "営業"), Ui.LocateInExplorer(new string[] { deep }, out exact), "消えていたら残っているいちばん近いフォルダ");
+            True(!exact, "フォルダを開くだけ");
+            Eq(Path.Combine(b.Src, "営業"), Ui.LocateInExplorer(new string[] { Path.Combine(b.Src, "営業") + "\\" }, out exact), "フォルダ（末尾の \\ 付き）");
+            True(exact, "フォルダも選んだ状態");
+            Eq(inSrc, Ui.LocateInExplorer(new string[] { @"\\?\" + inSrc }, out exact), "長いパスの印付きでも普通のパスで開く");
+            Eq(null, Ui.LocateInExplorer(null, out exact), "候補なし");
+            Eq(null, Ui.LocateInExplorer(new string[] { "", null }, out exact), "空の候補");
+            Eq(null, Ui.LocateInExplorer(new string[] { @"Q:\ないドライブ\a.txt" }, out exact), "どこも残っていない");
+            True(File.Exists(inSrc), "開く場所を調べてもファイルは変えない");
+
+            // コピー先の整理の一覧：コピー先のパス → （大きいファイルの重複は）コピー元
+            JobConfig j = b.Job;
+            System.Windows.Forms.ListViewItem it = new System.Windows.Forms.ListViewItem("削除");
+            DupEntry e = new DupEntry(); e.Rel = @"営業\見積 - コピー.xlsx"; it.Tag = e;
+            string[] p = DupForm.DupPaths(j, it);
+            Eq(1, p.Length, "重複チェックの行"); Eq(Path.Combine(CopyEngine.ResolvedDest(j, AppCore.Settings), e.Rel), p[0], "コピー先のパス");
+            DedupPendingItem dp = new DedupPendingItem(); dp.Rel = @"営業\見積.xlsx"; dp.Target = "x"; it.Tag = dp;
+            p = DupForm.DupPaths(j, it);
+            Eq(2, p.Length, "大きいファイルの重複の行");
+            Eq(Path.Combine(CopyEngine.ResolvedSource(j, AppCore.Settings), dp.Rel), p[1], "コピー先になければコピー元");
+            System.Windows.Forms.ListViewItem first = new System.Windows.Forms.ListViewItem("1つ目"); first.SubItems.Add(@"営業\元.xlsx"); first.Tag = "first";
+            True(DupForm.DupPaths(j, first)[0].EndsWith(@"営業\元.xlsx"), "1つ目の行");
+            Eq(null, DupForm.DupPaths(null, it), "ジョブなし");
+            it.Tag = null; Eq(null, DupForm.DupPaths(j, it), "見出しなどの行");
+
+            // 一覧に付ける：既にある右クリックの項目は残し、区切りの後に足す
+            System.Windows.Forms.ListView lv = new System.Windows.Forms.ListView();
+            Ui.AddLocationMenu(lv, delegate(System.Windows.Forms.ListViewItem x) { return null; });
+            True(lv.ContextMenuStrip != null && lv.ContextMenuStrip.Items[0].Text == Ui.LocationMenuText, "右クリックの項目");
+            Eq(2, lv.ContextMenuStrip.Items.Count, "開く・パスをコピー");
+            System.Windows.Forms.ListView lv2 = new System.Windows.Forms.ListView();
+            lv2.ContextMenuStrip = new System.Windows.Forms.ContextMenuStrip(); lv2.ContextMenuStrip.Items.Add("前からある項目");
+            Ui.AddLocationMenu(lv2, delegate(System.Windows.Forms.ListViewItem x) { return null; });
+            Eq(4, lv2.ContextMenuStrip.Items.Count, "前からある項目＋区切り＋2つ");
+            Eq("前からある項目", lv2.ContextMenuStrip.Items[0].Text, "前からある項目は残す");
+
+            // 各画面の一覧に付いている（重複・削除の候補を出す画面）
+            foreach (string f in new string[] { "Dialogs.cs", "FolderDupForm.cs" })
+            {
+                string s = File.ReadAllText(Path.Combine(FindRepoFile("src"), f), Encoding.UTF8);
+                int n = System.Text.RegularExpressions.Regex.Matches(s, "Ui\\.AddLocationMenu\\(").Count;
+                True(n >= (f == "Dialogs.cs" ? 4 : 1), f + " の一覧に付いている（" + n + "か所）");
+            }
         }
 
         private static void MessageFits()

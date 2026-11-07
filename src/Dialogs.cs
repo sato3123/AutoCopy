@@ -235,6 +235,11 @@ namespace AutoCopy
                 if (lv.Items.Count >= 5000) break;
             }
             lv.EndUpdate();
+            // 右クリック：削除されるファイル（コピー先にあるもの）の保存先を開く
+            Ui.AddLocationMenu(lv, delegate(ListViewItem x)
+            {
+                return new string[] { PathUtil.Combine(CopyEngine.ResolvedDest(job, AppCore.Settings), x.Text) };
+            });
 
             Button del = Ui.B("削除する", delegate
             {
@@ -273,6 +278,11 @@ namespace AutoCopy
             h.Padding = new Padding(8);
             h.AutoSize = false;
             h.Height = Ui.S(34);
+            Ui.AddLocationMenu(lv, delegate(ListViewItem x)
+            {
+                TrashStore.Batch b = x.Tag as TrashStore.Batch;
+                return b == null ? null : new string[] { b.Path };
+            });
             Controls.Add(lv);
             Controls.Add(h);
             Controls.Add(Ui.WithHelp(Ui.Footer(Ui.B("閉じる", delegate { Close(); }), Btn.Gap(), Btn.MakeCaution(Ui.B("選んだものを元に戻す", delegate { Restore(); })), Btn.Gap(),
@@ -340,6 +350,19 @@ namespace AutoCopy
         private bool totalPending;
         /// <summary>画面を開くだけのボタン（取り消しにくい操作ではない）</summary>
         private static Button SafeBtn(Button b) { b.Tag = "safe"; return b; }
+
+        /// <summary>一覧の行の保存先の候補（コピー先にあるもの → コピー元）</summary>
+        public static string[] DupPaths(JobConfig job, ListViewItem x)
+        {
+            if (job == null || x == null) return null;
+            string dst = CopyEngine.ResolvedDest(job, AppCore.Settings), src = CopyEngine.ResolvedSource(job, AppCore.Settings);
+            DupEntry e = x.Tag as DupEntry;
+            if (e != null) return new string[] { PathUtil.Combine(dst, e.Rel) };
+            DedupPendingItem p = x.Tag as DedupPendingItem;
+            string rel = p != null ? p.Rel : (x.Tag as string) == "first" && x.SubItems.Count > 1 ? x.SubItems[1].Text : null;
+            if (string.IsNullOrEmpty(rel)) return null;
+            return new string[] { PathUtil.Combine(dst, rel), PathUtil.Combine(src, rel) };
+        }
         /// <summary>重複チェックの一覧に一度に出す行数の上限</summary>
         public const int MaxRows = 5000;
 
@@ -361,6 +384,8 @@ namespace AutoCopy
             lv.CheckBoxes = true;
             lv.Dock = DockStyle.Fill;
             lv.ItemCheck += OnItemCheck;
+            // 右クリック：重複・削除候補の保存先（コピー先。なければコピー元）をエクスプローラーで開く
+            Ui.AddLocationMenu(lv, delegate(ListViewItem x) { return DupPaths(currentJob, x); });
             // 合計の計算は、チェックが続けて変わったときもまとめて1回にする（件数が多くても固まらない）
             lv.ItemChecked += delegate
             {
@@ -958,6 +983,15 @@ namespace AutoCopy
             lv = Ui.List("ファイル|330", "ジョブ|140", "どこで削除されたか → どうなるか|280", "サイズ|80", "更新日時|130", "見つけた日時|130");
             lv.CheckBoxes = true;
             lv.Dock = DockStyle.Fill;
+            // 右クリック：これから削除するファイル（残っている側）の保存先を開く
+            Ui.AddLocationMenu(lv, delegate(ListViewItem x)
+            {
+                Row r = x.Tag as Row;
+                if (r == null) return null;
+                string local = PathUtil.Combine(CopyEngine.ResolvedSource(r.Job, AppCore.Settings), r.Item.Rel);
+                string shared = PathUtil.Combine(CopyEngine.ResolvedDest(r.Job, AppCore.Settings), r.Item.Rel);
+                return r.Item.Side == SyncDeleteItem.SideLocal ? new string[] { local, shared } : new string[] { shared, local };
+            });
             Panel bar = Ui.CheckAllBar(lv, "すべてにチェック／すべて外す", null, Ui.B("条件で選ぶ…", delegate { SelectByCondition(); }));
             Button del = Btn.MakeDanger(Ui.B("チェックしたものを削除する…", delegate { Apply(true); }));
             Controls.Add(lv);

@@ -519,6 +519,101 @@ namespace AutoCopy
             return changed ? string.Join("\n", keep.ToArray()) : text;
         }
 
+        /// <summary>
+        /// エクスプローラーで開く場所を決める（画面を使わないのでテストできる）。
+        /// 候補を順に見て、あるファイル・フォルダならそれ（exact = true：選んだ状態で開く）。
+        /// どれもなければ、1つ目の候補から上へたどって残っているいちばん近いフォルダ（exact = false）。何もなければ null。
+        /// </summary>
+        public static string LocateInExplorer(string[] candidates, out bool exact)
+        {
+            exact = false;
+            if (candidates == null) return null;
+            foreach (string c in candidates)
+            {
+                if (string.IsNullOrEmpty(c)) continue;
+                string p = PathUtil.Plain(c).TrimEnd('\\');
+                if (p.Length == 2 && p[1] == ':') p += "\\";   // 「C:」はドライブのいちばん上
+                try { string l = PathUtil.Long(p); if (File.Exists(l) || Directory.Exists(l)) { exact = true; return p; } }
+                catch (Exception) { }
+            }
+            foreach (string c in candidates)
+            {
+                if (string.IsNullOrEmpty(c)) continue;
+                try
+                {
+                    string d = Path.GetDirectoryName(PathUtil.Plain(c).TrimEnd('\\'));
+                    while (!string.IsNullOrEmpty(d))
+                    {
+                        if (Directory.Exists(PathUtil.Long(d))) return d;
+                        d = Path.GetDirectoryName(d);
+                    }
+                }
+                catch (Exception) { }
+            }
+            return null;
+        }
+
+        /// <summary>エクスプローラーで保存先を開く（ファイルがあれば選んだ状態で。消えていれば近いフォルダを開いて知らせる）</summary>
+        public static void ShowInExplorer(IWin32Window owner, string[] candidates)
+        {
+            bool exact;
+            string p = LocateInExplorer(candidates, out exact);
+            if (p == null)
+            {
+                string first = candidates != null && candidates.Length > 0 ? PathUtil.Plain(candidates[0]) : "";
+                Info(owner, "保存先が見つかりません（ネットワークが切れているか、すでに削除・移動された可能性があります）。\n" + first);
+                return;
+            }
+            try
+            {
+                if (exact) Process.Start("explorer.exe", "/select,\"" + p + "\"");
+                else
+                {
+                    Process.Start("explorer.exe", "\"" + p + "\"");
+                    Info(owner, "ファイルが見つからないため（削除・移動された可能性があります）、残っているいちばん近いフォルダを開きました。\n" + p);
+                }
+            }
+            catch (Exception ex) { Error(owner, ex.Message); }
+        }
+
+        public const string LocationMenuText = "エクスプローラーで保存先を開く";
+
+        /// <summary>
+        /// 一覧の右クリックに「エクスプローラーで保存先を開く」「場所（パス）をコピー」を付ける。
+        /// paths は行ごとの候補（先にあるものから使う）。開くだけで、ファイルは変えない。
+        /// </summary>
+        public static void AddLocationMenu(ListView lv, Func<ListViewItem, string[]> paths)
+        {
+            ContextMenuStrip m = lv.ContextMenuStrip;
+            if (m == null) { m = new ContextMenuStrip(); m.Font = Base; lv.ContextMenuStrip = m; }
+            else if (m.Items.Count > 0) m.Items.Add(new ToolStripSeparator());
+            ToolStripMenuItem open = new ToolStripMenuItem(LocationMenuText);
+            ToolStripMenuItem copy = new ToolStripMenuItem("場所（パス）をコピー");
+            m.Items.Add(open);
+            m.Items.Add(copy);
+            string[] target = null;
+            m.Opening += delegate(object s, System.ComponentModel.CancelEventArgs e)
+            {
+                // 右クリックした行（キーボードのメニューキーのときは選んでいる行）
+                Point pt = lv.PointToClient(Cursor.Position);
+                ListViewItem it = lv.GetItemAt(pt.X, pt.Y);
+                if (it == null && lv.SelectedItems.Count > 0) it = lv.SelectedItems[0];
+                target = null;
+                try { if (it != null) target = paths(it); } catch (Exception) { target = null; }
+                bool ok = target != null && target.Length > 0 && !string.IsNullOrEmpty(target[0]);
+                open.Enabled = copy.Enabled = ok;
+                if (!ok && m.Items.Count == 2) e.Cancel = true;   // ほかに項目がなければ出さない
+            };
+            open.Click += delegate { ShowInExplorer(lv.FindForm(), target); };
+            copy.Click += delegate
+            {
+                if (target == null) return;
+                bool exact;
+                string p = LocateInExplorer(target, out exact);
+                try { Clipboard.SetText(exact ? p : PathUtil.Plain(target[0])); } catch (Exception) { }
+            };
+        }
+
         public static void OpenFolder(string path)
         {
             try

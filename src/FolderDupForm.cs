@@ -97,6 +97,12 @@ namespace AutoCopy
                 try { BeginInvoke(new Action(delegate() { totalPending = false; UpdateTotal(); })); } catch (Exception) { totalPending = false; }
             };
             lv.DoubleClick += delegate { OpenSelected(); };
+            // 右クリック：重複ファイルの保存先をエクスプローラーで開く（ダブルクリックと同じ）
+            Ui.AddLocationMenu(lv, delegate(ListViewItem x)
+            {
+                Row r = x.Tag as Row;
+                return r == null || result == null ? null : new string[] { PathUtil.Combine(result.Root, r.Rel) };
+            });
             Panel bar = Ui.CheckAllBar(lv, "各まとまりで1つ残して、ほかにすべてチェック／すべて外す", delegate(bool on) { CheckAllButFirst(on); },
                 Ui.B("条件で選ぶ…", delegate { SelectByCondition(); }));
 
@@ -374,8 +380,7 @@ namespace AutoCopy
             if (result == null || lv.SelectedItems.Count == 0) return;
             Row r = lv.SelectedItems[0].Tag as Row;
             if (r == null) return;
-            try { System.Diagnostics.Process.Start("explorer.exe", "/select,\"" + PathUtil.Combine(result.Root, r.Rel) + "\""); }
-            catch (Exception ex) { Ui.Error(this, ex.Message); }
+            Ui.ShowInExplorer(this, new string[] { PathUtil.Combine(result.Root, r.Rel) });   // 消えていたら近いフォルダを開いて知らせる
         }
 
         private void Export()
