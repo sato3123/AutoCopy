@@ -613,21 +613,21 @@ namespace AutoCopy.Tests
             FolderDupResult r = FolderDup.Find(root, true, 0, DupBasis.Content, CancellationToken.None, null);
             Eq(1, r.Groups.Count, "1まとまり");
             Eq("a.txt", r.Groups[0].Files[0], "パスが短いものを残す（古くても）");
-            Eq("場所（パス）がいちばん短い", r.Groups[0].KeepReason(), "理由：パス");
+            Eq("パスが最短", r.Groups[0].KeepReason(), "理由：パス");
 
             string root2 = Path.Combine(b.Root, "free2");
             root = root2;
             put(@"x\b1.txt", t); put(@"x\b2.txt", t.AddHours(-2));
             r = FolderDup.Find(root2, true, 0, DupBasis.Content, CancellationToken.None, null);
             Eq(@"x\b2.txt", r.Groups[0].Files[0], "同じ長さなら古いものを残す");
-            Eq("いちばん古い（最初のもの）", r.Groups[0].KeepReason(), "理由：古い");
+            Eq("いちばん古い", r.Groups[0].KeepReason(), "理由：古い");
 
             string root3 = Path.Combine(b.Root, "free3");
             root = root3;
             put(@"y\c2.txt", t); put(@"y\c1.txt", t);
             r = FolderDup.Find(root3, true, 0, DupBasis.Content, CancellationToken.None, null);
             Eq(@"y\c1.txt", r.Groups[0].Files[0], "同じ長さ・同じ日時なら名前の順");
-            Eq("名前の順で先", r.Groups[0].KeepReason(), "理由：名前");
+            Eq("名前の順", r.Groups[0].KeepReason(), "理由：名前");
             FolderDupGroup one = new FolderDupGroup(); one.Files.Add("z.txt"); one.Mtimes.Add(0);
             Eq("1件だけ", one.KeepReason(), "1件のとき");
         }

@@ -782,9 +782,9 @@ namespace AutoCopy
         public string KeepReason()
         {
             if (Files.Count < 2) return "1件だけ";
-            if (Files[0].Length < Files[1].Length) return "場所（パス）がいちばん短い";
-            if (Mtimes.Count >= 2 && Mtimes[0] < Mtimes[1]) return "いちばん古い（最初のもの）";
-            return "名前の順で先";
+            if (Files[0].Length < Files[1].Length) return "パスが最短";
+            if (Mtimes.Count >= 2 && Mtimes[0] < Mtimes[1]) return "いちばん古い";
+            return "名前の順";
         }
 
         /// <summary>先頭を残してほかを移したときに空く容量</summary>

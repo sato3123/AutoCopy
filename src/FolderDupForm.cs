@@ -86,7 +86,7 @@ namespace AutoCopy
             top.Padding = new Padding(10, 8, 10, 4);
             Resize += delegate { foreach (Control c in top.Controls) if (c is FlowLayoutPanel) c.MaximumSize = new Size(Math.Max(Ui.S(300), ClientSize.Width - Ui.S(30)), 0); };
 
-            lv = Ui.List("扱い|200", "ファイル（フォルダの中の場所）|480", "サイズ|90", "更新日時|130");
+            lv = Ui.List("扱い|170", "ファイル（フォルダの中の場所）|480", "サイズ|90", "更新日時|130");
             lv.CheckBoxes = true;
             lv.Dock = DockStyle.Fill;
             lv.ItemCheck += OnItemCheck;
