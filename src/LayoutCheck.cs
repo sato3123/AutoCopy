@@ -44,6 +44,7 @@ namespace AutoCopy
                 Application.DoEvents();
             }
             CheckScrollBottoms(f, issues);
+            CheckFooters(f, issues);
             // 重複を除く
             List<string> uniq = new List<string>();
             foreach (string s in issues) if (!uniq.Contains(s)) uniq.Add(s);
@@ -91,6 +92,23 @@ namespace AutoCopy
                     issues.Add(Name(sc) + "：いちばん下までスクロールしても、" + Name(last) + " の下が " + (bottom - view) + "px 欠ける");
                 sc.AutoScrollPosition = new Point(-keep.X, -keep.Y);
                 Application.DoEvents();
+            }
+        }
+
+        /// <summary>下のボタンの帯（右寄せ・下に固定）が2段に折り返していないか（離れたボタンがばらばらに並ぶ）</summary>
+        private static void CheckFooters(Form f, List<string> issues)
+        {
+            foreach (FlowLayoutPanel p in FindAll<FlowLayoutPanel>(f))
+            {
+                if (!IsShown(p) || p.Dock != DockStyle.Bottom || p.FlowDirection != FlowDirection.RightToLeft) continue;
+                int top = int.MinValue; bool wrapped = false;
+                foreach (Control c in p.Controls)
+                {
+                    if (!c.Visible || !(c is Button)) continue;
+                    if (top == int.MinValue) top = c.Top;
+                    else if (Math.Abs(c.Top - top) > Ui.S(8)) wrapped = true;
+                }
+                if (wrapped) issues.Add("下のボタンの帯が2段に折り返している（幅 " + p.Width + "px）");
             }
         }
 

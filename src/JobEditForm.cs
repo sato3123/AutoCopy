@@ -468,8 +468,8 @@ namespace AutoCopy
             tInc = Ui.T("", 460);
             b.Controls.Add(Ui.Section("例外（必ずコピー）", Ui.Row(tInc, Ui.Hint("例：会議録画\\*.mp4"))));
 
-            b.Controls.Add(Ui.Row(Ui.B("テスト（コピーせずに結果を確認）", delegate { RunTest(); }),
-                Ui.Hint("除外されるファイルは、結果の画面の「除外」で確認できます。")));
+            // 「テスト」のボタンは下の帯の1つだけにする（同じボタンが2つあると迷うため）
+            b.Controls.Add(Ui.Hint("除外されるファイルは、下の「テスト（コピーせずに結果を確認）」で開く結果の画面の「除外」で確認できます。"));
             p.Controls.Add(b);
             return p;
         }
