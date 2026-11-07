@@ -39,6 +39,7 @@ namespace AutoCopy.Tests
             Add("T110", "ログ送信：途中で終了しても二重・途中までにしない・保管先のファイルを書き直さない", LogResume);
             Add("T111", "コピー先一覧：上限を超えたらファイルごとに確かめる", InventoryLimit);
             Add("T113", "長いメッセージは画面の高さに収まる行数までにする（下のボタンが画面の外に出ない）", MessageFits);
+            Add("T114", "表示切れの自動確認が、下のボタンの折り返し・スクロールの下端の欠けを見つける", LayoutCheckDetects);
             Add("T112", "終了時の停止待ちは上限まで（止まらない処理があっても終了できる）", StopTimeout);
         }
 
@@ -443,6 +444,36 @@ namespace AutoCopy.Tests
             // 1行あたりの高さ × 行数 ＋ 題名・ボタンの分 が画面に収まる
             int lineH = System.Windows.Forms.TextRenderer.MeasureText("あ", System.Drawing.SystemFonts.MessageBoxFont).Height + 2;
             True(normal * lineH + Ui.S(140) <= 728, "1366×768 の画面に収まる: " + normal + "行×" + lineH + "px");
+        }
+
+        private static void LayoutCheckDetects()
+        {
+            // 狭い画面に幅の広いボタンを並べる → 下のボタンの帯が2段に折り返す
+            System.Windows.Forms.Form f = new System.Windows.Forms.Form();
+            Ui.SetupDialog(f, "確認用", 320, 200);
+            f.StartPosition = System.Windows.Forms.FormStartPosition.Manual;
+            f.Location = new System.Drawing.Point(10, 10);
+            System.Windows.Forms.FlowLayoutPanel body = Ui.Body();
+            for (int i = 0; i < 30; i++) body.Controls.Add(Ui.L("行 " + i));
+            f.Controls.Add(body);
+            f.Controls.Add(Ui.Footer(Ui.B("とても長い名前のボタン その1", delegate { }), Ui.B("とても長い名前のボタン その2", delegate { }), Ui.B("とても長い名前のボタン その3", delegate { })));
+            try
+            {
+                f.Show();
+                System.Windows.Forms.Application.DoEvents();
+                List<string> issues = LayoutCheck.Check(f);
+                True(issues.Exists(delegate(string x) { return x.Contains("2段に折り返"); }), "折り返しを見つける: " + string.Join(" / ", issues.ToArray()));
+                // スクロールの下端：最後の空白があるので欠けない
+                True(!issues.Exists(delegate(string x) { return x.Contains("いちばん下までスクロールしても"); }), "空白があれば最後の行は欠けない");
+                // 最後の空白を外すと、下の余白の分だけ欠ける（確認が働くこと）
+                foreach (System.Windows.Forms.Control c in body.Controls)
+                    if (Equals(c.Tag, Ui.ScrollSpacerTag)) { body.Controls.Remove(c); break; }
+                body.PerformLayout();
+                System.Windows.Forms.Application.DoEvents();
+                List<string> issues2 = LayoutCheck.Check(f);
+                True(issues2.Exists(delegate(string x) { return x.Contains("いちばん下までスクロールしても"); }), "空白がないと欠けを見つける: " + string.Join(" / ", issues2.ToArray()));
+            }
+            finally { f.Close(); f.Dispose(); }
         }
 
         private static void StopTimeout()
