@@ -16,7 +16,7 @@ namespace AutoCopy
     {
         public const int MaxRows = 5000;
         private readonly TextBox tFolder;
-        private readonly CheckBox cSub;
+        private readonly CheckBox cSub, cbContent, cbName, cbMtime, cbSize;
         private readonly NumericUpDown nMin;
         private readonly ComboBox cbUnit;
         private readonly ListView lv;
@@ -53,6 +53,20 @@ namespace AutoCopy
                 jm.Show(fromJob, new Point(0, fromJob.Height));
             };
             cSub = Ui.C("サブフォルダも含める", true);
+            // 同じとみなす基準（組み合わせられる）
+            cbContent = Ui.C("中身", true);
+            cbName = Ui.C("ファイル名", false);
+            cbMtime = Ui.C("更新日時", false);
+            cbSize = Ui.C("大きさ", false);
+            EventHandler basisChanged = delegate
+            {
+                cbSize.Enabled = !cbContent.Checked;   // 中身が同じなら大きさも同じ
+                if (cbContent.Checked && !cbSize.Checked) cbSize.Checked = false;
+            };
+            cbContent.CheckedChanged += basisChanged;
+            basisChanged(null, EventArgs.Empty);
+            new ToolTip().SetToolTip(cbMtime, "2秒以内の差は同じとみなします（NAS・USBメモリの丸めのため）");
+            new ToolTip().SetToolTip(cbName, "フォルダは問いません。大文字・小文字は区別しません");
             nMin = Ui.N(0, 1000000, 0, 80);
             cbUnit = Ui.Combo(60, "KB", "MB");
             Button search = Ui.B("検索", delegate { Search(); });
@@ -65,9 +79,10 @@ namespace AutoCopy
             Ui.FitToForm(protectNote, 980);
             FlowLayoutPanel top = Ui.Column(
                 Ui.Heading("フォルダ内の重複ファイルを探す"),
-                Ui.Hint("コピーとは関係なく、指定したフォルダの中で中身が同じファイルを探します。探すだけでは、ファイルは何も変わりません。"),
+                Ui.Hint("コピーとは関係なく、指定したフォルダの中で同じファイルを探します。探すだけでは、ファイルは何も変わりません。"),
                 Ui.WrapRow(Ui.L("フォルダ"), tFolder, browse, fromJob),
-                Ui.WrapRow(cSub, Ui.L("大きさ"), nMin, cbUnit, Ui.L("以上（0 = すべて）"), search),
+                Ui.WrapRow(Ui.L("同じとみなす基準"), cbContent, cbName, cbMtime, cbSize, Ui.Hint("（選んだものがすべて同じなら重複。中身を選ばないときはファイルを読まないので速い）")),
+                Ui.WrapRow(cSub, Ui.L("小さいファイルは探さない："), nMin, cbUnit, Ui.L("より小さいファイルを除く（0 = すべて探す）"), search),
                 summary, protectNote);
             top.Dock = DockStyle.Top;
             top.Padding = new Padding(10, 8, 10, 4);
@@ -112,6 +127,30 @@ namespace AutoCopy
 
         private long MinBytes { get { return (long)nMin.Value * (cbUnit.SelectedIndex == 1 ? 1024L * 1024 : 1024L); } }
 
+        /// <summary>画面で選んだ「同じとみなす基準」</summary>
+        public int Basis
+        {
+            get
+            {
+                int b = 0;
+                if (cbContent.Checked) b |= DupBasis.Content;
+                if (cbName.Checked) b |= DupBasis.Name;
+                if (cbMtime.Checked) b |= DupBasis.Mtime;
+                if (cbSize.Checked && cbSize.Enabled) b |= DupBasis.Size;
+                return b;
+            }
+            set
+            {
+                cbContent.Checked = DupBasis.Has(value, DupBasis.Content);
+                cbName.Checked = DupBasis.Has(value, DupBasis.Name);
+                cbMtime.Checked = DupBasis.Has(value, DupBasis.Mtime);
+                cbSize.Checked = DupBasis.Has(value, DupBasis.Size);
+            }
+        }
+
+        /// <summary>小さいファイルを除く大きさ（画面の確認用にも使う）</summary>
+        public void SetMin(int value, bool mb) { nMin.Value = Math.Max(nMin.Minimum, Math.Min(nMin.Maximum, value)); cbUnit.SelectedIndex = mb ? 1 : 0; }
+
         public void Search()
         {
             string root = tFolder.Text.Trim();
@@ -119,20 +158,22 @@ namespace AutoCopy
             root = NetAccess.ToUncIfMapped(root);
             bool sub = cSub.Checked;
             long min = MinBytes;
+            int basis = Basis;
+            if (!DupBasis.Valid(basis)) { Ui.Info(this, "同じとみなす基準（中身・ファイル名・更新日時・大きさ）を1つ以上選んでください。"); return; }
             bool stopped;
             FolderDupResult r;
             try
             {
-                r = Ui.BusyCancel<FolderDupResult>(this, "「" + root + "」の中で、中身が同じファイルを探しています（読むだけです）…", delegate(System.Threading.CancellationToken ct, BusyProgress bp)
+                r = Ui.BusyCancel<FolderDupResult>(this, "「" + root + "」の中で、" + DupBasis.Describe(basis) + "が同じファイルを探しています（読むだけです）…", delegate(System.Threading.CancellationToken ct, BusyProgress bp)
                 {
                     try { NetAccess.Ensure(root, 1, 5, ct, null); } catch (Exception) { }
-                    return FolderDup.Find(root, sub, min, ct, delegate(string t) { bp.Text = t; });
+                    return FolderDup.Find(root, sub, min, basis, ct, delegate(string t) { bp.Text = t; });
                 }, out stopped);
             }
             catch (Exception ex) { Ui.Error(this, "探せませんでした：" + ex.Message); return; }
             if (stopped) { summary.Text = "中止しました。"; return; }
             SetResult(r);
-            Logger.Write(null, "DUPCHECK", "フォルダ内の重複検索：" + root + "　調べたファイル " + r.Scanned + "件・重複 " + r.Groups.Count + "まとまり（" + r.WastedFiles + "件・" + Fmt.Size(r.WastedBytes) + "）", r.WastedBytes, -1);
+            Logger.Write(null, "DUPCHECK", "フォルダ内の重複検索：" + root + "　基準 " + DupBasis.Describe(basis) + (min > 0 ? "・" + Fmt.Size(min) + "未満は除く" : "") + "　調べたファイル " + r.Scanned + "件・重複 " + r.Groups.Count + "まとまり（" + r.WastedFiles + "件・" + Fmt.Size(r.WastedBytes) + "）", r.WastedBytes, -1);
         }
 
         /// <summary>結果を表示する（画面の確認用にも使う）</summary>
@@ -140,6 +181,7 @@ namespace AutoCopy
         {
             result = r;
             tFolder.Text = r.Root;
+            Basis = r.Basis;
             bool prot = SafeFs.IsProtected(PathUtil.Combine(r.Root, "__check__"));
             protectNote.Text = prot ? "このフォルダは自動コピーのコピー元（またはその中）のため、探すだけで移すことはできません（元データは変えません）。" : "";
             protectNote.Visible = prot;
@@ -154,14 +196,16 @@ namespace AutoCopy
             {
                 if (buf.Count >= MaxRows) break;
                 shownGroups++;
-                ListViewGroup lg = new ListViewGroup("中身が同じ " + g.Files.Count + "件（1件 " + Fmt.Size(g.Size) + "・1つ残すと " + Fmt.Size(g.Size * (g.Files.Count - 1)) + " 空く）");
+                string what = DupBasis.Describe(r.Basis) + "が同じ ";
+                ListViewGroup lg = new ListViewGroup(what + g.Files.Count + "件（" + (g.SameContent ? "1件 " + Fmt.Size(g.Size) + "・" : "中身は未確認・") + "1つ残すと " + Fmt.Size(g.Wasted()) + " 空く）");
                 lv.Groups.Add(lg);
                 for (int i = 0; i < g.Files.Count; i++)
                 {
                     Row row = new Row(); row.Group = g; row.Rel = g.Files[i]; row.Keep = i == 0;
                     ListViewItem it = new ListViewItem(i == 0 ? "残す候補" : "重複", lg);
                     it.SubItems.Add(g.Files[i]);
-                    it.SubItems.Add(Fmt.Size(g.Size));
+                    it.SubItems.Add(Fmt.Size(g.SizeAt(i)));
+                    it.SubItems[2].Tag = g.SizeAt(i);
                     it.SubItems.Add(Fmt.LocalTime(g.Mtimes[i]));
                     it.SubItems[3].Tag = g.Mtimes[i];
                     it.ForeColor = i == 0 ? Ui.Ok : Ui.Warn;
@@ -172,11 +216,14 @@ namespace AutoCopy
             lv.Items.AddRange(buf.ToArray());
             lv.EndUpdate();
             filling = false;
-            summary.Text = "調べたファイル " + Fmt.Count(r.Scanned) + "件（" + Fmt.Size(r.ScannedBytes) + "）→ 中身が同じもの " + Fmt.Count(r.Groups.Count) + "まとまり。"
+            summary.Text = "調べたファイル " + Fmt.Count(r.Scanned) + "件（" + Fmt.Size(r.ScannedBytes) + "）"
+                + (r.MinBytes > 0 && r.SkippedSmall > 0 ? "うち " + Fmt.Size(r.MinBytes) + " より小さい " + Fmt.Count(r.SkippedSmall) + "件は除く" : "")
+                + "→ " + DupBasis.Describe(r.Basis) + "が同じもの " + Fmt.Count(r.Groups.Count) + "まとまり。"
                 + "1つずつ残すと " + Fmt.Count(r.WastedFiles) + "件・" + Fmt.Size(r.WastedBytes) + " 空きます。"
                 + (shownGroups < r.Groups.Count ? "　※件数が多いため、空く容量の大きい順に " + Fmt.Count(shownGroups) + "まとまりだけ表示しています。" : "")
                 + (r.Errors.Count > 0 ? "　読めなかったもの " + r.Errors.Count + "件。" : "")
-                + (r.Groups.Count == 0 ? "　重複はありませんでした。" : "");
+                + (r.Groups.Count == 0 ? "　重複はありませんでした。" : "")
+                + (r.Groups.Count > 0 && !DupBasis.Has(r.Basis, DupBasis.Content) ? "　※中身は比べていません。移すときは、残すファイルと中身が同じものだけを移します。" : "");
             bMove.Enabled = !prot && r.Groups.Count > 0;
             UpdateTotal();
         }
@@ -204,8 +251,8 @@ namespace AutoCopy
             Row r = it.Tag as Row;
             if (r == null) return null;
             SelectRow s = new SelectRow();
-            s.Path = r.Rel; s.Size = r.Group.Size;
             int k = r.Group.Files.IndexOf(r.Rel);
+            s.Path = r.Rel; s.Size = r.Group.SizeAt(k);
             s.Mtime = k >= 0 ? r.Group.Mtimes[k] : 0;
             s.Tags.Add(r.Keep ? "残す候補" : "重複");
             string ext = System.IO.Path.GetExtension(r.Rel);
@@ -266,7 +313,7 @@ namespace AutoCopy
             if (unchecked0 == 0)
             {
                 e.NewValue = CheckState.Unchecked;
-                Ui.Info(this, "中身が同じファイルは、少なくとも1つ残してください。");
+                Ui.Info(this, "同じとみなしたファイルは、まとまりごとに少なくとも1つ残してください。");
             }
         }
 
@@ -277,7 +324,7 @@ namespace AutoCopy
             {
                 Row r = it.Tag as Row;
                 if (r == null) continue;
-                n++; bytes += r.Group.Size;
+                n++; bytes += r.Group.SizeAt(r.Group.Files.IndexOf(r.Rel));
             }
             total.Text = "移すもの：" + Fmt.Count(n) + "件・" + Fmt.Size(bytes);
         }
@@ -290,7 +337,7 @@ namespace AutoCopy
             foreach (ListViewItem it in lv.CheckedItems)
             {
                 Row r = it.Tag as Row;
-                if (r != null) { rels.Add(r.Rel); bytes += r.Group.Size; }
+                if (r != null) { rels.Add(r.Rel); bytes += r.Group.SizeAt(r.Group.Files.IndexOf(r.Rel)); }
             }
             if (rels.Count == 0) { Ui.Info(this, "移すファイルにチェックを入れてください。"); return; }
             if (!Ui.Confirm(this, rels.Count + "件（" + Fmt.Size(bytes) + "）を、「" + FolderDup.TrashFolder(result.Root) + "\\日時」へ移します。\n消さずに移すだけなので、元に戻せます。よろしいですか？")) return;
@@ -303,11 +350,10 @@ namespace AutoCopy
             foreach (string e in errs) { int k = e.IndexOf('：'); if (k > 0) done.Remove(e.Substring(0, k)); }
             foreach (FolderDupGroup g in result.Groups)
             {
-                for (int i = g.Files.Count - 1; i >= 0; i--) if (done.Contains(g.Files[i])) { g.Files.RemoveAt(i); g.Mtimes.RemoveAt(i); }
+                for (int i = g.Files.Count - 1; i >= 0; i--) if (done.Contains(g.Files[i])) g.RemoveAt(i);
             }
             result.Groups.RemoveAll(delegate(FolderDupGroup g) { return g.Files.Count < 2; });
-            result.WastedBytes = 0; result.WastedFiles = 0;
-            foreach (FolderDupGroup g in result.Groups) { result.WastedBytes += g.Size * (g.Files.Count - 1); result.WastedFiles += g.Files.Count - 1; }
+            result.Recount();
             SetResult(result);
             if (errs.Count > 0) Ui.Error(this, moved + "件を移しました。できなかったものがあります：\n" + string.Join("\n", errs.GetRange(0, Math.Min(20, errs.Count)).ToArray()) + (errs.Count > 20 ? "\nほか " + (errs.Count - 20) + "件" : ""));
             else Ui.Info(this, moved + "件を移しました。");
@@ -331,13 +377,14 @@ namespace AutoCopy
                 d.FileName = "自動コピー_フォルダ内の重複_" + DateTime.Now.ToString("yyyyMMdd_HHmm") + ".csv";
                 if (d.ShowDialog(this) != DialogResult.OK) return;
                 StringBuilder sb = new StringBuilder();
-                sb.AppendLine("まとまり,扱い,ファイル,サイズ(バイト),更新日時");
+                sb.AppendLine("同じとみなす基準：" + DupBasis.Describe(result.Basis) + (result.MinBytes > 0 ? "（" + Fmt.Size(result.MinBytes) + " より小さいファイルは除く）" : ""));
+                sb.AppendLine("まとまり,扱い,ファイル,サイズ(バイト),更新日時,中身");
                 int n = 0;
                 foreach (FolderDupGroup g in result.Groups)
                 {
                     n++;
                     for (int i = 0; i < g.Files.Count; i++)
-                        sb.AppendLine(n + "," + (i == 0 ? "残す候補" : "重複") + "," + Q(PathUtil.Combine(result.Root, g.Files[i])) + "," + g.Size + "," + Fmt.LocalTime(g.Mtimes[i]));
+                        sb.AppendLine(n + "," + (i == 0 ? "残す候補" : "重複") + "," + Q(PathUtil.Combine(result.Root, g.Files[i])) + "," + g.SizeAt(i) + "," + Fmt.LocalTime(g.Mtimes[i]) + "," + (g.SameContent ? "同じ" : "未確認"));
                 }
                 File.WriteAllText(d.FileName, sb.ToString(), new UTF8Encoding(true));
                 Ui.Info(this, "書き出しました：" + d.FileName);

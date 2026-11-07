@@ -400,6 +400,9 @@ namespace AutoCopy
                 for (int i = 0; i < names.Length; i++) Sized(Path.Combine(share, names[i]), sizes[i], 30 + i, seeds[i]);
                 FolderDupResult fr = FolderDup.Find(share, true, 0, CancellationToken.None, null);
                 Capture("44_フォルダ内の重複ファイル検索", delegate() { FolderDupForm f = new FolderDupForm(share); f.SetResult(fr); return f; }, null);
+                // 基準を組み合わせる（ファイル名・更新日時）・小さいファイルを除く
+                FolderDupResult fr2 = FolderDup.Find(share, true, 100 * 1024, DupBasis.Name | DupBasis.Mtime, CancellationToken.None, null);
+                Capture("44b_フォルダ内の重複ファイル検索_名前と日時", delegate() { FolderDupForm f = new FolderDupForm(share); f.SetMin(100, false); f.SetResult(fr2); return f; }, null);
             }
             catch (Exception ex) { errors.Add("フォルダ内の重複ファイル検索: " + ex); }
         }

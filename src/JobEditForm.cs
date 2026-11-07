@@ -22,7 +22,7 @@ namespace AutoCopy
         private CheckBox cAlwaysRename;
         private Label lSyncNote, lDedupNote;
         private RadioButton rDist, rLocal, rAppend, rMirror, rSync, rAsk, rSkip, rOver;
-        private NumericUpDown nSyncCache;
+        private NumericUpDown nSyncCache, nDupMin;
         private NumericUpDown nInterval, nDelay, nTol, nPar, nBw, nMirrorCount, nMirrorPct, nDedup;
         private ComboBox cbUnit;
         private Label lPreview;
@@ -282,7 +282,7 @@ namespace AutoCopy
             cbDupDay.Enabled = dup && (rMonthly.Checked || rYearly.Checked);
             cbDupMonth.Enabled = dup && rYearly.Checked;
             tDupTime.Enabled = dup && !rManual.Checked && !rStartupDup.Checked;
-            cEmpty.Enabled = cSame.Enabled = cOrphan.Enabled = dup;
+            cEmpty.Enabled = cSame.Enabled = cOrphan.Enabled = nDupMin.Enabled = dup;
             cAlwaysRename.Enabled = false;   // 常に探す（変えられない）
             // ネットワークの接続：ネットワークのフォルダがないとき、保存しないときは入力できない
             bool net = cbServer.Items.Count > 0;
@@ -355,7 +355,7 @@ namespace AutoCopy
                 cOlder.Checked = false; UpdateEnabled();
                 expect(!dOlder.Enabled, "日付で除外しないのに日付を変えられる");
                 cDup.Checked = false; UpdateEnabled();
-                expect(!rDaily.Enabled && !tDupTime.Enabled && !cEmpty.Enabled && !cSame.Enabled && !cOrphan.Enabled, "重複チェックをしないのに日時・探すものを変えられる");
+                expect(!rDaily.Enabled && !tDupTime.Enabled && !cEmpty.Enabled && !cSame.Enabled && !cOrphan.Enabled && !nDupMin.Enabled, "重複チェックをしないのに日時・探すものを変えられる");
                 cDup.Checked = true; rManual.Checked = true; UpdateEnabled();
                 expect(!tDupTime.Enabled && !cbWeekday.Enabled && !cbDupDay.Enabled && !cbDupMonth.Enabled, "手動のみなのに時刻・曜日・日・月を変えられる");
                 rStartupDup.Checked = true; UpdateEnabled();
@@ -539,12 +539,14 @@ namespace AutoCopy
             cSame = Ui.C("中身が同じファイル（情報として表示のみ）", true);
             cOrphan = Ui.C("コピー元にないファイル（孤立ファイル）も表示する", false);
             cEmpty = Ui.C("空のフォルダ（コピー元にないもの）", true);
+            nDupMin = Ui.N(0, 10000000, 0, 90);
             b.Controls.Add(Ui.Section("重複チェック",
                 cDup,
                 Ui.Row(Ui.L("実行", 110), Ui.WrapRow(rStartupDup, rDaily, rWeekly, rMonthly, rYearly, rManual)),
                 Ui.Row(Ui.L("", 110), Ui.WrapRow(Ui.L("曜日"), cbWeekday, Ui.L("月"), cbDupMonth, Ui.L("日"), cbDupDay, Ui.L("時刻"), tDupTime)),
                 Ui.Row(Ui.L("", 110), Ui.Wrap("PCが止まっていて予定の日時に実行できなかったときは、その後にアプリが起動したときに実行します。", 520)),
                 Ui.Row(Ui.L("探すもの", 110), Ui.Column(cAlwaysRename = Ui.C("ファイル名・フォルダ名の変更や移動の取りこぼし（常に探します）", true), cEmpty, cSame, cOrphan)),
+                Ui.Row(Ui.L("小さいファイル", 110), Ui.WrapRow(nDupMin, Ui.L("KB より小さいファイルの重複（中身が同じ・古いコピー）は探さない（0 = すべて探す）"))),
                 Ui.Wrap("削除したファイルは「コピー先\\_AutoCopy\\削除済み」に移し、アプリ設定の保存日数が過ぎたら完全に削除します。", 640)));
             p.Controls.Add(b);
             return p;
@@ -682,6 +684,7 @@ namespace AutoCopy
             cbDupMonth.SelectedIndex = Math.Max(0, Math.Min(11, j.DupMonth - 1));
             tDupTime.Text = j.DupTime;
             cSame.Checked = j.DupShowSameContent;
+            nDupMin.Value = Clamp(nDupMin, j.DupMinSizeKB);
             cOrphan.Checked = j.DupShowOrphans;
             cEmpty.Checked = j.DupShowEmptyFolders;
             loading = false;
@@ -765,6 +768,7 @@ namespace AutoCopy
             j.DupMonth = cbDupMonth.SelectedIndex + 1;
             j.DupTime = tDupTime.Text.Trim();
             j.DupShowSameContent = cSame.Checked;
+            j.DupMinSizeKB = (int)nDupMin.Value;
             j.DupShowOrphans = cOrphan.Checked;
             j.DupShowEmptyFolders = cEmpty.Checked;
             return j;

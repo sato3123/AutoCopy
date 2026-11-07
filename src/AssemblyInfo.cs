@@ -15,8 +15,8 @@ using System.Runtime.Versioning;
 [assembly: AssemblyVersion("99.0.0.0")]       // 自動更新のテスト用
 [assembly: AssemblyFileVersion("99.0.0.0")]
 #else
-[assembly: AssemblyVersion("1.16.2.0")]
-[assembly: AssemblyFileVersion("1.16.2.0")]
+[assembly: AssemblyVersion("1.16.3.0")]
+[assembly: AssemblyFileVersion("1.16.3.0")]
 #endif
 [assembly: ComVisible(false)]
 // .NET Framework 4.8 向けとして動かす（新しいパス処理などの既定値を使うため）

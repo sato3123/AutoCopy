@@ -121,6 +121,7 @@ namespace AutoCopy
         [DataMember] public bool DupShowSameContent;
         [DataMember] public bool DupShowOrphans;
         [DataMember] public bool DupShowEmptyFolders;
+        [DataMember] public int DupMinSizeKB;          // これより小さいファイルの重複（中身が同じ・古いコピー）は探さない（0 = すべて。前の版の設定は 0）
         [DataMember] public bool Sync;                // 複数PCで同期（双方向・削除は確認してから）
         // 同期：共有フォルダにだけあって、このPCにないファイルを取り込むか（初期値：取り込む）
         // （1.10〜1.12 は初期値が「取り込まない」だったため、保存名を変えて初期値の「取り込む」に戻す）

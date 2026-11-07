@@ -40,6 +40,8 @@ namespace AutoCopy.Tests
             Add("T111", "コピー先一覧：上限を超えたらファイルごとに確かめる", InventoryLimit);
             Add("T113", "長いメッセージは画面の高さに収まる行数までにする（下のボタンが画面の外に出ない）", MessageFits);
             Add("T114", "表示切れの自動確認が、下のボタンの折り返し・スクロールの下端の欠けを見つける", LayoutCheckDetects);
+            Add("T115", "フォルダ内の重複：中身・ファイル名・更新日時・大きさを組み合わせて探す・小さいファイルを除く", FolderDupBasis);
+            Add("T116", "重複チェック：小さいファイルの重複（古いコピー・中身が同じ）を探さない設定", JobDupMinSize);
             Add("T112", "終了時の停止待ちは上限まで（止まらない処理があっても終了できる）", StopTimeout);
         }
 
@@ -474,6 +476,89 @@ namespace AutoCopy.Tests
                 True(issues2.Exists(delegate(string x) { return x.Contains("いちばん下までスクロールしても"); }), "空白がないと欠けを見つける: " + string.Join(" / ", issues2.ToArray()));
             }
             finally { f.Close(); f.Dispose(); }
+        }
+
+        private static void FolderDupBasis()
+        {
+            Box b = new Box("T115");
+            string root = Path.Combine(b.Root, "free");   // ジョブのコピー元ではない場所（移せる）
+            DateTime t = DateTime.UtcNow.AddDays(-3);
+            Action<string, string, DateTime> put = delegate(string rel, string text, DateTime m)
+            {
+                string f = Path.Combine(root, rel);
+                Directory.CreateDirectory(Path.GetDirectoryName(f));
+                File.WriteAllBytes(f, Encoding.ASCII.GetBytes(text));
+                File.SetLastWriteTimeUtc(f, m);
+            };
+            put(@"a\report.docx", "AAA", t);
+            put(@"b\report.docx", "BBB", t.AddSeconds(1));      // 名前・日時・大きさは同じ、中身が違う
+            put(@"c\report.docx", "AAA", t.AddHours(-1));       // 名前・中身は同じ、日時が違う
+            put(@"d\other.docx", "AAA", t);                     // 中身・日時は同じ、名前が違う
+            put(@"e\Report.DOCX", "AAAA", t);                   // 名前（大文字小文字違い）・日時は同じ、大きさが違う
+            put(@"f\report.docx", "AAA", t.AddSeconds(2));      // すべて同じ（日時は2秒以内）
+            put(@"g\report.docx", "AAA", t.AddSeconds(5));      // 日時が5秒違う（2秒を超える）
+            Func<int, FolderDupResult> find = delegate(int basis) { return FolderDup.Find(root, true, 0, basis, CancellationToken.None, null); };
+            Func<FolderDupResult, string> show = delegate(FolderDupResult r)
+            {
+                List<string> parts = new List<string>();
+                foreach (FolderDupGroup g in r.Groups) { List<string> fs = new List<string>(g.Files); fs.Sort(StringComparer.OrdinalIgnoreCase); parts.Add("{" + string.Join(",", fs.ToArray()).Replace("\\report.docx", "").Replace("\\Report.DOCX", "").Replace("\\other.docx", "") + "}"); }
+                parts.Sort(StringComparer.Ordinal);
+                return string.Join(" ", parts.ToArray());
+            };
+            Eq("{a,c,d,f,g}", show(find(DupBasis.Content)), "中身だけ");
+            Eq("{a,b,c,e,f,g}", show(find(DupBasis.Name)), "ファイル名だけ（大文字小文字は区別しない）");
+            Eq("{a,b,e,f}", show(find(DupBasis.Name | DupBasis.Mtime)), "ファイル名と更新日時（2秒以内）");
+            Eq("{a,b,c,f,g}", show(find(DupBasis.Name | DupBasis.Size)), "ファイル名と大きさ");
+            Eq("{a,c,f,g}", show(find(DupBasis.Content | DupBasis.Name)), "中身とファイル名");
+            Eq("{a,f}", show(find(DupBasis.Content | DupBasis.Name | DupBasis.Mtime)), "中身・ファイル名・更新日時");
+            Eq("{a,d,f}", show(find(DupBasis.Content | DupBasis.Mtime)), "中身と更新日時");
+            FolderDupResult rc = find(DupBasis.Content);
+            True(rc.Groups[0].SameContent, "中身で比べたまとまり");
+            FolderDupResult rn = find(DupBasis.Name | DupBasis.Mtime);
+            True(!rn.Groups[0].SameContent, "中身を比べていないまとまり");
+            Eq(3L + 3 + 4, rn.Groups[0].Wasted(), "空く容量はファイルごとの大きさで数える（先頭を残す）");
+            Eq("ファイル名・更新日時", DupBasis.Describe(DupBasis.Name | DupBasis.Mtime), "基準の説明");
+            Throws<ArgumentException>(delegate() { find(0); }, "基準なしは使えない");
+
+            // 中身を比べていないまとまり：移すときは、残すファイルと中身が同じものだけ
+            FolderDupGroup g1 = rn.Groups[0];
+            True(g1.Files[0] == @"a\report.docx", "残す候補は a（パスが短い・古い）: " + g1.Files[0]);
+            int moved;
+            List<string> errs = FolderDup.MoveAway(root, rn.Groups, new List<string>(new string[] { @"b\report.docx", @"f\report.docx" }), out moved);
+            Eq(1, moved, "中身が同じ f だけ移す");
+            True(errs.Count == 1 && errs[0].StartsWith(@"b\report.docx") && errs[0].Contains("中身が違う"), "中身が違う b は移さない: " + string.Join(" / ", errs.ToArray()));
+            True(File.Exists(Path.Combine(root, @"b\report.docx")) && !File.Exists(Path.Combine(root, @"f\report.docx")), "b は残り、f は移った");
+
+            // 小さいファイルを除く
+            FolderDupResult rs = FolderDup.Find(root, true, 4, DupBasis.Name, CancellationToken.None, null);
+            Eq(0, rs.Groups.Count, "4バイトより小さいものを除くと、重複なし");
+            True(rs.SkippedSmall >= 5, "除いた件数: " + rs.SkippedSmall);
+            Eq(4L, rs.MinBytes, "除く大きさを結果に残す");
+        }
+
+        private static void JobDupMinSize()
+        {
+            Box b = new Box("T116"); b.Job.Dedup = DedupMode.Off;
+            b.W("small.txt", "小さい");
+            b.W("big.bin", new string('x', 4096));
+            b.Run();
+            b.WD(@"old\small.txt", "小さい", 600);                 // コピー先にだけある古いコピー（小さい）
+            b.WD(@"old\big.bin", new string('x', 4096), 600);       // コピー先にだけある古いコピー（4KB）
+            Func<string, bool> isOld = delegate(string rel)
+            {
+                DupResult r = DupChecker.Run(b.Job, b.App, b.State, CancellationToken.None);
+                foreach (DupGroup g in r.Groups) foreach (DupEntry e in g.Entries)
+                    if (string.Equals(e.Rel, rel, StringComparison.OrdinalIgnoreCase) && e.Status == "old") return true;
+                return false;
+            };
+            b.Job.DupMinSizeKB = 0;
+            True(isOld(@"old\small.txt") && isOld(@"old\big.bin"), "0 ならすべて探す");
+            b.Job.DupMinSizeKB = 1;
+            True(!isOld(@"old\small.txt"), "1KB より小さいものは探さない");
+            True(isOld(@"old\big.bin"), "1KB 以上は探す");
+            // 前の版の設定（項目なし）は 0 ＝ すべて
+            JobConfig old = Json.Deserialize<JobConfig>("{\"Id\":\"x\",\"Name\":\"前の版\"}");
+            Eq(0, old.DupMinSizeKB, "前の版の設定はすべて探す");
         }
 
         private static void StopTimeout()
