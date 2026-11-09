@@ -935,6 +935,11 @@ namespace AutoCopy.Tests
 
         private static int MakePlaceholder(string baseDir, string name, bool dir, long size, DateTime mtimeUtc, List<IntPtr> mem)
         {
+            return MakePlaceholder(baseDir, name, dir, size, mtimeUtc, mem, true);
+        }
+
+        private static int MakePlaceholder(string baseDir, string name, bool dir, long size, DateTime mtimeUtc, List<IntPtr> mem, bool fullDir)
+        {
             CF_PLACEHOLDER_CREATE_INFO[] a = new CF_PLACEHOLDER_CREATE_INFO[1];
             IntPtr n = Marshal.StringToHGlobalUni(name); mem.Add(n);
             byte[] id = Encoding.UTF8.GetBytes("id:" + name);
@@ -945,7 +950,7 @@ namespace AutoCopy.Tests
             a[0].FileAttributes = dir ? 0x10u : 0x80u;
             a[0].FileSize = dir ? 0 : size;
             a[0].FileIdentity = ip; a[0].FileIdentityLength = (uint)id.Length;
-            a[0].Flags = 0x2 /* MARK_IN_SYNC */ | (dir ? 0x1u /* DISABLE_ON_DEMAND_POPULATION */ : 0);
+            a[0].Flags = 0x2 /* MARK_IN_SYNC */ | (dir && fullDir ? 0x1u /* DISABLE_ON_DEMAND_POPULATION */ : 0);
             uint done;
             int hr = CfCreatePlaceholders(baseDir, a, 1, 0, out done);
             return hr != 0 ? hr : a[0].Result;
@@ -979,15 +984,32 @@ namespace AutoCopy.Tests
                 string cdir = Path.Combine(root, "雲フォルダ");
                 Eq(0, MakePlaceholder(cdir, "a.bin", false, size, mt, mem), "クラウドだけのファイル a.bin");
                 Eq(0, MakePlaceholder(cdir, "b.bin", false, size, mt.AddDays(1), mem), "クラウドだけのファイル b.bin（同じ大きさ）");
-                uint tag = CloudFiles.ReparseTag(cdir);
-                Console.WriteLine("  フォルダの印: 0x" + tag.ToString("X8") + "・属性: " + File.GetAttributes(cdir));
-                True(CloudFiles.IsCloudTag(tag), "クラウドのフォルダはクラウド用の印（前の版はこの印のフォルダの中を調べなかった）: 0x" + tag.ToString("X8"));
+                // 中身を後から受け取るフォルダ（OneDrive と同じ作り方）
+                Eq(0, MakePlaceholder(root, "雲フォルダ2", true, 0, mt, mem, false), "クラウドのフォルダ2（中身を後から受け取る作り方）");
+                string cdir2 = Path.Combine(root, "雲フォルダ2");
+                Eq(0, MakePlaceholder(cdir2, "c.txt", false, 1234, mt, mem), "クラウドのフォルダ2の中のファイル");
+                int reparseDirs = 0;
+                foreach (string dpath in new string[] { root, cdir, cdir2 })
+                {
+                    uint tg = CloudFiles.ReparseTag(dpath);
+                    FileAttributes da = File.GetAttributes(dpath);
+                    Console.WriteLine("  フォルダ " + Path.GetFileName(dpath) + " の印: 0x" + tg.ToString("X8") + "・属性: " + da);
+                    if ((da & FileAttributes.ReparsePoint) != 0)
+                    {
+                        reparseDirs++;
+                        True(CloudFiles.IsCloudTag(tg), "リパースポイントのクラウドのフォルダはクラウド用の印: 0x" + tg.ToString("X8"));
+                        True(!CloudFiles.SkipLinkDir(dpath, da), "クラウドのフォルダは中を調べる（前の版は調べなかった）");
+                    }
+                }
+                Console.WriteLine("  リパースポイントのフォルダ: " + reparseDirs + "個（0 のときは、フォルダの印の扱いをこの環境では試せていない）");
+                uint ftag = CloudFiles.ReparseTag(Path.Combine(cdir, "a.bin"));
+                Console.WriteLine("  ファイル a.bin の印: 0x" + ftag.ToString("X8") + "・属性: " + File.GetAttributes(Path.Combine(cdir, "a.bin")));
                 True(CloudFiles.IsCloudFolder(root) && CloudFiles.IsCloudFolder(Path.Combine(root, @"新しい\フォルダ")), "同期フォルダの中と分かる（まだないフォルダも）");
                 True(!CloudFiles.IsCloudFolder(b.Dst), "普通のフォルダは同期フォルダではない");
 
                 // 中まで調べる
                 ScanResult sc = Scanner.Scan(root, true, null, false, CancellationToken.None);
-                True(sc.Files.ContainsKey(@"雲フォルダ\a.bin") && sc.Files.ContainsKey(@"雲フォルダ\b.bin"), "クラウドのフォルダの中のファイルを数える: " + string.Join(",", new List<string>(sc.Files.Keys).ToArray()));
+                True(sc.Files.ContainsKey(@"雲フォルダ\a.bin") && sc.Files.ContainsKey(@"雲フォルダ\b.bin") && sc.Files.ContainsKey(@"雲フォルダ2\c.txt"), "クラウドのフォルダの中のファイルを数える: " + string.Join(",", new List<string>(sc.Files.Keys).ToArray()));
                 ScanItem ai = sc.Files[@"雲フォルダ\a.bin"];
                 Eq(size, ai.Size, "大きさ（中身はなくても本当の大きさ）");
                 True(CloudFiles.IsCloudOnly(ai.Attr), "クラウドだけのファイルと分かる: " + ai.Attr);
