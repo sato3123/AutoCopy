@@ -49,6 +49,7 @@ namespace AutoCopy.Tests
             Add("T121", "フォルダの重複ファイル探し：残す候補の理由（パスが短い・古い・名前の順）", KeepReason);
             Add("T122", "新しいジョブの保存後の案内：既定は「あとで（無効のまま）」・有効にするには選ぶ必要がある", EnableJobChoice);
             Add("T123", "右クリック「エクスプローラーで保存先を開く」：開く場所の決め方（ファイル → コピー元 → 近いフォルダ）と、一覧への付け方", OpenLocation);
+            Add("T124", "日本時間（UTC+9）でも保存できる：未設定（MinValue）の日時を JSON に保存しても「UTC への変換時…範囲外」にならない・値と比較は変わらない", JsonDatesSafe);
             Add("T112", "終了時の停止待ちは上限まで（止まらない処理があっても終了できる）", StopTimeout);
         }
 
@@ -706,6 +707,92 @@ namespace AutoCopy.Tests
                 int n = System.Text.RegularExpressions.Regex.Matches(s, "Ui\\.AddLocationMenu\\(").Count;
                 True(n >= (f == "Dialogs.cs" ? 4 : 1), f + " の一覧に付いている（" + n + "か所）");
             }
+        }
+
+        public struct T124S { public DateTime When; public int N; }
+        public class T124Inner { public DateTime When; public DateTime? Maybe; }
+        public class T124Box
+        {
+            public DateTime A, B, Now;
+            public DateTime? N1, N2;
+            public List<DateTime> L = new List<DateTime>();
+            public Dictionary<string, DateTime> D = new Dictionary<string, DateTime>();
+            public List<T124S> LS = new List<T124S>();
+            public T124S S;
+            public T124Inner Child = new T124Inner();
+            public T124Inner[] Arr = new T124Inner[] { new T124Inner(), null };
+            public string Text = "そのまま";
+        }
+
+        private static void JsonDatesSafe()
+        {
+            TimeSpan off = TimeZoneInfo.Local.GetUtcOffset(DateTime.Now);
+            Console.WriteLine("  このPCの時差: " + off + "（" + TimeZoneInfo.Local.Id + "）");
+            DateTime now = new DateTime(2026, 11, 9, 19, 52, 0, DateTimeKind.Local);
+            T124Box b = new T124Box();
+            b.A = DateTime.MinValue; b.B = DateTime.MaxValue; b.Now = now;
+            b.N1 = DateTime.MinValue; b.N2 = null;
+            b.L.Add(DateTime.MinValue); b.L.Add(now); b.L.Add(DateTime.MaxValue);
+            b.D["min"] = DateTime.MinValue; b.D["now"] = now;
+            T124S s; s.When = DateTime.MinValue; s.N = 7; b.LS.Add(s); b.S = s;
+            b.Child.When = DateTime.MinValue; b.Child.Maybe = DateTime.MinValue;
+            b.Arr[0].When = DateTime.MaxValue;
+
+            // 前の版の保存のしかたのままだと、東（日本など）では MinValue、西では MaxValue で失敗する（このPCで再現するか）
+            bool rawFails = false;
+            try { new System.Runtime.Serialization.Json.DataContractJsonSerializer(typeof(DateTime)).WriteObject(new MemoryStream(), off > TimeSpan.Zero ? DateTime.MinValue : DateTime.MaxValue); }
+            catch (System.Runtime.Serialization.SerializationException) { rawFails = true; }
+            True(rawFails == (off != TimeSpan.Zero), "時差があれば、直さないと失敗する（時差 " + off + "・失敗 " + rawFails + "）");
+
+            string json = Json.Serialize(b);   // 失敗しない
+            T124Box r = Json.Deserialize<T124Box>(json);
+            Eq(DateTime.MinValue, r.A, "未設定（MinValue）のまま");
+            True(r.A == DateTime.MinValue, "== DateTime.MinValue の判定も今まで通り");
+            Eq(DateTime.MaxValue.Ticks / TimeSpan.TicksPerMillisecond, r.B.Ticks / TimeSpan.TicksPerMillisecond, "MaxValue のまま（ミリ秒まで）");
+            Eq(now, r.Now, "普通の日時はそのまま");
+            Eq(DateTimeKind.Local, b.Now.Kind, "普通の日時の種類は変えない");
+            Eq(DateTime.MinValue, r.N1.Value, "DateTime? の MinValue");
+            True(!r.N2.HasValue, "null のまま");
+            Eq(3, r.L.Count, "一覧の件数"); Eq(DateTime.MinValue, r.L[0], "一覧の中"); Eq(now, r.L[1], "一覧の中（普通）");
+            Eq(DateTime.MinValue, r.D["min"], "辞書の中"); Eq(now, r.D["now"], "辞書の中（普通）");
+            Eq(DateTime.MinValue, r.LS[0].When, "構造体の一覧の中"); Eq(7, r.LS[0].N, "構造体の他の値");
+            Eq(DateTime.MinValue, r.S.When, "構造体の中");
+            Eq(DateTime.MinValue, r.Child.When, "入れ子の中"); Eq(DateTime.MinValue, r.Child.Maybe.Value, "入れ子の DateTime?");
+            Eq(DateTime.MaxValue.Ticks / TimeSpan.TicksPerMillisecond, r.Arr[0].When.Ticks / TimeSpan.TicksPerMillisecond, "配列の中");
+            True(r.Arr[1] == null, "配列の null");
+            Eq("そのまま", r.Text, "文字");
+            True(b.A == DateTime.MinValue && b.L[0] == DateTime.MinValue, "元の値も比べた結果は同じ");
+
+            // アプリが実際に保存するもの：お知らせ（対応日時が未設定）・設定・ジョブ
+            Box bx = new Box("T124");
+            Notice n = new Notice(); n.Time = DateTime.Now; n.Title = "テスト"; n.Text = "未対応";   // First・HandledAt は未設定
+            NoticeBook nb = new NoticeBook(); nb.Items = new List<Notice>(); nb.Items.Add(n);
+            string np = Path.Combine(bx.Root, "notices.json");
+            Json.Save(np, nb);
+            string problem;
+            NoticeBook nr = Json.LoadSafe<NoticeBook>(np, out problem);
+            True(nr != null && problem == null, "お知らせを保存・読み込みできる");
+            Eq(DateTime.MinValue, nr.Items[0].HandledAt, "対応日時は未設定のまま");
+            Eq(n.Time.ToString("yyyy/MM/dd HH:mm:ss"), nr.Items[0].Time.ToLocalTime().ToString("yyyy/MM/dd HH:mm:ss"), "お知らせの日時");
+            AppSettings st = new AppSettings(); if (st.Jobs == null) st.Jobs = new List<JobConfig>(); st.Jobs.Add(bx.Job);
+            Json.Save(Path.Combine(bx.Root, "settings.json"), st);
+            AppSettings sr = Json.LoadSafe<AppSettings>(Path.Combine(bx.Root, "settings.json"), out problem);
+            True(sr != null && sr.Jobs.Count == 1 && sr.Jobs[0].Id == bx.Job.Id, "設定を保存・読み込みできる");
+            True(bx.Job.Clone().Id == bx.Job.Id, "ジョブの複製（JSON を通す）");
+
+            // 前の版のファイル（日本時間で保存された日時）もそのまま読める
+            string old = "{\"A\":\"\\/Date(1762685520000+0900)\\/\",\"B\":\"\\/Date(1762685520000)\\/\"}";
+            T124Box o = Json.Deserialize<T124Box>(old);
+            Eq(new DateTime(2025, 11, 9, 10, 52, 0, DateTimeKind.Utc), o.A.ToUniversalTime(), "前の版の形（時差付き）");
+            Eq(new DateTime(2025, 11, 9, 10, 52, 0, DateTimeKind.Utc), o.B.ToUniversalTime(), "前の版の形（UTC）");
+
+            // 大きな一覧でも時間がかからない
+            List<T124Inner> big = new List<T124Inner>();
+            for (int i = 0; i < 100000; i++) { T124Inner x = new T124Inner(); x.When = i % 2 == 0 ? DateTime.MinValue : now; big.Add(x); }
+            System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+            JsonDates.MakeSafe(big);
+            True(sw.ElapsedMilliseconds < 5000, "10万件: " + sw.ElapsedMilliseconds + "ms");
+            Json.Serialize(big);
         }
 
         private static void MessageFits()

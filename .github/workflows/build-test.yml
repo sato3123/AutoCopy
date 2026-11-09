@@ -21,6 +21,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 使う人の多い日本時間（UTC+9）でも試す（windows-2022 は日本時間、windows-2025 は UTC のまま）。
+      # UTC のままだと「未設定（MinValue）の日時を保存できない」問題が見つからなかったため。
+      - name: Time zone (windows-2022 = Tokyo Standard Time)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          tzutil /s "Tokyo Standard Time"
+          tzutil /g
+          Get-Date -Format o
+
       - name: Windows / .NET Framework version
         shell: pwsh
         run: |
