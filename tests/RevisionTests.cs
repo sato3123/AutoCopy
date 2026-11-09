@@ -984,12 +984,8 @@ namespace AutoCopy.Tests
                 string cdir = Path.Combine(root, "雲フォルダ");
                 Eq(0, MakePlaceholder(cdir, "a.bin", false, size, mt, mem), "クラウドだけのファイル a.bin");
                 Eq(0, MakePlaceholder(cdir, "b.bin", false, size, mt.AddDays(1), mem), "クラウドだけのファイル b.bin（同じ大きさ）");
-                // 中身を後から受け取るフォルダ（OneDrive と同じ作り方）
-                Eq(0, MakePlaceholder(root, "雲フォルダ2", true, 0, mt, mem, false), "クラウドのフォルダ2（中身を後から受け取る作り方）");
-                string cdir2 = Path.Combine(root, "雲フォルダ2");
-                Eq(0, MakePlaceholder(cdir2, "c.txt", false, 1234, mt, mem), "クラウドのフォルダ2の中のファイル");
                 int reparseDirs = 0;
-                foreach (string dpath in new string[] { root, cdir, cdir2 })
+                foreach (string dpath in new string[] { root, cdir })
                 {
                     uint tg = CloudFiles.ReparseTag(dpath);
                     FileAttributes da = File.GetAttributes(dpath);
@@ -1009,7 +1005,7 @@ namespace AutoCopy.Tests
 
                 // 中まで調べる
                 ScanResult sc = Scanner.Scan(root, true, null, false, CancellationToken.None);
-                True(sc.Files.ContainsKey(@"雲フォルダ\a.bin") && sc.Files.ContainsKey(@"雲フォルダ\b.bin") && sc.Files.ContainsKey(@"雲フォルダ2\c.txt"), "クラウドのフォルダの中のファイルを数える: " + string.Join(",", new List<string>(sc.Files.Keys).ToArray()));
+                True(sc.Files.ContainsKey(@"雲フォルダ\a.bin") && sc.Files.ContainsKey(@"雲フォルダ\b.bin"), "クラウドのフォルダの中のファイルを数える: " + string.Join(",", new List<string>(sc.Files.Keys).ToArray()));
                 ScanItem ai = sc.Files[@"雲フォルダ\a.bin"];
                 Eq(size, ai.Size, "大きさ（中身はなくても本当の大きさ）");
                 True(CloudFiles.IsCloudOnly(ai.Attr), "クラウドだけのファイルと分かる: " + ai.Attr);
@@ -1056,6 +1052,46 @@ namespace AutoCopy.Tests
             finally
             {
                 try { CfUnregisterSyncRoot(root); } catch (Exception) { }
+            }
+
+            // OneDrive と同じ「一覧を後から受け取る」同期フォルダ：フォルダがリパースポイント（クラウド用の印）になるか、なれば中を調べるか
+            string root2 = Path.Combine(b.Root, "雲の同期フォルダ2");
+            Directory.CreateDirectory(root2);
+            CF_SYNC_POLICIES pol2 = pol;
+            pol2.PopulationPrimary = 0;   // PARTIAL（OneDrive と同じ）
+            reg.ProviderId = Guid.NewGuid();
+            int hr2 = CfRegisterSyncRoot(root2, ref reg, ref pol2, 0);
+            Console.WriteLine("  同期フォルダ2（一覧を後から受け取る）の登録: 0x" + hr2.ToString("X8"));
+            try
+            {
+                if (hr2 == 0)
+                {
+                    DateTime mt2 = new DateTime(2025, 4, 1, 3, 0, 0, DateTimeKind.Utc);
+                    int h1 = MakePlaceholder(root2, "雲フォルダ", true, 0, mt2, mem, true);
+                    string d2 = Path.Combine(root2, "雲フォルダ");
+                    int h2 = h1 == 0 ? MakePlaceholder(d2, "c.txt", false, 1234, mt2, mem) : h1;
+                    Console.WriteLine("  同期フォルダ2：フォルダ 0x" + h1.ToString("X8") + "・ファイル 0x" + h2.ToString("X8"));
+                    if (h1 == 0)
+                    {
+                        FileAttributes da = File.GetAttributes(d2);
+                        uint tg = CloudFiles.ReparseTag(d2);
+                        Console.WriteLine("  同期フォルダ2 のフォルダの印: 0x" + tg.ToString("X8") + "・属性: " + da);
+                        ScanResult s2;
+                        try { s2 = Scanner.Scan(root2, true, null, false, CancellationToken.None); }
+                        catch (Exception ex) { Console.WriteLine("  同期フォルダ2 を調べられません（同期の相手がいないため）: " + ex.Message); s2 = null; }
+                        if (s2 != null) Console.WriteLine("  同期フォルダ2 を調べた結果: ファイル " + string.Join(",", new List<string>(s2.Files.Keys).ToArray()) + "・読めなかったフォルダ " + string.Join(",", s2.FailedDirs.ToArray()));
+                        if (s2 != null && (da & FileAttributes.ReparsePoint) != 0)
+                        {
+                            True(CloudFiles.IsCloudTag(tg), "同期フォルダ2：フォルダはクラウド用の印: 0x" + tg.ToString("X8"));
+                            True(!CloudFiles.SkipLinkDir(d2, da), "同期フォルダ2：クラウドのフォルダは中を調べる（前の版は黙って飛ばしていた）");
+                            True(s2.Files.ContainsKey(@"雲フォルダ\c.txt") || s2.FailedDirs.Contains("雲フォルダ"), "同期フォルダ2：中のファイルを数える（読めなければ「読めなかった」として扱い、黙って飛ばさない）");
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                try { CfUnregisterSyncRoot(root2); } catch (Exception) { }
                 foreach (IntPtr p in mem) Marshal.FreeHGlobal(p);
             }
         }
