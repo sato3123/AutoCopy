@@ -506,7 +506,8 @@ namespace AutoCopy
             }
             else
             {
-                summary.Text = current.Checked + " にチェック・グループ " + current.Groups.Count + "件" + (largeCount > 0 ? "・大きいファイルの重複 " + largeCount + "件" : "");
+                summary.Text = current.Checked + " にチェック・グループ " + current.Groups.Count + "件" + (largeCount > 0 ? "・大きいファイルの重複 " + largeCount + "件" : "")
+                    + (current.CloudSkipped > 0 ? "・OneDrive の「クラウドだけ」にある " + current.CloudSkipped + "件は、ダウンロードしないよう中身を調べていません" : "");
                 int rows = lv.Items.Count, allRows = rows, hiddenGroups = 0;
                 // 行は最後にまとめて入れる（1行ずつ入れると、まとまり表示の一覧では件数が多いと極端に遅くなる）
                 List<ListViewItem> buf = new List<ListViewItem>();

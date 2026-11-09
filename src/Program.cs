@@ -15,6 +15,7 @@ namespace AutoCopy
         ///   /run "ジョブ名"   指定したジョブだけ実行
         ///   /dupcheck         重複チェックを実行
         ///   /checkupdate      更新版があるか確かめる（あれば更新する）
+        ///   /retryupdate      前に更新に失敗した版の記録を消して、もう一度更新を試す
         ///   /updated pid 版   自動更新で起動し直した（前の版が終わるのを待ってから動く）
         /// </summary>
         [STAThread]
@@ -137,7 +138,7 @@ namespace AutoCopy
                     string msg = File.ReadAllText(Updater.RollbackFile);
                     File.Delete(Updater.RollbackFile);
                     Logger.Write(null, "UPDATE", msg, -1, -1);
-                    AppCore.Notify(NoticeLevel.Warning, "更新に失敗したため、前の版に戻しました", msg, "log", null);
+                    AppCore.Notify(NoticeLevel.Warning, "更新に失敗したため、前の版に戻しました", msg + "　次にすること：原因を直したら、設定の「自動更新」の「記録を消して、この版への更新をもう一度試す」で再実行できます。", "log", null);
                 }
             }
             catch (Exception ex) { Logger.Error(null, "更新の記録を読めません: " + ex.Message); }
@@ -164,6 +165,7 @@ namespace AutoCopy
             if (a == "startup") return "startup";
             if (a == "dupcheck") return "dupcheck";
             if (a == "checkupdate") return "checkupdate";
+            if (a == "retryupdate") return "retryupdate";
             if (a == "run") return args.Length > 1 ? "run|" + args[1] : "run";
             return "show";
         }

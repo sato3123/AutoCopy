@@ -12,7 +12,10 @@ namespace AutoCopy
     {
         private readonly Label lFolder, lDist;
         private readonly TextBox tLogRoot, tUpdate;
-        private readonly CheckBox cAuto, cErr, cConf, cDone, cBlink, cPopup, cAutoUpdate, cAutoClose;
+        private readonly CheckBox cAuto, cErr, cConf, cDone, cBlink, cPopup, cAutoUpdate, cAutoClose, cCloudFree;
+        private readonly ComboBox cbCloudReserve;
+        private readonly Label lBlocked;
+        private readonly Button bRetryUpdate;
         private readonly NumericUpDown nLocal, nNet, nTrash, nRemind, nCloseSec;
         private readonly ComboBox cbShortcut;
         private Button bLogCred, bCheckUpdate;
@@ -64,7 +67,23 @@ namespace AutoCopy
                     Ui.B("参照…", delegate { string f = Ui.BrowseFolder(this, tUpdate.Text, "新しい AutoCopy.exe を置くフォルダ（NAS の配布フォルダなど）を選んでください"); if (f != null) tUpdate.Text = NetAccess.ToUncIfMapped(f); })),
                 cAutoUpdate,
                 Ui.Hint("置き場所の AutoCopy.exe が今の版（" + Updater.CurrentVersion + "）より新しく、今と同じ証明書でデジタル署名されているときだけ更新します。"),
-                Ui.Row(bCheckUpdate = Ui.B("今すぐ確認", delegate { if (Save() && TrayApp.Instance != null) TrayApp.Instance.CheckUpdate(true); }))));
+                Ui.Row(bCheckUpdate = Ui.B("今すぐ確認", delegate { if (Save() && TrayApp.Instance != null) TrayApp.Instance.CheckUpdate(true); })),
+                Ui.Row(lBlocked = Ui.L(""), bRetryUpdate = Btn.MakeCaution(Ui.B("記録を消して、この版への更新をもう一度試す…", delegate { RetryUpdate(); })))));
+            UpdateBlocked();
+
+            // OneDrive などのクラウド同期フォルダがコピー先のとき
+            cCloudFree = Ui.C("コピーしたファイルをこのPCに残さない（OneDrive のアップロードが終わったら、このPCからは空けて「クラウドだけ」にする）", s.CloudFreeLocal);
+            cbCloudReserve = Ui.Combo(120, "1 GB", "2 GB", "5 GB", "10 GB", "20 GB");
+            int[] reserveMB = { 1024, 2048, 5120, 10240, 20480 };
+            int ri = Array.IndexOf(reserveMB, s.CloudReserveMB);
+            if (ri < 0) { cbCloudReserve.Items.Add(Fmt.Size(s.CloudReserveMB * 1024L * 1024)); ri = cbCloudReserve.Items.Count - 1; }
+            cbCloudReserve.SelectedIndex = ri;
+            cbCloudReserve.Tag = reserveMB;
+            b.Controls.Add(Ui.Section("OneDrive（コピー先がクラウド同期フォルダのとき）",
+                cCloudFree,
+                Ui.Row(Ui.L("このPCの空きを", 140), cbCloudReserve, Ui.L("より多く残す（少なくなりそうなら、アップロードで空くのを最長30分待つ）")),
+                Ui.Hint("コピー先が OneDrive（または同じしくみのクラウド同期フォルダ）のときだけ使います。コピー先の「クラウドだけ」にあるファイルは、確かめるために読む（ダウンロードする）ことをしません。"
+                    + "「常にこのデバイスに保持する」にしたフォルダは、その設定のままにします。")));
 
             nLocal = Ui.N(1, 3650, s.LocalLogDays, 72);
             nNet = Ui.N(1, 3650, s.NetLogDays, 72);
@@ -173,6 +192,31 @@ namespace AutoCopy
             return bad;
         }
 
+        /// <summary>前に更新に失敗した版があれば表示する（なければ「もう一度試す」は隠す）</summary>
+        private void UpdateBlocked()
+        {
+            string v = Updater.BlockedVersion();
+            bool has = !string.IsNullOrEmpty(v);
+            lBlocked.Text = has ? "前に更新に失敗した版：" + v + "（自動では更新しません）" : "";
+            lBlocked.ForeColor = Ui.Warn;
+            lBlocked.Visible = bRetryUpdate.Visible = has;
+        }
+
+        /// <summary>失敗した版の記録を消して、更新をもう一度試す（失敗したら、また前の版に戻して記録する）</summary>
+        private void RetryUpdate()
+        {
+            string v = Updater.BlockedVersion();
+            if (string.IsNullOrEmpty(v)) { UpdateBlocked(); return; }
+            if (!Ui.Confirm(this, "前に版 " + v + " への更新に失敗したため、その版には自動で更新しないようにしています。\n\n"
+                + "記録を消して、もう一度更新を試しますか？\n・コピー中や画面を開いている間は、終わるまで待ってから更新します。\n"
+                + "・新しい版がまた起動できなかったときは、今と同じように前の版に戻し、もう一度記録します（データは変えません）。")) return;
+            if (!Save()) return;
+            string err = Updater.ClearBlocked();
+            if (err != null) { Ui.Error(this, err); return; }
+            UpdateBlocked();
+            if (TrayApp.Instance != null) TrayApp.Instance.CheckUpdate(true);
+        }
+
         private bool Save()
         {
             AppSettings previous = AppCore.Settings;
@@ -191,6 +235,9 @@ namespace AutoCopy
             string up = tUpdate.Text.Trim();
             s.UpdateFolder = up.Length == 0 ? null : NetAccess.ToUncIfMapped(up);
             s.AutoUpdate = cAutoUpdate.Checked;
+            s.CloudFreeLocal = cCloudFree.Checked;
+            int[] rm = (int[])cbCloudReserve.Tag;
+            if (cbCloudReserve.SelectedIndex >= 0 && cbCloudReserve.SelectedIndex < rm.Length) s.CloudReserveMB = rm[cbCloudReserve.SelectedIndex];
             s.LocalLogDays = (int)nLocal.Value;
             s.NetLogDays = (int)nNet.Value;
             s.TrashDays = (int)nTrash.Value;

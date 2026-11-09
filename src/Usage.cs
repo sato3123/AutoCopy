@@ -217,7 +217,7 @@ namespace AutoCopy
                         string childRel = rel.Length == 0 ? fsi.Name : rel + "\\" + fsi.Name;
                         if ((fsi.Attributes & FileAttributes.Directory) != 0)
                         {
-                            if ((fsi.Attributes & FileAttributes.ReparsePoint) != 0) continue;
+                            if (CloudFiles.SkipLinkDir(fsi.FullName, fsi.Attributes)) continue;   // ジャンクションは調べない（OneDrive のフォルダは調べる）
                             // 空のフォルダも一覧に出す
                             List<string> s = new List<string>(segs);
                             s.Add(fsi.Name);

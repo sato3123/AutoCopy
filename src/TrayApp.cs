@@ -191,7 +191,16 @@ namespace AutoCopy
                     updateChecking = false;
                     if (c == null)
                     {
-                        if (manual) Ui.Info(null, "更新はありません。\n今の版：" + Updater.CurrentVersion + "\n" + reason);
+                        if (manual && reason != null && reason.StartsWith(Updater.BlockedReasonPrefix))
+                        {
+                            // 前に失敗した版：手で確認したときは、記録を消してもう一度試せるようにする
+                            if (Ui.Confirm(null, reason + "\n\n記録を消して、この版への更新をもう一度試しますか？\n（また起動できなかったときは、前の版に戻してもう一度記録します）"))
+                            {
+                                string err = Updater.ClearBlocked();
+                                if (err != null) Ui.Error(null, err); else CheckUpdate(true);
+                            }
+                        }
+                        else if (manual) Ui.Info(null, "更新はありません。\n今の版：" + Updater.CurrentVersion + "\n" + reason);
                         else if (reason != null && (reason.Contains("署名") || reason.Contains("改ざん")))
                             AppCore.Notify(NoticeLevel.Warning, "更新版を使いませんでした", reason, "log", null);
                         if (reason != null && !reason.StartsWith("新しい版ではありません") && !reason.StartsWith("更新版の置き場所が設定"))
@@ -274,6 +283,13 @@ namespace AutoCopy
             else if (cmd == "dupcheck") { AppCore.RunDupAll(); Balloon("コピー先の整理", "コピー先の整理（重複チェック）を始めました。終わったらお知らせします。", ToolTipIcon.Info); }
             else if (cmd.StartsWith("import|")) ImportSetup(cmd.Substring(7));
             else if (cmd == "checkupdate") CheckUpdate(false);
+            else if (cmd == "retryupdate")
+            {
+                // 前に失敗した版の記録を消して、もう一度更新を試す（管理者がコマンドで行う場合）
+                string err = Updater.ClearBlocked();
+                if (err != null) Logger.Error(null, err);
+                CheckUpdate(false);
+            }
             else if (cmd.StartsWith("updated|"))
                 Balloon("新しい版に更新しました", (cmd.Length > 8 ? cmd.Substring(8) + " → " : "") + Updater.CurrentVersion, ToolTipIcon.Info);
             // "startup" は何も表示しない

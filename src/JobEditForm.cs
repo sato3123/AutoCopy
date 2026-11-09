@@ -577,6 +577,10 @@ namespace AutoCopy
             string d = NetAccess.ToUncIfMapped(PathUtil.Expand(tDst.Text, folder));
             if (d.Length == 0) { lPreview.Text = ""; return; }
             lPreview.Text = "このPCでは " + d + "（種類：" + NetAccess.Describe(d) + "・自動判定）";
+            if (!d.StartsWith(@"\\") && CloudFiles.IsCloudFolder(d))
+                lPreview.Text += "\nOneDrive（クラウド同期フォルダ）です：" + (AppCore.Settings.CloudFreeLocal
+                    ? "コピーしたファイルは、アップロード後にこのPCから空けます（「クラウドだけ」にする。アプリの設定で変えられます）。"
+                    : "コピーしたファイルはこのPCにも残ります（アプリの設定で「このPCに残さない」にできます）。");
             if (cbServer != null) RefreshServers();
         }
 

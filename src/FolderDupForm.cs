@@ -237,6 +237,7 @@ namespace AutoCopy
                 + "1つずつ残すと " + Fmt.Count(r.WastedFiles) + "件・" + Fmt.Size(r.WastedBytes) + " 空きます。"
                 + (shownGroups < r.Groups.Count ? "　※件数が多いため、空く容量の大きい順に " + Fmt.Count(shownGroups) + "まとまりだけ表示しています。" : "")
                 + (r.Errors.Count > 0 ? "　読めなかったもの " + r.Errors.Count + "件。" : "")
+                + (r.CloudSkipped > 0 ? "　OneDrive の「クラウドだけ」にある " + Fmt.Count(r.CloudSkipped) + "件は、ダウンロードしないよう中身を比べていません。" : "")
                 + (r.Groups.Count == 0 ? "　重複はありませんでした。" : "")
                 + (r.Groups.Count > 0 && !DupBasis.Has(r.Basis, DupBasis.Content) ? "　※中身は比べていません。移すときは、残すファイルと中身が同じものだけを移します。" : "");
             protectedFolder = prot;

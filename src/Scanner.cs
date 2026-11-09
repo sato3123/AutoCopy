@@ -86,7 +86,8 @@ namespace AutoCopy
                         {
                             if (!includeSubdirs) continue;
                             if (skipMeta && rel.Length == 0 && string.Equals(name, AppPaths.DestMetaFolder, StringComparison.OrdinalIgnoreCase)) continue;
-                            if ((a & FileAttributes.ReparsePoint) != 0) continue; // ジャンクションのループ防止
+                            // ジャンクション・シンボリックリンクは調べない（ループ防止）。OneDrive などのクラウド同期のフォルダは中まで調べる
+                            if ((a & FileAttributes.ReparsePoint) != 0 && CloudFiles.SkipLinkDir(dirPath.TrimEnd('\\') + "\\" + name, a)) continue;
                             if (matcher != null && matcher.ExcludeDir(childRel, name, a)) { res.ExcludedCount++; continue; }
                             res.Dirs.Add(childRel);
                             stack.Push(childRel);

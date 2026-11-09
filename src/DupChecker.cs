@@ -16,6 +16,7 @@ namespace AutoCopy
         [DataMember] public string DestRoot;
         [DataMember] public List<DupGroup> Groups = new List<DupGroup>();
         [DataMember] public int OrphanCount;
+        [DataMember] public int CloudSkipped;   // OneDrive の「クラウドだけ」にあり、ダウンロードしないよう中身を調べなかったファイル
         [DataMember] public bool Seen;
         [DataMember] public int LargePending;   // 大きいファイルの重複で、扱いを選んでもらうもの   // 結果の画面で一度見た（見るまでは「確認が必要」として目立たせる）
 
@@ -149,6 +150,22 @@ namespace AutoCopy
                 Dictionary<string, List<string>> byFp = new Dictionary<string, List<string>>();
                 foreach (string r in g.Value)
                 {
+                    // OneDrive の「クラウドだけ」にあるファイル：読むとダウンロードされる（このPCの容量を使う）。
+                    // コピーしたときの記録（MD5）があればそれを使い、なければ調べない
+                    if (CloudFiles.IsCloudOnly(ds.Files[r].Attr))
+                    {
+                        FileRecord cr;
+                        if (!orphans.Contains(r) && recs.TryGetValue(r, out cr) && cr.Hash != null && cr.Size == ds.Files[r].Size
+                            && (cr.DestMtime == 0 || Math.Abs(cr.DestMtime - ds.Files[r].Mtime) < TimeSpan.TicksPerSecond * 3))
+                        {
+                            string ck = g.Key + ":" + BitConverter.ToString(cr.Hash);
+                            List<string> cl;
+                            if (!clusters.TryGetValue(ck, out cl)) { cl = new List<string>(); clusters[ck] = cl; }
+                            cl.Add(r);
+                        }
+                        else res.CloudSkipped++;
+                        continue;
+                    }
                     string fp = Fingerprint(PathUtil.Combine(dst, r));
                     if (fp == null) continue;
                     List<string> l;
@@ -420,7 +437,7 @@ namespace AutoCopy
                 try
                 {
                     FileAttributes a = File.GetAttributes(PathUtil.Long(full));
-                    if ((a & (FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReparsePoint)) != 0) continue;
+                    if ((a & (FileAttributes.Hidden | FileAttributes.System)) != 0 || CloudFiles.SkipLinkDir(full, a)) continue;
                 }
                 catch (Exception) { continue; }
                 if (!IsTreeEmpty(full)) continue;
@@ -437,7 +454,7 @@ namespace AutoCopy
             {
                 foreach (string f in Directory.EnumerateFiles(PathUtil.Long(folder), "*", SearchOption.AllDirectories)) return false;
                 foreach (string d in Directory.EnumerateDirectories(PathUtil.Long(folder), "*", SearchOption.AllDirectories))
-                    if ((File.GetAttributes(d) & FileAttributes.ReparsePoint) != 0) return false;
+                    if (CloudFiles.SkipLinkDir(d, File.GetAttributes(d))) return false;   // ジャンクションがあれば空とみなさない（OneDrive のフォルダは中を見た上で判断）
                 return true;
             }
             catch (Exception) { return false; }
@@ -812,6 +829,7 @@ namespace AutoCopy
         public int Scanned;
         public long ScannedBytes;
         public int SkippedSmall;   // 小さいため調べなかったファイル
+        public int CloudSkipped;   // OneDrive の「クラウドだけ」にあり、ダウンロードしないよう中身を調べなかったファイル
         public List<FolderDupGroup> Groups = new List<FolderDupGroup>();
         public long WastedBytes;   // 1つ残して消したら空く容量
         public int WastedFiles;
@@ -895,6 +913,7 @@ namespace AutoCopy
                 {
                     done++;
                     if (progress != null && (done & 15) == 0) progress("中身を比べています（" + Fmt.Count(done) + " / " + Fmt.Count(cand) + "件）");
+                    if (CloudFiles.IsCloudOnly(sc.Files[r].Attr)) { res.CloudSkipped++; continue; }   // 読むとダウンロードされる：調べない
                     string fp = size <= 131072 ? DupChecker.FullHash(PathUtil.Combine(root, r), ct) : DupChecker.Fingerprint(PathUtil.Combine(root, r));
                     if (fp == null) { res.Errors.Add("読めません: " + r); continue; }
                     List<string> fl;

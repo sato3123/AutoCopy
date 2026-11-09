@@ -129,6 +129,8 @@ namespace AutoCopy
         /// ・今の版に署名がない（自分でビルドした など）なら、正式な「自動コピー」の証明書で署名された版だけ
         /// ・前に更新に失敗した版（起動できなかった版）は使わない
         /// </summary>
+        public const string BlockedReasonPrefix = "前にこの版（";
+
         public static string Acceptable(string path, out Version ver, out string signer)
         {
             signer = null;
@@ -136,7 +138,7 @@ namespace AutoCopy
             if (ver == null) return "版を読めません";
             if (ver <= CurrentVersion) return "新しい版ではありません（" + ver + "）";
             string blocked = BlockedVersion();
-            if (blocked != null && blocked == ver.ToString()) return "前にこの版（" + ver + "）への更新に失敗して元に戻したため、使いません（もっと新しい版を置いてください）";
+            if (blocked != null && blocked == ver.ToString()) return BlockedReasonPrefix + "" + ver + "）への更新に失敗して元に戻したため、自動では使いません（直してから、設定の「自動更新」の「もう一度試す」で再実行できます。もっと新しい版を置いてください）";
             bool unsigned, trusted;
             string err = CheckSignature(path, out signer, out unsigned, out trusted);
             if (unsigned) return "デジタル署名がない版には更新しません（" + ver + "）";
@@ -168,6 +170,22 @@ namespace AutoCopy
         {
             try { return File.Exists(BlockedFile) ? File.ReadAllText(BlockedFile).Trim() : null; }
             catch (Exception ex) { Logger.Error(null, "更新の記録を読めません: " + ex.Message); return null; }
+        }
+
+        /// <summary>
+        /// 失敗した版の記録を消す（手で「もう一度試す」）。次の確認で、その版への更新をもう一度行う。
+        /// 戻り値：エラーの説明（成功 = null）。また失敗したときは、今まで通り前の版に戻して記録し直す。
+        /// </summary>
+        public static string ClearBlocked()
+        {
+            string v = BlockedVersion();
+            try
+            {
+                if (File.Exists(BlockedFile)) File.Delete(BlockedFile);
+                if (!string.IsNullOrEmpty(v)) Logger.Write(null, "UPDATE", "更新に失敗した版（" + v + "）の記録を消しました。この版への更新をもう一度試します", -1, -1);
+                return null;
+            }
+            catch (Exception ex) { return "更新の記録を消せません: " + ex.Message; }
         }
 
         /// <summary>新しい版が問題なく起動できたことを、見張り役に知らせる</summary>

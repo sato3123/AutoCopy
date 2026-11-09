@@ -31,6 +31,8 @@ namespace AutoCopy
         [DataMember] public int DistVersion;          // 取り込んだ配布設定の版
         [DataMember] public string DistName;
         [DataMember] public string DistCreated;
+        [DataMember] public bool CloudFreeLocal;      // コピー先が OneDrive など：コピーしたファイルをこのPCに残さない（アップロード後に空ける）
+        [DataMember] public int CloudReserveMB;       // コピー先が OneDrive など：このPCの空きがこれを下回りそうならアップロードを待つ
         [DataMember] public List<JobConfig> Jobs;
 
         public AppSettings() { SetDefaults(); }
@@ -54,6 +56,8 @@ namespace AutoCopy
             AttentionRemindMinutes = 120;
             AttentionAutoClose = true;
             AttentionCloseSeconds = 60;
+            CloudFreeLocal = true;
+            CloudReserveMB = 2048;
             Jobs = new List<JobConfig>();
         }
 

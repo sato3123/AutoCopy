@@ -137,6 +137,8 @@ namespace AutoCopy
             List<string> syncs = new List<string>();
             foreach (JobConfig j in Settings.Jobs) if (j.Sync) syncs.Add(CopyEngine.ResolvedSource(j, Settings));
             SafeFs.SetSyncRoots(syncs);
+            CloudFiles.FreeLocalEnabled = Settings.CloudFreeLocal;
+            CloudFiles.ReserveBytes = Math.Max(0, Settings.CloudReserveMB) * 1024L * 1024;
             Logger.Configure(Settings);
             lock (sync)
             {

@@ -668,7 +668,18 @@ namespace AutoCopy
             Guard(dst + PartSuffix);
             string parent = Path.GetDirectoryName(PathUtil.Plain(dst));
             CreateDirectory(parent);
-            return CopyVerifiedAndCommit(src, dst, srcMtimeUtc, throttle, ct, onBytes, expect, onCommitted);
+            // コピー先が OneDrive などのクラウド同期フォルダ：このPCの空きが少なければアップロードで空くのを待ち、
+            // コピーしたファイルには「このPCに残さない」の印を付ける（アップロード後は中身がクラウドだけになる）
+            bool cloud = CloudFiles.FreeLocalEnabled && CloudFiles.IsCloudFolder(parent);
+            if (cloud)
+            {
+                long need = 0;
+                try { need = new FileInfo(PathUtil.Long(src)).Length; } catch (Exception) { }
+                CloudFiles.WaitForLocalSpace(parent, need, CloudFiles.ReserveBytes, CloudFiles.MaxWait, CloudFiles.Poll, ct);
+            }
+            byte[] hash = CopyVerifiedAndCommit(src, dst, srcMtimeUtc, throttle, ct, onBytes, expect, onCommitted);
+            if (cloud) CloudFiles.FreeLocalCopy(dst);
+            return hash;
         }
     }
 

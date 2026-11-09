@@ -94,6 +94,15 @@ jobs:
           "AC_USER=$env:COMPUTERNAME\actest" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
           "AC_PASS=$pw"                  | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
 
+      # OneDrive と同じしくみ（Cloud Files）の試験（T127）のため、クラウド ファイルのドライバーが動いているか確かめる
+      - name: Cloud Files filter (for the OneDrive test)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          sc.exe query cldflt
+          fltmc load cldflt 2>&1 | Out-String | Write-Host
+          fltmc filters | Out-String | Write-Host
+
       - name: Run tests
         shell: pwsh
         run: |

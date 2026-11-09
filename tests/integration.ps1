@@ -190,6 +190,13 @@ $before = ([regex]::Matches((ULog), '前にこの版')).Count
 Start-Process -FilePath $appExe -ArgumentList '/checkupdate' -Wait
 $ok = WaitFor { ([regex]::Matches((ULog), '前にこの版')).Count -gt $before } 30
 Check 'I24' '一度失敗した版には、もう一度更新しない' ($ok -and (Ver $appExe) -eq '99.0.0.0') ("版: " + (Ver $appExe))
+
+# 手で記録を消して、失敗した版への更新をもう一度行う（/retryupdate）。版 100 はまた起動できないので、もう一度前の版に戻して記録する
+$rbBefore = ([regex]::Matches((ULog), '前の版（99.0.0.0）に戻しました')).Count
+$p3 = @(AppProcs)[0]
+Start-Process -FilePath $appExe -ArgumentList '/retryupdate' -Wait
+$ok = WaitFor { ([regex]::Matches((ULog), '前の版（99.0.0.0）に戻しました')).Count -gt $rbBefore -and (Ver $appExe) -eq '99.0.0.0' -and (AppProcs) -and $p3.HasExited } 120
+Check 'I25' '手で失敗の記録を消すと、その版への更新をもう一度行う（また失敗したら前の版に戻して記録し直す）' ($ok -and (ULog) -match '記録を消しました' -and (Test-Path $blocked) -and (Get-Content $blocked) -eq '100.0.0.0') ("版: " + (Ver $appExe) + "・記録: " + $(if (Test-Path $blocked) { Get-Content $blocked } else { 'なし' }))
 AppProcs | Stop-Process -Force
 
 $md = @('| No | テスト | 結果 | メモ |', '| --- | --- | --- | --- |') + $results

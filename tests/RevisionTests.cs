@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
@@ -50,6 +51,9 @@ namespace AutoCopy.Tests
             Add("T122", "新しいジョブの保存後の案内：既定は「あとで（無効のまま）」・有効にするには選ぶ必要がある", EnableJobChoice);
             Add("T123", "右クリック「エクスプローラーで保存先を開く」：開く場所の決め方（ファイル → コピー元 → 近いフォルダ）と、一覧への付け方", OpenLocation);
             Add("T124", "日本時間（UTC+9）でも保存できる：未設定（MinValue）の日時を JSON に保存しても「UTC への変換時…範囲外」にならない・値と比較は変わらない", JsonDatesSafe);
+            Add("T125", "更新に失敗した版の記録を手で消して、もう一度更新できる（記録がないときも安全）", RetryBlockedUpdate);
+            Add("T126", "OneDrive：クラウド用の印・「クラウドだけ」の判定・OneDrive のフォルダの判定・空きを待つ・ジャンクションは今まで通り調べない", CloudBasics);
+            Add("T127", "OneDrive と同じしくみ（Windows の Cloud Files）の同期フォルダで：中まで調べる・クラウドだけのファイルを読まない（ダウンロードしない）・コピーしたファイルはこのPCに残さない", CloudSyncRoot);
             Add("T112", "終了時の停止待ちは上限まで（止まらない処理があっても終了できる）", StopTimeout);
         }
 
@@ -794,6 +798,244 @@ namespace AutoCopy.Tests
             JsonDates.MakeSafe(big);
             True(sw.ElapsedMilliseconds < 5000, "10万件: " + sw.ElapsedMilliseconds + "ms");
             Json.Serialize(big);
+        }
+
+        private static void RetryBlockedUpdate()
+        {
+            string keep = File.Exists(Updater.BlockedFile) ? File.ReadAllText(Updater.BlockedFile) : null;
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(Updater.BlockedFile));
+                File.WriteAllText(Updater.BlockedFile, "100.0.0.0");
+                Eq("100.0.0.0", Updater.BlockedVersion(), "失敗した版の記録");
+                Eq(null, Updater.ClearBlocked(), "記録を消す");
+                Eq(null, Updater.BlockedVersion(), "記録がなくなる（次の確認でもう一度更新する）");
+                True(!File.Exists(Updater.BlockedFile), "記録のファイルがない");
+                Eq(null, Updater.ClearBlocked(), "記録がないときに消しても失敗しない");
+                True(Updater.BlockedReasonPrefix.Length > 0, "理由の文の頭（画面で「もう一度試す」を出す判断に使う）");
+            }
+            finally
+            {
+                if (keep != null) File.WriteAllText(Updater.BlockedFile, keep); else if (File.Exists(Updater.BlockedFile)) File.Delete(Updater.BlockedFile);
+            }
+        }
+
+        private static void CloudBasics()
+        {
+            True(CloudFiles.IsCloudTag(0x9000001A) && CloudFiles.IsCloudTag(0x9000401A) && CloudFiles.IsCloudTag(0x9000F01A), "クラウド用の印（CLOUD・CLOUD_4・CLOUD_F）");
+            True(CloudFiles.IsCloudTag(CloudFiles.IO_REPARSE_TAG_ONEDRIVE), "OneDrive の印");
+            True(!CloudFiles.IsCloudTag(CloudFiles.IO_REPARSE_TAG_MOUNT_POINT) && !CloudFiles.IsCloudTag(CloudFiles.IO_REPARSE_TAG_SYMLINK) && !CloudFiles.IsCloudTag(0), "ジャンクション・シンボリックリンクは違う");
+            True(CloudFiles.IsCloudOnly((FileAttributes)CloudFiles.FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS), "クラウドだけ（読むとダウンロード）");
+            True(CloudFiles.IsCloudOnly((FileAttributes)CloudFiles.FILE_ATTRIBUTE_RECALL_ON_OPEN), "クラウドだけ（開くとダウンロード）");
+            True(CloudFiles.IsCloudOnly(FileAttributes.Offline), "オフラインの印");
+            True(!CloudFiles.IsCloudOnly(FileAttributes.Archive | FileAttributes.ReparsePoint | (FileAttributes)CloudFiles.FILE_ATTRIBUTE_PINNED), "このPCにあるファイル（常に保持）");
+
+            Box b = new Box("T126");
+            // ジャンクションは今まで通り中を調べない（ループ・二重のおそれ）
+            Directory.CreateDirectory(Path.Combine(b.Src, "本物"));
+            b.W(@"本物\a.txt", "a");
+            string jn = Path.Combine(b.Src, "ジャンクション");
+            System.Diagnostics.ProcessStartInfo psi = new System.Diagnostics.ProcessStartInfo("cmd.exe", "/c mklink /J \"" + jn + "\" \"" + Path.Combine(b.Src, "本物") + "\"");
+            psi.UseShellExecute = false; psi.CreateNoWindow = true;
+            System.Diagnostics.Process.Start(psi).WaitForExit();
+            True(Directory.Exists(jn), "ジャンクションを作れた");
+            Eq(CloudFiles.IO_REPARSE_TAG_MOUNT_POINT, CloudFiles.ReparseTag(jn), "ジャンクションの印");
+            True(CloudFiles.SkipLinkDir(jn, File.GetAttributes(jn)), "ジャンクションは調べない");
+            True(!CloudFiles.SkipLinkDir(Path.Combine(b.Src, "本物"), File.GetAttributes(Path.Combine(b.Src, "本物"))), "普通のフォルダは調べる");
+            ScanResult sc = Scanner.Scan(b.Src, true, null, false, CancellationToken.None);
+            True(sc.Files.ContainsKey(@"本物\a.txt") && !sc.Files.ContainsKey(@"ジャンクション\a.txt"), "ジャンクションの中は数えない");
+
+            // OneDrive のフォルダ（環境変数）の中か
+            string od = Path.Combine(b.Root, "OneDrive - 会社");
+            Directory.CreateDirectory(od);
+            string keepEnv = Environment.GetEnvironmentVariable("OneDriveCommercial");
+            try
+            {
+                Environment.SetEnvironmentVariable("OneDriveCommercial", od);
+                CloudFiles.ClearCache();
+                True(CloudFiles.IsCloudFolder(Path.Combine(od, @"バックアップ\まだない")), "OneDrive の中（まだないフォルダも）");
+                True(!CloudFiles.IsCloudFolder(b.Dst), "OneDrive の外");
+                True(!CloudFiles.IsCloudFolder(od + "2"), "名前が似ているだけの別のフォルダ");
+                // OneDrive へのコピー：コピーはでき、中身は同じ（印を付けられない普通のフォルダでもコピーは失敗しない）
+                b.W("doc.txt", "OneDrive へ");
+                byte[] h = SafeFs.CopyFile(Path.Combine(b.Src, "doc.txt"), Path.Combine(od, @"バックアップ\doc.txt"), File.GetLastWriteTimeUtc(Path.Combine(b.Src, "doc.txt")), null, CancellationToken.None);
+                True(h != null && File.ReadAllText(Path.Combine(od, @"バックアップ\doc.txt")) == "OneDrive へ", "OneDrive のフォルダへコピーできる");
+            }
+            finally { Environment.SetEnvironmentVariable("OneDriveCommercial", keepEnv); CloudFiles.ClearCache(); }
+
+            // このPCの空きを待つ
+            long[] free = { 100 };
+            CloudFiles.FreeBytesForTest = delegate(string f) { return free[0]; };
+            try
+            {
+                TimeSpan w = CloudFiles.WaitForLocalSpace(od, 10, 50, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(100), CancellationToken.None);
+                True(w < TimeSpan.FromSeconds(1), "空きが足りていれば待たない");
+                bool full = false;
+                System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+                try { CloudFiles.WaitForLocalSpace(od, 80, 50, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(100), CancellationToken.None); }
+                catch (IOException ex) { full = ErrorKind.Classify(ex) == ErrorKind.DiskFull; True(ex.Message.Contains("OneDrive"), "理由: " + ex.Message); }
+                True(full, "待っても空かなければ容量不足として止める");
+                True(sw.ElapsedMilliseconds >= 900 && sw.ElapsedMilliseconds < 5000, "決めた時間だけ待つ: " + sw.ElapsedMilliseconds + "ms");
+                // 待っている間に空いたら続ける（アップロードで空いた）
+                System.Threading.Timer t = new System.Threading.Timer(delegate { free[0] = 1000; }, null, 400, System.Threading.Timeout.Infinite);
+                w = CloudFiles.WaitForLocalSpace(od, 80, 50, TimeSpan.FromSeconds(10), TimeSpan.FromMilliseconds(100), CancellationToken.None);
+                True(w >= TimeSpan.FromMilliseconds(300) && w < TimeSpan.FromSeconds(5), "空いたら続ける: " + w.TotalMilliseconds + "ms");
+                t.Dispose();
+                free[0] = 0;
+                CancellationTokenSource cts = new CancellationTokenSource(300);
+                bool canceled = false;
+                try { CloudFiles.WaitForLocalSpace(od, 80, 50, TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(100), cts.Token); } catch (OperationCanceledException) { canceled = true; }
+                True(canceled, "中止したら待つのをやめる");
+                free[0] = -1;
+                True(CloudFiles.WaitForLocalSpace(od, 80, 50, TimeSpan.FromSeconds(30), TimeSpan.FromMilliseconds(100), CancellationToken.None) < TimeSpan.FromSeconds(1), "空きが分からないときは待たない");
+            }
+            finally { CloudFiles.FreeBytesForTest = null; }
+            True(CloudFiles.FreeBytes(b.Root) > 0, "本物の空き容量を読める");
+
+            // 前の版の設定（項目がない）でも、初期値は「このPCに残さない」・2 GB
+            AppSettings old = Json.Deserialize<AppSettings>("{\"FormatVersion\":1}");
+            True(old.CloudFreeLocal, "初期値：このPCに残さない");
+            Eq(2048, old.CloudReserveMB, "初期値：2 GB 残す");
+        }
+
+        // ---- Windows の Cloud Files（OneDrive と同じしくみ）を使った試験用の同期フォルダ ----
+        [StructLayout(LayoutKind.Sequential)]
+        private struct CF_SYNC_REGISTRATION
+        {
+            public uint StructSize;
+            public IntPtr ProviderName, ProviderVersion, SyncRootIdentity;
+            public uint SyncRootIdentityLength;
+            public IntPtr FileIdentity;
+            public uint FileIdentityLength;
+            public Guid ProviderId;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct CF_SYNC_POLICIES
+        {
+            public uint StructSize;
+            public ushort HydrationPrimary, HydrationModifier, PopulationPrimary, PopulationModifier;
+            public uint InSync, HardLink, PlaceholderManagement;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct CF_PLACEHOLDER_CREATE_INFO
+        {
+            public IntPtr RelativeFileName;
+            public long CreationTime, LastAccessTime, LastWriteTime, ChangeTime;
+            public uint FileAttributes;
+            public long FileSize;
+            public IntPtr FileIdentity;
+            public uint FileIdentityLength;
+            public uint Flags;
+            public int Result;
+            public long CreateUsn;
+        }
+        [DllImport("cldapi.dll", CharSet = CharSet.Unicode)] private static extern int CfRegisterSyncRoot(string path, ref CF_SYNC_REGISTRATION reg, ref CF_SYNC_POLICIES pol, uint flags);
+        [DllImport("cldapi.dll", CharSet = CharSet.Unicode)] private static extern int CfUnregisterSyncRoot(string path);
+        [DllImport("cldapi.dll", CharSet = CharSet.Unicode)] private static extern int CfCreatePlaceholders(string baseDir, [In, Out] CF_PLACEHOLDER_CREATE_INFO[] arr, uint count, uint flags, out uint processed);
+
+        private static int MakePlaceholder(string baseDir, string name, bool dir, long size, DateTime mtimeUtc, List<IntPtr> mem)
+        {
+            CF_PLACEHOLDER_CREATE_INFO[] a = new CF_PLACEHOLDER_CREATE_INFO[1];
+            IntPtr n = Marshal.StringToHGlobalUni(name); mem.Add(n);
+            byte[] id = Encoding.UTF8.GetBytes("id:" + name);
+            IntPtr ip = Marshal.AllocHGlobal(id.Length); Marshal.Copy(id, 0, ip, id.Length); mem.Add(ip);
+            long ft = mtimeUtc.ToFileTimeUtc();
+            a[0].RelativeFileName = n;
+            a[0].CreationTime = a[0].LastAccessTime = a[0].LastWriteTime = a[0].ChangeTime = ft;
+            a[0].FileAttributes = dir ? 0x10u : 0x80u;
+            a[0].FileSize = dir ? 0 : size;
+            a[0].FileIdentity = ip; a[0].FileIdentityLength = (uint)id.Length;
+            a[0].Flags = 0x2 /* MARK_IN_SYNC */ | (dir ? 0x1u /* DISABLE_ON_DEMAND_POPULATION */ : 0);
+            uint done;
+            int hr = CfCreatePlaceholders(baseDir, a, 1, 0, out done);
+            return hr != 0 ? hr : a[0].Result;
+        }
+
+        private static void CloudSyncRoot()
+        {
+            Box b = new Box("T127");
+            string root = Path.Combine(b.Root, "雲の同期フォルダ");
+            Directory.CreateDirectory(root);
+            List<IntPtr> mem = new List<IntPtr>();
+            CF_SYNC_REGISTRATION reg = new CF_SYNC_REGISTRATION();
+            reg.StructSize = (uint)Marshal.SizeOf(typeof(CF_SYNC_REGISTRATION));
+            reg.ProviderName = Marshal.StringToHGlobalUni("AutoCopyTest"); mem.Add(reg.ProviderName);
+            reg.ProviderVersion = Marshal.StringToHGlobalUni("1.0"); mem.Add(reg.ProviderVersion);
+            reg.ProviderId = Guid.NewGuid();
+            CF_SYNC_POLICIES pol = new CF_SYNC_POLICIES();
+            pol.StructSize = (uint)Marshal.SizeOf(typeof(CF_SYNC_POLICIES));
+            pol.HydrationPrimary = 2;    // FULL
+            pol.PopulationPrimary = 3;   // ALWAYS_FULL（一覧は最初から全部ある：同期の相手に頼まない）
+            int hr;
+            try { hr = CfRegisterSyncRoot(root, ref reg, ref pol, 0); }
+            catch (DllNotFoundException) { hr = -1; }
+            Console.WriteLine("  Cloud Files の同期フォルダの登録: 0x" + hr.ToString("X8"));
+            True(hr == 0, "Cloud Files の同期フォルダを作れる（この結果が NG なら、この環境では Cloud Files を試せていない）: 0x" + hr.ToString("X8"));
+            try
+            {
+                DateTime mt = new DateTime(2025, 4, 1, 3, 0, 0, DateTimeKind.Utc);
+                long size = 5 * 1024 * 1024;
+                Eq(0, MakePlaceholder(root, "雲フォルダ", true, 0, mt, mem), "クラウドのフォルダ（プレースホルダー）を作る");
+                string cdir = Path.Combine(root, "雲フォルダ");
+                Eq(0, MakePlaceholder(cdir, "a.bin", false, size, mt, mem), "クラウドだけのファイル a.bin");
+                Eq(0, MakePlaceholder(cdir, "b.bin", false, size, mt.AddDays(1), mem), "クラウドだけのファイル b.bin（同じ大きさ）");
+                uint tag = CloudFiles.ReparseTag(cdir);
+                Console.WriteLine("  フォルダの印: 0x" + tag.ToString("X8") + "・属性: " + File.GetAttributes(cdir));
+                True(CloudFiles.IsCloudTag(tag), "クラウドのフォルダはクラウド用の印（前の版はこの印のフォルダの中を調べなかった）: 0x" + tag.ToString("X8"));
+                True(CloudFiles.IsCloudFolder(root) && CloudFiles.IsCloudFolder(Path.Combine(root, @"新しい\フォルダ")), "同期フォルダの中と分かる（まだないフォルダも）");
+                True(!CloudFiles.IsCloudFolder(b.Dst), "普通のフォルダは同期フォルダではない");
+
+                // 中まで調べる
+                ScanResult sc = Scanner.Scan(root, true, null, false, CancellationToken.None);
+                True(sc.Files.ContainsKey(@"雲フォルダ\a.bin") && sc.Files.ContainsKey(@"雲フォルダ\b.bin"), "クラウドのフォルダの中のファイルを数える: " + string.Join(",", new List<string>(sc.Files.Keys).ToArray()));
+                ScanItem ai = sc.Files[@"雲フォルダ\a.bin"];
+                Eq(size, ai.Size, "大きさ（中身はなくても本当の大きさ）");
+                True(CloudFiles.IsCloudOnly(ai.Attr), "クラウドだけのファイルと分かる: " + ai.Attr);
+                // 中身はこのPCにない（同期の相手がいないので、読もうとすると失敗する＝ダウンロードが起きたら分かる）
+                bool readFails = false;
+                try { using (FileStream fs = new FileStream(Path.Combine(cdir, "a.bin"), FileMode.Open, FileAccess.Read)) fs.ReadByte(); }
+                catch (Exception ex) { readFails = true; Console.WriteLine("  クラウドだけのファイルを読むと: " + ex.Message); }
+                True(readFails, "中身はこのPCにない（読むとダウンロードが必要）");
+
+                // ジョブ：コピー元にも a.bin（同じ大きさ・日時）と新しいファイル。コピー先は同期フォルダ
+                Directory.CreateDirectory(Path.Combine(b.Src, "雲フォルダ"));
+                string sa = Path.Combine(b.Src, @"雲フォルダ\a.bin");
+                using (FileStream fs = new FileStream(sa, FileMode.Create)) fs.SetLength(size);
+                File.SetLastWriteTimeUtc(sa, mt);
+                b.W("新しい.txt", "このPCで作ったファイル");
+                b.Job.Dest = root;
+                b.Apply();
+                RunResult r = b.Run();
+                Eq(0, r.Errors, "エラーなし");
+                Eq(1, r.Copied, "新しいファイルだけコピー（クラウドだけの a.bin は同じなので読まない・上書きしない）");
+                string nd = Path.Combine(root, "新しい.txt");
+                True(File.Exists(nd) && File.ReadAllText(nd) == "このPCで作ったファイル", "同期フォルダへコピーできる");
+                int na = (int)File.GetAttributes(nd);
+                Console.WriteLine("  コピーしたファイルの属性: 0x" + na.ToString("X"));
+                True((na & CloudFiles.FILE_ATTRIBUTE_UNPINNED) != 0, "コピーしたファイルに「このPCに残さない」の印（アップロード後に空く）: 0x" + na.ToString("X"));
+                True(CloudFiles.IsCloudOnly(File.GetAttributes(Path.Combine(cdir, "a.bin"))), "a.bin はクラウドだけのまま（ダウンロードしていない）");
+
+                // コピー先の整理（重複チェック）：コピー先の b.bin（コピー元にない・a.bin と同じ大きさ）を読まない
+                DupResult d = DupChecker.Run(b.Job, AppCore.Settings, b.State, CancellationToken.None);
+                True(d != null, "コピー先の整理ができる");
+                True(d.CloudSkipped >= 1, "クラウドだけのファイルは中身を調べない: " + d.CloudSkipped + "件");
+                True(CloudFiles.IsCloudOnly(File.GetAttributes(Path.Combine(cdir, "b.bin"))), "b.bin はクラウドだけのまま");
+
+                // フォルダの重複ファイル探し：読まない
+                FolderDupResult fr = FolderDup.Find(root, true, 0, DupBasis.Content, CancellationToken.None, null);
+                Eq(2, fr.CloudSkipped, "クラウドだけの2件は中身を比べない");
+                Eq(0, fr.Errors.Count, "読めないエラーにしない: " + string.Join(" / ", fr.Errors.ToArray()));
+                FolderDupResult fn = FolderDup.Find(root, true, 0, DupBasis.Name | DupBasis.Size, CancellationToken.None, null);
+                Eq(0, fn.CloudSkipped, "中身を基準にしないときは、そもそも読まない");
+
+                // 使用量（容量の内訳）もクラウドのフォルダの中を数える
+                True(CloudFiles.IsCloudOnly(File.GetAttributes(Path.Combine(cdir, "a.bin"))) && CloudFiles.IsCloudOnly(File.GetAttributes(Path.Combine(cdir, "b.bin"))), "最後までダウンロードしていない");
+            }
+            finally
+            {
+                try { CfUnregisterSyncRoot(root); } catch (Exception) { }
+                foreach (IntPtr p in mem) Marshal.FreeHGlobal(p);
+            }
         }
 
         private static void MessageFits()
