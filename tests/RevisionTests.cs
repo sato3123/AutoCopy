@@ -54,6 +54,7 @@ namespace AutoCopy.Tests
             Add("T125", "更新に失敗した版の記録を手で消して、もう一度更新できる（記録がないときも安全）", RetryBlockedUpdate);
             Add("T126", "OneDrive：クラウド用の印・「クラウドだけ」の判定・OneDrive のフォルダの判定・空きを待つ・ジャンクションは今まで通り調べない", CloudBasics);
             Add("T127", "OneDrive と同じしくみ（Windows の Cloud Files）の同期フォルダで：中まで調べる・クラウドだけのファイルを読まない（ダウンロードしない）・コピーしたファイルはこのPCに残さない", CloudSyncRoot);
+            Add("T128", "画面の表示：並列数の説明が実際の動き（自動＝最大4件）と同じ・上書きの確認で「共有フォルダの方を使う」は同期のものだけ・同期の行は橙・重複の「大きさ」の表示・操作の対象の表示", UiConsistency);
             Add("T112", "終了時の停止待ちは上限まで（止まらない処理があっても終了できる）", StopTimeout);
         }
 
@@ -1094,6 +1095,96 @@ namespace AutoCopy.Tests
                 try { CfUnregisterSyncRoot(root2); } catch (Exception) { }
                 foreach (IntPtr p in mem) Marshal.FreeHGlobal(p);
             }
+        }
+
+        private static List<System.Windows.Forms.Control> AllControls(System.Windows.Forms.Control root)
+        {
+            List<System.Windows.Forms.Control> l = new List<System.Windows.Forms.Control>();
+            Stack<System.Windows.Forms.Control> st = new Stack<System.Windows.Forms.Control>(); st.Push(root);
+            while (st.Count > 0) { System.Windows.Forms.Control c = st.Pop(); l.Add(c); foreach (System.Windows.Forms.Control k in c.Controls) st.Push(k); }
+            return l;
+        }
+
+        private static void UiConsistency()
+        {
+            // 1) 並列数：自動のときの説明と、実際に使う数（CopyEngine：0 = 4件）が同じ
+            string eng = File.ReadAllText(Path.Combine(FindRepoFile("src"), "CopyEngine.cs"), Encoding.UTF8);
+            True(eng.Contains("int degree = job.Parallel > 0 ? job.Parallel : 4;"), "自動のときは同時に4件（コピーの処理）");
+            using (JobEditForm jf = new JobEditForm(new JobConfig(), true))
+            {
+                bool found = false;
+                foreach (System.Windows.Forms.Control c in AllControls(jf))
+                    if (c is System.Windows.Forms.CheckBox && c.Text.StartsWith("自動（")) { found = true; True(c.Text.Contains("最大 4 件") && !c.Text.Contains("2"), "並列数の説明: " + c.Text); }
+                True(found, "並列数の「自動」の欄がある");
+            }
+
+            // 2) 3) 上書きの確認：同期の行は橙、「共有フォルダの方を使う」は同期のものだけにチェックしたときに押せる
+            Box b = new Box("T128");
+            b.Job.Sync = true; b.Job.Name = "同期のジョブ";
+            JobConfig normal = b.Job.Clone(); normal.Id = Guid.NewGuid().ToString("N"); normal.Name = "普通のジョブ"; normal.Sync = false;
+            b.App.Jobs.Add(normal);
+            b.Apply();
+            ConflictItem c1 = new ConflictItem(); c1.Rel = "同期.txt"; c1.Reason = "both";
+            ConflictItem c2 = new ConflictItem(); c2.Rel = "普通.txt"; c2.Reason = "newer";
+            JobState s1 = AppCore.GetState(b.Job.Id), s2 = AppCore.GetState(normal.Id);
+            lock (s1) s1.Conflicts.Add(c1);
+            lock (s2) s2.Conflicts.Add(c2);
+            try
+            {
+                using (ConflictForm cf = new ConflictForm())
+                {
+                    System.Windows.Forms.ListView lv = null;
+                    System.Windows.Forms.Button ts = null;
+                    foreach (System.Windows.Forms.Control c in AllControls(cf))
+                    {
+                        if (c is System.Windows.Forms.ListView && lv == null) lv = (System.Windows.Forms.ListView)c;
+                        if (c is System.Windows.Forms.Button && c.Text.StartsWith("共有フォルダの方を使う")) ts = (System.Windows.Forms.Button)c;
+                    }
+                    True(lv != null && ts != null, "一覧とボタンがある");
+                    IntPtr hf = cf.Handle, hl = lv.Handle;   // チェックの変化を受け取れるように、画面を作っておく（表示はしない）
+                    System.Windows.Forms.ListViewItem syncRow = null, normRow = null;
+                    foreach (System.Windows.Forms.ListViewItem it in lv.Items) { if (it.Text == "同期.txt") syncRow = it; if (it.Text == "普通.txt") normRow = it; }
+                    True(syncRow != null && normRow != null, "2件とも出る");
+                    Eq(Ui.Warn, syncRow.ForeColor, "同期のジョブの行は橙のまま（前は直後に黒で上書きしていた）");
+                    Eq(System.Drawing.SystemColors.WindowText, normRow.ForeColor, "普通のジョブの行は黒");
+                    True(!ts.Enabled && cf.TakeSharedReason() != null, "何もチェックしていないときは押せない: " + cf.TakeSharedReason());
+                    syncRow.Checked = true;
+                    True(ts.Enabled && cf.TakeSharedReason() == null, "同期のものだけチェック：押せる");
+                    normRow.Checked = true;
+                    True(!ts.Enabled && cf.TakeSharedReason().Contains("普通のジョブ"), "普通のジョブも混ざる：押せない・理由にジョブ名: " + cf.TakeSharedReason());
+                    syncRow.Checked = false;
+                    True(!ts.Enabled, "普通のジョブだけ：押せない");
+                }
+            }
+            finally { lock (s1) s1.Conflicts.Clear(); lock (s2) s2.Conflicts.Clear(); }
+
+            // 5) フォルダの重複ファイル探し：「中身」のときは「大きさ」をチェックした状態で灰色（含まれる）。やめたら前の選択に戻す。検索の条件は前と同じ
+            using (FolderDupForm fd = new FolderDupForm(null))
+            {
+                IntPtr hfd = fd.Handle;
+                True(fd.ContentBox.Checked && !fd.SizeBox.Enabled && fd.SizeBox.Checked, "中身：大きさは「含まれる」表示");
+                Eq(DupBasis.Content, fd.Basis, "条件は中身だけ（大きさは中身に含まれる・前と同じ）");
+                fd.ContentBox.Checked = false;
+                True(fd.SizeBox.Enabled && !fd.SizeBox.Checked, "中身をやめたら、前の選択（チェックなし）に戻す");
+                fd.SizeBox.Checked = true;
+                fd.ContentBox.Checked = true;
+                True(!fd.SizeBox.Enabled && fd.SizeBox.Checked, "中身にしたら灰色・チェック");
+                fd.ContentBox.Checked = false;
+                True(fd.SizeBox.Enabled && fd.SizeBox.Checked, "中身をやめたら、前の選択（チェックあり）に戻す");
+                fd.Basis = DupBasis.Name | DupBasis.Size;
+                Eq(DupBasis.Name | DupBasis.Size, fd.Basis, "名前＋大きさ");
+                fd.Basis = DupBasis.Content | DupBasis.Mtime;
+                Eq(DupBasis.Content | DupBasis.Mtime, fd.Basis, "中身＋日時");
+                True(fd.SizeBox.Checked && !fd.SizeBox.Enabled, "中身のときは「含まれる」表示");
+            }
+
+            // 6) 7) 操作の対象の表示
+            True(MainForm.TargetText(0, null, 0).Contains("ジョブがありません"), "ジョブなし");
+            True(MainForm.TargetText(0, null, 3).Contains("選んでいません"), "選んでいない");
+            string one = MainForm.TargetText(0, "経理", 1);
+            True(one.Contains("「経理」") && one.Contains("選んだジョブを実行"), "1件だけ：編集などはそのジョブ・実行は選んでから: " + one);
+            Eq("操作の対象：「経理」", MainForm.TargetText(1, "経理", 3), "1件選んだ");
+            True(MainForm.TargetText(2, "経理", 3).Contains("2件") && MainForm.TargetText(2, "経理", 3).Contains("「経理」"), "複数選んだ");
         }
 
         private static void MessageFits()

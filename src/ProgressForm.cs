@@ -24,6 +24,7 @@ namespace AutoCopy
             jobs.Dock = DockStyle.Top;
             jobs.Height = Ui.S(140);
             foreach (int i in new int[] { 2, 3, 4, 5, 6 }) jobs.Columns[i].TextAlign = HorizontalAlignment.Right;
+            jobs.HideSelection = false;
             jobs.SelectedIndexChanged += delegate
             {
                 if (jobs.SelectedItems.Count > 0) { selectedId = jobs.SelectedItems[0].Tag as string; Refresh2(); }
@@ -126,6 +127,7 @@ namespace AutoCopy
                 for (int c = 0; c < cols.Length; c++) if (it.SubItems[c].Text != cols[c]) it.SubItems[c].Text = cols[c];
                 it.ForeColor = rt.Running ? Ui.Accent : !j.Enabled ? Ui.Quiet : SystemColors.WindowText;
                 it.Font = j.Id == selectedId ? Ui.Bold : Ui.Base;
+                it.BackColor = j.Id == selectedId ? Ui.InfoBack : SystemColors.Window;   // 下に詳しく出しているジョブの行を色で示す
             }
             ((AcListView)jobs).Resort();   // 見出しで並べ替えている場合は、更新した後に並べ直す
             jobs.EndUpdate();
@@ -136,14 +138,15 @@ namespace AutoCopy
             JobProgress sp2 = srt != null && srt.Progress != null ? srt.Progress.Snapshot() : null;
             stop.Enabled = srt != null && srt.Running;
             if (sel == null) { lPhase.Text = "ジョブがありません"; return; }
+            string shown = "表示中：" + sel.Name + "　";   // 上の一覧のどのジョブを下に出しているか
             if (sp2 == null)
             {
-                lPhase.Text = sel.Name + "：" + (srt.Running ? srt.Phase : "まだ実行していません（この画面を開いた後の実行から表示します）");
+                lPhase.Text = shown + (srt.Running ? srt.Phase : "まだ実行していません（この画面を開いた後の実行から表示します）");
                 bar.Value = 0; lFiles.Text = lBytes.Text = lSpeed.Text = lLast.Text = "";
                 files.Items.Clear();
                 return;
             }
-            lPhase.Text = sel.Name + "：" + sp2.Phase + (sp2.TotalFiles == 0 && sp2.Scanned > 0 ? "（" + Fmt.Count(sp2.Scanned) + "件を調べました）" : "");
+            lPhase.Text = shown + sp2.Phase + (sp2.TotalFiles == 0 && sp2.Scanned > 0 ? "（" + Fmt.Count(sp2.Scanned) + "件を調べました）" : "");
             bar.Value = (int)Math.Round(Math.Max(0, Math.Min(100, sp2.Percent)) * 10);
             if (sp2.TotalFiles > 0)
             {

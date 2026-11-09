@@ -67,7 +67,7 @@ namespace AutoCopy
                     Ui.B("参照…", delegate { string f = Ui.BrowseFolder(this, tUpdate.Text, "新しい AutoCopy.exe を置くフォルダ（NAS の配布フォルダなど）を選んでください"); if (f != null) tUpdate.Text = NetAccess.ToUncIfMapped(f); })),
                 cAutoUpdate,
                 Ui.Hint("置き場所の AutoCopy.exe が今の版（" + Updater.CurrentVersion + "）より新しく、今と同じ証明書でデジタル署名されているときだけ更新します。"),
-                Ui.Row(bCheckUpdate = Ui.B("今すぐ確認", delegate { if (Save() && TrayApp.Instance != null) TrayApp.Instance.CheckUpdate(true); })),
+                Ui.Row(bCheckUpdate = Ui.B("設定を保存して、更新を今すぐ確認", delegate { if (Save() && TrayApp.Instance != null) TrayApp.Instance.CheckUpdate(true); })),
                 Ui.Row(lBlocked = Ui.L(""), bRetryUpdate = Btn.MakeCaution(Ui.B("記録を消して、この版への更新をもう一度試す…", delegate { RetryUpdate(); })))));
             UpdateBlocked();
 
@@ -209,7 +209,7 @@ namespace AutoCopy
             if (string.IsNullOrEmpty(v)) { UpdateBlocked(); return; }
             if (!Ui.Confirm(this, "前に版 " + v + " への更新に失敗したため、その版には自動で更新しないようにしています。\n\n"
                 + "記録を消して、もう一度更新を試しますか？\n・コピー中や画面を開いている間は、終わるまで待ってから更新します。\n"
-                + "・新しい版がまた起動できなかったときは、今と同じように前の版に戻し、もう一度記録します（データは変えません）。")) return;
+                + "・新しい版がまた起動できなかったときは、今と同じように前の版に戻し、もう一度記録します（データは変えません）。\n・この画面の設定も保存します。")) return;
             if (!Save()) return;
             string err = Updater.ClearBlocked();
             if (err != null) { Ui.Error(this, err); return; }

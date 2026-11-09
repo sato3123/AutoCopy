@@ -8,6 +8,10 @@ namespace AutoCopy
     public class MainForm : Form
     {
         private readonly ListView jobs;
+        // ジョブを選ぶ必要があるボタン（選んでいないときは灰色。理由はマウスを重ねると出る）と、操作の対象の表示
+        private Button bRunSel, bStop, bEdit, bDup, bDel, bPreview;
+        private Label lTarget;
+        private readonly ReasonTips reasons = new ReasonTips();
         private readonly ListView notices;
         private readonly Label statusLabel;
         private readonly ProgressBar runBar;
@@ -43,7 +47,7 @@ namespace AutoCopy
 
             Button runAll = Btn.MakePrimary(Ui.B("すべて今すぐ実行", delegate { AppCore.RunAll(true); RefreshView(); }));
             // 中止：コピーの途中で止めるので確認する
-            Button stopBtn = Btn.MakeCaution(Ui.B("中止", delegate { StopSelected(); }));
+            Button stopBtn = bStop = Btn.MakeCaution(Ui.B("中止", delegate { StopSelected(); }));
 
             FlowLayoutPanel bar = new FlowLayoutPanel();
             bar.Dock = DockStyle.Top;
@@ -52,21 +56,21 @@ namespace AutoCopy
             bar.BackColor = Color.White;
             bar.Controls.AddRange(new Control[] {
                 runAll,
-                Ui.B("選んだジョブを実行", delegate { RunSelected(false); }),
+                bRunSel = Ui.B("選んだジョブを実行", delegate { RunSelected(false); }),
                 pauseBtn,
                 stopBtn,
                 Sep(),
                 Ui.B("ジョブを追加", delegate { AddJob(); }),
-                Ui.B("編集", delegate { string id = FirstSelected(); if (id != null) EditJob(id); }),
-                Ui.B("複製", delegate { DuplicateJob(); }),
-                Btn.MakeDanger(Ui.B("削除", delegate { DeleteJob(); })),
+                bEdit = Ui.B("編集", delegate { string id = FirstSelected(); if (id != null) EditJob(id); }),
+                bDup = Ui.B("複製", delegate { DuplicateJob(); }),
+                bDel = Btn.MakeDanger(Ui.B("削除", delegate { DeleteJob(); })),
                 Sep(),
                 Ui.B("上書きの確認", delegate { TrayApp.Instance.ShowConflicts(); }),
                 DupMenuButton(),
                 RestoreMenuButton(),
                 Sep(),
                 Ui.B("作業状況", delegate { TrayApp.Instance.ShowProgress(FirstSelected()); }),
-                Ui.B("結果の予測", delegate { string id = FirstSelected(); if (id == null && AppCore.Settings.Jobs.Count > 0) id = AppCore.Settings.Jobs[0].Id; if (id != null) TrayApp.Instance.ShowPreview(id); }),
+                bPreview = Ui.B("結果の予測", delegate { string id = FirstSelected(); if (id == null && AppCore.Settings.Jobs.Count > 0) id = AppCore.Settings.Jobs[0].Id; if (id != null) TrayApp.Instance.ShowPreview(id); }),
                 Ui.B("ログ", delegate { TrayApp.Instance.ShowLog(); }),
                 Ui.B("容量の内訳", delegate { ShowUsage(); }),
                 Sep(),
@@ -105,6 +109,8 @@ namespace AutoCopy
             jobs.ItemChecked += OnItemChecked;
             jobs.DoubleClick += delegate { string id = FirstSelected(); if (id != null) EditJob(id); };
             jobs.ContextMenuStrip = BuildJobMenu();
+            jobs.HideSelection = false;   // ボタンを押すときも、選んでいるジョブが見えるように
+            jobs.SelectedIndexChanged += delegate { UpdateSelectionUi(); };
             // チェック欄の真上：すべてのジョブの有効/無効をまとめて切り替える
             Panel jobBar = Ui.CheckAllBar(jobs, "すべてのジョブを有効／無効にする", delegate(bool on) { SetAllEnabled(on); },
                 Ui.Hint("（チェック＝有効。ダブルクリックでジョブの編集。見出しをクリックすると並べ替え）"));
@@ -156,7 +162,25 @@ namespace AutoCopy
             st3.TextAlign = ContentAlignment.MiddleRight;
             ss.Items.AddRange(new ToolStripItem[] { st1, st2, st3 });
 
+            // 操作の対象（どのジョブに対して編集・実行するか）
+            lTarget = Ui.Hint("");
+            lTarget.Margin = new Padding(Ui.S(8), Ui.S(3), 3, Ui.S(3));
+            FlowLayoutPanel targetBar = new FlowLayoutPanel();
+            targetBar.Dock = DockStyle.Top;
+            targetBar.AutoSize = true;
+            targetBar.BackColor = Color.White;
+            targetBar.Controls.Add(lTarget);
+            Resize += delegate { lTarget.MaximumSize = new Size(Math.Max(Ui.S(300), ClientSize.Width - Ui.S(24)), 0); };
+            lTarget.MaximumSize = new Size(Math.Max(Ui.S(300), ClientSize.Width - Ui.S(24)), 0);
+            reasons.Set(bEdit, delegate { return FirstSelected() == null ? "一覧でジョブを選んでください" : null; });
+            reasons.Set(bDup, delegate { return FirstSelected() == null ? "一覧でジョブを選んでください" : null; });
+            reasons.Set(bDel, delegate { return FirstSelected() == null ? "一覧でジョブを選んでください" : null; });
+            reasons.Set(bRunSel, delegate { return SelectedIds().Count == 0 ? "一覧で実行するジョブを選んでください（すべて実行するときは「すべて今すぐ実行」）" : null; });
+            reasons.Set(bStop, delegate { return SelectedIds().Count == 0 ? "一覧で中止するジョブを選んでください" : null; });
+            reasons.Set(bPreview, delegate { return AppCore.Settings.Jobs.Count == 0 ? "ジョブがありません。「ジョブを追加」で作ってください" : null; });
+
             Controls.Add(jobs);
+            Controls.Add(targetBar);
             Controls.Add(jobBar);
             Controls.Add(noticePanel);
             Controls.Add(band);
@@ -573,6 +597,37 @@ namespace AutoCopy
             st1.Text = s.FolderName + "（" + Environment.MachineName + "）";
             st2.Text = s.DistVersion > 0 ? "配布設定 " + (s.DistName ?? "") + " 第" + s.DistVersion + "版" : "配布設定なし";
             st3.Text = string.IsNullOrEmpty(s.LogRoot) ? "ログ：このPCのみ" : "ログ保管先：" + s.LogRoot;
+            UpdateSelectionUi();
+        }
+
+        /// <summary>
+        /// 選んでいるジョブに合わせて、ボタンの押せる・押せないと「操作の対象」の表示を変える。
+        /// 対象の決め方（FirstSelected・SelectedIds）はそのまま使う：
+        /// 編集・複製・削除・結果の予測は「選んだジョブ（1件だけならそのジョブ）」、実行・中止は「選んだジョブ」。
+        /// </summary>
+        private void UpdateSelectionUi()
+        {
+            if (lTarget == null || IsDisposed) return;
+            string first = FirstSelected();
+            int sel = SelectedIds().Count;
+            JobConfig fj = first != null ? AppCore.FindJob(first) : null;
+            bEdit.Enabled = bDup.Enabled = bDel.Enabled = first != null;
+            bRunSel.Enabled = bStop.Enabled = sel > 0;
+            bPreview.Enabled = AppCore.Settings.Jobs.Count > 0;
+            lTarget.Text = TargetText(sel, fj != null ? fj.Name : null, AppCore.Settings.Jobs.Count);
+            lTarget.ForeColor = sel == 0 && fj == null ? Ui.Quiet : Ui.Accent;
+        }
+
+        /// <summary>「操作の対象」の文（テスト用に公開）</summary>
+        public static string TargetText(int selected, string firstName, int jobCount)
+        {
+            if (jobCount == 0) return "ジョブがありません。「ジョブを追加」で作ってください。";
+            if (selected == 0)
+                return firstName != null
+                    ? "操作の対象：「" + firstName + "」（ジョブが1件のため、編集・複製・削除・結果の予測はこのジョブです。「選んだジョブを実行」「中止」は、一覧でクリックして選ぶと押せます）"
+                    : "ジョブを選んでいません（一覧でクリックして選ぶと、編集・実行などが押せます）";
+            if (selected == 1) return "操作の対象：「" + firstName + "」";
+            return "操作の対象：選んだ " + selected + "件（実行・中止は " + selected + "件すべて。編集・複製・削除は先頭の「" + firstName + "」）";
         }
 
         // ---------- ジョブの追加・編集 ----------

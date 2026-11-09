@@ -57,13 +57,25 @@ namespace AutoCopy
             cbName = Ui.C("ファイル名", false);
             cbMtime = Ui.C("更新日時", false);
             cbSize = Ui.C("大きさ", false);
+            // 中身で比べるときは、大きさも必ず同じ：「大きさ」はチェックを入れた状態で灰色にして「含まれる」ことを示す
+            // （中身をやめたら、利用者が前に選んでいた状態に戻す。検索の条件の求め方は変えない）
             EventHandler basisChanged = delegate
             {
-                cbSize.Enabled = !cbContent.Checked;   // 中身が同じなら大きさも同じ
-                if (cbContent.Checked && !cbSize.Checked) cbSize.Checked = false;
+                if (cbContent.Checked)
+                {
+                    if (cbSize.Enabled) sizeChoice = cbSize.Checked;
+                    cbSize.Enabled = false;
+                    cbSize.Checked = true;
+                }
+                else if (!cbSize.Enabled)
+                {
+                    cbSize.Enabled = true;
+                    cbSize.Checked = sizeChoice;
+                }
             };
             cbContent.CheckedChanged += basisChanged;
             basisChanged(null, EventArgs.Empty);
+            new ToolTip().SetToolTip(cbSize, "「中身」で比べるときは、大きさも必ず同じです（自動で含みます）");
             new ToolTip().SetToolTip(cbMtime, "2秒以内の差は同じとみなします（NAS・USBメモリの丸めのため）");
             new ToolTip().SetToolTip(cbName, "フォルダは問いません。大文字・小文字は区別しません");
             cbMin = Ui.SizeChoice(0, "小さいファイルも探す（すべて）", "{0} より小さいファイルは探さない");
@@ -143,6 +155,12 @@ namespace AutoCopy
         private long MinBytes { get { return Ui.SizeChoiceKB(cbMin) * 1024L; } }
 
         /// <summary>画面で選んだ「同じとみなす基準」</summary>
+        private bool sizeChoice;   // 「中身」をやめたときに戻す「大きさ」のチェック
+
+        /// <summary>画面の表示：「大きさ」のチェック欄（テスト用）</summary>
+        public CheckBox SizeBox { get { return cbSize; } }
+        public CheckBox ContentBox { get { return cbContent; } }
+
         public int Basis
         {
             get
@@ -159,7 +177,8 @@ namespace AutoCopy
                 cbContent.Checked = DupBasis.Has(value, DupBasis.Content);
                 cbName.Checked = DupBasis.Has(value, DupBasis.Name);
                 cbMtime.Checked = DupBasis.Has(value, DupBasis.Mtime);
-                cbSize.Checked = DupBasis.Has(value, DupBasis.Size);
+                if (cbContent.Checked) sizeChoice = DupBasis.Has(value, DupBasis.Size);   // 中身のときは「含まれる」表示のまま
+                else cbSize.Checked = DupBasis.Has(value, DupBasis.Size);
             }
         }
 

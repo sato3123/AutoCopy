@@ -71,6 +71,8 @@ namespace AutoCopy
     {
         private readonly ListView lv;
         private readonly CheckBox backup;
+        private Button takeShared;
+        private readonly ReasonTips reasons = new ReasonTips();
 
         public ConflictForm()
         {
@@ -93,7 +95,7 @@ namespace AutoCopy
             // 似た操作を並べ、まとまりの間を空ける：置き換える（橙・確認あり）｜上書きしない｜見る
             FlowLayoutPanel actions = Ui.WrapRow(Ui.L("チェックしたファイルを"),
                 Btn.MakeCaution(Ui.B("上書きする（このPCの方を使う）", delegate { Apply(AppCore.ActOverwrite); })),
-                Btn.MakeCaution(Ui.B("共有フォルダの方を使う（同期のみ）", delegate { Apply(AppCore.ActTakeShared); })),
+                takeShared = Btn.MakeCaution(Ui.B("共有フォルダの方を使う（同期のみ）", delegate { Apply(AppCore.ActTakeShared); })),
                 Btn.Gap(),
                 Ui.B("今回はスキップ", delegate { Apply(AppCore.ActSkipOnce); }),
                 Ui.B("今後も上書きしない", delegate { Apply(AppCore.ActSkipForever); }),
@@ -107,6 +109,9 @@ namespace AutoCopy
             Resize += delegate { actions.MaximumSize = new Size(Math.Max(200, ClientSize.Width - 30), 0); };
             actions.MaximumSize = new Size(Math.Max(200, ClientSize.Width - 30), 0);
 
+            // 「共有フォルダの方を使う」は、チェックしたものがすべて同期のジョブのときだけ押せる（押せない理由はマウスを重ねると出る）
+            lv.ItemChecked += delegate { UpdateTakeShared(); };
+            reasons.Set(takeShared, delegate { return TakeSharedReason(); });
             Controls.Add(lv);
             Controls.Add(checkBar);
             Controls.Add(top);
@@ -139,8 +144,7 @@ namespace AutoCopy
                     it.SubItems[2].Tag = c.SrcMtime;   // 並べ替えは日時の順
                     it.SubItems[3].Tag = c.DstMtime;
                     it.SubItems.Add(c.Reason == "newer" ? "コピー先が新しい" : c.Reason == "both" ? "同期：両方で変更" : c.Reason == "first" ? "同期：初回で中身が違う" : "日時同じ・サイズ違い");
-                    if (j.Sync) it.ForeColor = Ui.Warn;
-                    it.ForeColor = SystemColors.WindowText;
+                    it.ForeColor = j.Sync ? Ui.Warn : SystemColors.WindowText;   // 同期のジョブは橙（どちらの版を使うか選べる）
                     Row r = new Row(); r.Job = j; r.Item = c;
                     it.Tag = r;
                     lv.Items.Add(it);
@@ -149,6 +153,26 @@ namespace AutoCopy
             ((AcListView)lv).Resort();
             lv.EndUpdate();
             Text = "上書きの確認（" + lv.Items.Count + "件）";
+            UpdateTakeShared();
+        }
+
+        /// <summary>「共有フォルダの方を使う」を押せない理由（押せる = null）</summary>
+        public string TakeSharedReason()
+        {
+            int n = 0;
+            foreach (ListViewItem it in lv.CheckedItems)
+            {
+                Row r = it.Tag as Row;
+                if (r == null) continue;
+                if (!r.Job.Sync) return "同期ではないジョブのファイル（" + r.Job.Name + "）にチェックが入っています。同期のジョブのファイルだけにチェックを入れてください";
+                n++;
+            }
+            return n == 0 ? "同期のジョブのファイルにチェックを入れると押せます" : null;
+        }
+
+        private void UpdateTakeShared()
+        {
+            if (takeShared != null) takeShared.Enabled = TakeSharedReason() == null;
         }
 
         private void Apply(string action)

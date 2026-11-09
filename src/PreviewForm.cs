@@ -52,6 +52,7 @@ namespace AutoCopy
             kinds = Ui.List("種類|200", "件数|70", "容量|90");
             kinds.Dock = DockStyle.Left;
             kinds.Width = Math.Min(Ui.S(330), ClientSize.Width * 3 / 10);   // 画面が狭いときは右の一覧を広く
+            Resize += delegate { if (WindowState != FormWindowState.Minimized) kinds.Width = Math.Max(Ui.S(160), Math.Min(Ui.S(330), ClientSize.Width * 3 / 10)); };   // 幅を変えたら合わせる
             kinds.Columns[1].TextAlign = HorizontalAlignment.Right;
             kinds.Columns[2].TextAlign = HorizontalAlignment.Right;
             ((AcListView)kinds).Sortable = false;

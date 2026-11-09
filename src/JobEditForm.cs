@@ -249,7 +249,7 @@ namespace AutoCopy
                 Ui.Row(Ui.L("　　対象の大きさ", 160), nDedup, Ui.L("MB 以上")),
                 lDedupNote));
 
-            cParAuto = Ui.C("自動（おすすめ：ネットワークは 2、PC内は 4）", true);
+            cParAuto = Ui.C("自動（同時に最大 4 件）", true);
             nPar = Ui.N(1, 8, 2, 56);
             Adv(b, Ui.Row(Ui.L("同時にコピーする数", 130), cParAuto, nPar, Ui.Hint("個")));
             cBwLimit = Ui.C("転送速度を制限する", false);
