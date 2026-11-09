@@ -709,19 +709,20 @@ namespace AutoCopy.Tests
             }
         }
 
-        public struct T124S { public DateTime When; public int N; }
-        public class T124Inner { public DateTime When; public DateTime? Maybe; }
+        [System.Runtime.Serialization.DataContract] public struct T124S { [System.Runtime.Serialization.DataMember] public DateTime When; [System.Runtime.Serialization.DataMember] public int N; }
+        [System.Runtime.Serialization.DataContract] public class T124Inner { [System.Runtime.Serialization.DataMember] public DateTime When; [System.Runtime.Serialization.DataMember] public DateTime? Maybe; }
+        [System.Runtime.Serialization.DataContract]
         public class T124Box
         {
-            public DateTime A, B, Now;
-            public DateTime? N1, N2;
-            public List<DateTime> L = new List<DateTime>();
-            public Dictionary<string, DateTime> D = new Dictionary<string, DateTime>();
-            public List<T124S> LS = new List<T124S>();
-            public T124S S;
-            public T124Inner Child = new T124Inner();
-            public T124Inner[] Arr = new T124Inner[] { new T124Inner(), null };
-            public string Text = "そのまま";
+            [System.Runtime.Serialization.DataMember] public DateTime A, B, Now;
+            [System.Runtime.Serialization.DataMember] public DateTime? N1, N2;
+            [System.Runtime.Serialization.DataMember] public List<DateTime> L = new List<DateTime>();
+            [System.Runtime.Serialization.DataMember] public Dictionary<string, DateTime> D = new Dictionary<string, DateTime>();
+            [System.Runtime.Serialization.DataMember] public List<T124S> LS = new List<T124S>();
+            [System.Runtime.Serialization.DataMember] public T124S S;
+            [System.Runtime.Serialization.DataMember] public T124Inner Child = new T124Inner();
+            [System.Runtime.Serialization.DataMember] public T124Inner[] Arr = new T124Inner[] { new T124Inner(), null };
+            [System.Runtime.Serialization.DataMember] public string Text = "そのまま";
         }
 
         private static void JsonDatesSafe()
