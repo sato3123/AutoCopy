@@ -33,11 +33,11 @@ namespace AutoCopy
             cbRange = Ui.Combo(120, "今日", "直近1時間", "直近24時間", "直近7日", "直近30日", "期間を指定");
             dFrom = TimePicker(); dTo = TimePicker();
             dFrom.Value = DateTime.Today; dTo.Value = DateTime.Today.AddDays(1).AddMinutes(-1);
-            cbDevice = Ui.Combo(200, "すべて");
-            cbJob = Ui.Combo(160, "すべて");
+            cbDevice = Ui.Combo(150, "すべて");   // 絞り込みの帯が小さい画面でも1行に収まる幅
+            cbJob = Ui.Combo(140, "すべて");
             foreach (JobConfig j in AppCore.Settings.Jobs) cbJob.Items.Add(j.Name);
             cbType = Ui.Combo(130, "すべて", "エラーのみ", "コピー・上書き", "名前変更", "削除・復元", "確認待ち", "集計", "エラー・確認と対応状況", "対応状況のみ");
-            tSearch = Ui.T("", 140);
+            tSearch = Ui.T("", 120);
             cbDevice.SelectedIndexChanged += delegate { if (!quiet) ApplyFilter(); };
             cbJob.SelectedIndexChanged += delegate { if (!quiet) ApplyFilter(); };
             cbType.SelectedIndexChanged += delegate { if (!quiet) ApplyFilter(); };
