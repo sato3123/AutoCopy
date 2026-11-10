@@ -47,22 +47,28 @@ namespace AutoCopy
             dTo.ValueChanged += delegate { if (!quiet) { quiet = true; cbRange.SelectedIndex = 5; quiet = false; TimeChanged(); } };
             cbPc.SelectedIndexChanged += delegate { if (!quiet) LoadLogs(); };
 
+            // 上から「読み込むログと期間」→「絞り込み（淡い色の帯）」→「ほかの操作」の順に分ける（部品と動きは前と同じ）
             FlowLayoutPanel row1 = Ui.WrapRow(
                 Ui.Row(Ui.L("読み込むログ"), cbPc), Ui.Row(Ui.L("期間"), cbRange, dFrom, Ui.L("〜"), dTo),
-                Ui.B("再読み込み", delegate { LoadLogs(); }),
+                Ui.B("再読み込み", delegate { LoadLogs(); }));
+            FlowLayoutPanel row2 = Ui.WrapRow(
+                Ui.Row(Ui.L("絞り込み", 70)),
+                Ui.Row(Ui.L("設備（PC）"), cbDevice), Ui.Row(Ui.L("ジョブ"), cbJob), Ui.Row(Ui.L("種類"), cbType), Ui.Row(Ui.L("検索"), tSearch),
+                Ui.B("絞り込みを解除", delegate { ClearFilter(); }));
+            row2.BackColor = Ui.InfoBack;
+            row2.Padding = new Padding(4, 2, 4, 2);
+            ((Control)row2.Controls[0]).Controls[0].Font = Ui.Bold;
+            FlowLayoutPanel row3 = Ui.WrapRow(
                 Ui.B("CSVに書き出す", delegate { ExportCsv(); }),
                 Ui.B("コピー容量の集計", delegate { ShowStats(); }),
-                Ui.B("ログフォルダを開く", delegate { OpenLogFolder(); }));
-            FlowLayoutPanel row2 = Ui.WrapRow(
-                Ui.Row(Ui.L("設備（PC）"), cbDevice), Ui.Row(Ui.L("ジョブ"), cbJob), Ui.Row(Ui.L("種類"), cbType), Ui.Row(Ui.L("検索"), tSearch),
-                Ui.B("絞り込みを解除", delegate { ClearFilter(); }),
+                Ui.B("ログフォルダを開く", delegate { OpenLogFolder(); }),
                 Ui.HelpButton(Help.Log));
-            FlowLayoutPanel top = Ui.Column(row1, row2);
+            FlowLayoutPanel top = Ui.Column(row1, row2, row3);
             top.Dock = DockStyle.Top;
             top.Padding = new Padding(8, 6, 8, 2);
             top.BackColor = Color.White;
-            Resize += delegate { FitRows(row1, row2); };
-            HandleCreated += delegate { FitRows(row1, row2); };
+            Resize += delegate { FitRows(row1, row2, row3); };
+            HandleCreated += delegate { FitRows(row1, row2, row3); };
 
             pcs = (AcListView)Ui.List("フォルダ名|140", "PC名|120", "最終更新|130", "ジョブ|160", "結果|80", "内容|440");
             pcs.Dock = DockStyle.Top;

@@ -11,6 +11,9 @@ namespace AutoCopy
         // ジョブを選ぶ必要があるボタン（選んでいないときは灰色。理由はマウスを重ねると出る）と、操作の対象の表示
         private Button bRunSel, bStop, bEdit, bDup, bDel, bPreview;
         private Label lTarget;
+        private ToolTip bandTip, targetTip;
+        private Panel noticePanel;
+        private Control toolBar, statusBand, jobBarCtl, targetBarCtl;
         private readonly ReasonTips reasons = new ReasonTips();
         private readonly ListView notices;
         private readonly Label statusLabel;
@@ -54,28 +57,31 @@ namespace AutoCopy
             bar.AutoSize = true;
             bar.Padding = new Padding(8, 8, 8, 4);
             bar.BackColor = Color.White;
+            // まとまり（実行／ジョブの管理／確認・整理／調べる／設定・ヘルプ）ごとに並べ、
+            // 画面が狭いときは、まとまりの途中ではなく、まとまりの区切りで折り返す（ボタンと動きは前と同じ）
             bar.Controls.AddRange(new Control[] {
-                runAll,
-                bRunSel = Ui.B("選んだジョブを実行", delegate { RunSelected(false); }),
-                pauseBtn,
-                stopBtn,
-                Sep(),
-                Ui.B("ジョブを追加", delegate { AddJob(); }),
-                bEdit = Ui.B("編集", delegate { string id = FirstSelected(); if (id != null) EditJob(id); }),
-                bDup = Ui.B("複製", delegate { DuplicateJob(); }),
-                bDel = Btn.MakeDanger(Ui.B("削除", delegate { DeleteJob(); })),
-                Sep(),
-                Ui.B("上書きの確認", delegate { TrayApp.Instance.ShowConflicts(); }),
-                DupMenuButton(),
-                RestoreMenuButton(),
-                Sep(),
-                Ui.B("作業状況", delegate { TrayApp.Instance.ShowProgress(FirstSelected()); }),
-                bPreview = Ui.B("結果の予測", delegate { string id = FirstSelected(); if (id == null && AppCore.Settings.Jobs.Count > 0) id = AppCore.Settings.Jobs[0].Id; if (id != null) TrayApp.Instance.ShowPreview(id); }),
-                Ui.B("ログ", delegate { TrayApp.Instance.ShowLog(); }),
-                Ui.B("容量の内訳", delegate { ShowUsage(); }),
-                Sep(),
-                Ui.B("設定", delegate { TrayApp.Instance.ShowSettings(); }),
-                Ui.B("ヘルプ", delegate { Ui.OpenManual(); })
+                ToolGroup(true,
+                    runAll,
+                    bRunSel = Ui.B("選んだジョブを実行", delegate { RunSelected(false); }),
+                    pauseBtn,
+                    stopBtn),
+                ToolGroup(true,
+                    Ui.B("ジョブを追加", delegate { AddJob(); }),
+                    bEdit = Ui.B("編集", delegate { string id = FirstSelected(); if (id != null) EditJob(id); }),
+                    bDup = Ui.B("複製", delegate { DuplicateJob(); }),
+                    bDel = Btn.MakeDanger(Ui.B("削除", delegate { DeleteJob(); }))),
+                ToolGroup(true,
+                    Ui.B("上書きの確認", delegate { TrayApp.Instance.ShowConflicts(); }),
+                    DupMenuButton(),
+                    RestoreMenuButton()),
+                ToolGroup(true,
+                    Ui.B("作業状況", delegate { TrayApp.Instance.ShowProgress(FirstSelected()); }),
+                    bPreview = Ui.B("結果の予測", delegate { string id = FirstSelected(); if (id == null && AppCore.Settings.Jobs.Count > 0) id = AppCore.Settings.Jobs[0].Id; if (id != null) TrayApp.Instance.ShowPreview(id); }),
+                    Ui.B("ログ", delegate { TrayApp.Instance.ShowLog(); }),
+                    Ui.B("容量の内訳", delegate { ShowUsage(); })),
+                ToolGroup(false,
+                    Ui.B("設定", delegate { TrayApp.Instance.ShowSettings(); }),
+                    Ui.B("ヘルプ", delegate { Ui.OpenManual(); }))
             });
 
             // ---- 状態の帯 ----
@@ -99,6 +105,10 @@ namespace AutoCopy
             runBar.Margin = new Padding(Ui.S(12), Ui.S(9), 3, 3);
             runLabel = Ui.L("");
             runLabel.ForeColor = Ui.Accent;
+            // 長いジョブ名・ファイル名でも、右の「作業状況を見る」「確認する」を押し出さない（全文はマウスを重ねると出る）
+            runLabel.AutoEllipsis = true;
+            runLabel.MaximumSize = new Size(Ui.S(520), TextRenderer.MeasureText("あ", Ui.Base).Height + Ui.S(2));
+            bandTip = new ToolTip();
             runDetail = Ui.B("作業状況を見る", delegate { TrayApp.Instance.ShowProgress(null); });
             band.Controls.AddRange(new Control[] { statusLabel, runBar, runLabel, runDetail, confirmLabel, confirmButton, pendingButton });
 
@@ -134,7 +144,7 @@ namespace AutoCopy
                 if (e.KeyCode == Keys.Enter && notices.SelectedItems.Count > 0) { OpenNotice(notices.SelectedItems[0]); e.Handled = true; }
             };
             notices.ContextMenuStrip = BuildNoticeMenu();
-            Panel noticePanel = new Panel();
+            noticePanel = new Panel();
             noticePanel.Dock = DockStyle.Bottom;
             noticePanel.Height = Ui.S(190);
             Label nh = Ui.L("最近のお知らせ");
@@ -170,6 +180,7 @@ namespace AutoCopy
             targetBar.AutoSize = true;
             targetBar.BackColor = Color.White;
             targetBar.Controls.Add(lTarget);
+            targetTip = new ToolTip();
             Resize += delegate { lTarget.MaximumSize = new Size(Math.Max(Ui.S(300), ClientSize.Width - Ui.S(24)), 0); };
             lTarget.MaximumSize = new Size(Math.Max(Ui.S(300), ClientSize.Width - Ui.S(24)), 0);
             reasons.Set(bEdit, delegate { return FirstSelected() == null ? "一覧でジョブを選んでください" : null; });
@@ -186,9 +197,13 @@ namespace AutoCopy
             Controls.Add(band);
             Controls.Add(bar);
             Controls.Add(ss);
+            toolBar = bar; statusBand = band; jobBarCtl = jobBar; targetBarCtl = targetBar;
+            // 画面が低い・文字が大きいとき：お知らせの高さを抑えて、ジョブの一覧を最低4行ほど見えるようにする
+            Layout += delegate { FitNoticeHeight(); };
 
             AppCore.Changed += OnCoreChanged;
             FormClosed += delegate { AppCore.Changed -= OnCoreChanged; timer.Stop(); };
+            Disposed += delegate { AppCore.Changed -= OnCoreChanged; if (timer != null) timer.Stop(); };
             // 閉じる・最小化：終了も最小化もせず、通知領域（画面右下のアイコン）に入れる
             FormClosing += delegate(object sender, FormClosingEventArgs e)
             {
@@ -240,6 +255,39 @@ namespace AutoCopy
             return b;
         }
 
+        private bool fittingNotice;
+
+        private void FitNoticeHeight()
+        {
+            if (fittingNotice || noticePanel == null || toolBar == null) return;
+            fittingNotice = true;
+            try
+            {
+                int row = TextRenderer.MeasureText("あ", Ui.Base).Height + Ui.S(6);
+                int jobsMin = row * 5 + Ui.S(8);   // 見出し＋4行
+                int fixedH = toolBar.Height + statusBand.Height + jobBarCtl.Height + targetBarCtl.Height;
+                foreach (Control c in Controls) if (c is StatusStrip) fixedH += c.Height;
+                int free = ClientSize.Height - fixedH;
+                int h = Math.Max(Ui.S(110), Math.Min(Ui.S(190), free - jobsMin));
+                if (noticePanel.Height != h) noticePanel.Height = h;
+            }
+            finally { fittingNotice = false; }
+        }
+
+        /// <summary>ツールバーの1つのまとまり（中では折り返さない）。sep = 右に区切りの線を付ける</summary>
+        private static FlowLayoutPanel ToolGroup(bool sep, params Control[] buttons)
+        {
+            FlowLayoutPanel g = new FlowLayoutPanel();
+            g.AutoSize = true;
+            g.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            g.WrapContents = false;
+            g.Margin = new Padding(0);
+            g.Padding = new Padding(0);
+            g.Controls.AddRange(buttons);
+            if (sep) g.Controls.Add(Sep());
+            return g;
+        }
+
         private static Control Sep()
         {
             Label l = new Label();
@@ -288,7 +336,7 @@ namespace AutoCopy
             m.Items.Add("容量の内訳を調べる", null, delegate { ShowUsage(); });
             m.Items.Add("コピー元を開く", null, delegate { JobConfig j = SelectedJob(); if (j != null) Ui.OpenFolder(CopyEngine.ResolvedSource(j, AppCore.Settings)); });
             m.Items.Add("コピー先を開く", null, delegate { JobConfig j = SelectedJob(); if (j != null) Ui.OpenFolder(CopyEngine.ResolvedDest(j, AppCore.Settings)); });
-            m.Items.Add("この ジョブのショートカットをデスクトップに作る", null, delegate
+            m.Items.Add("このジョブのショートカットをデスクトップに作る", null, delegate
             {
                 JobConfig j = SelectedJob();
                 if (j == null) return;
@@ -552,6 +600,10 @@ namespace AutoCopy
                     it.SubItems[5].ForeColor = color;
                     it.SubItems[1].ForeColor = j.Mirror || j.Sync ? Ui.Warn : SystemColors.WindowText;
                     it.ForeColor = j.Enabled ? SystemColors.WindowText : Ui.Quiet;
+                    if (it.Font != (j.Enabled ? Ui.Bold : Ui.Base)) it.Font = j.Enabled ? Ui.Bold : Ui.Base;   // ジョブ名をいちばんに読めるように（無効は普通の太さ・灰色）
+                    // 列が狭くて欠けた文字も、行にマウスを重ねると全部見える
+                    string tip = cols[0] + "（" + cols[1] + "）\n" + (j.Sync ? "同期：" : "コピー元 → コピー先：") + "\n" + paths + "\n結果：" + result + "\n間隔：" + interval + "　前回：" + last + "　次回：" + next;
+                    if (it.ToolTipText != tip) it.ToolTipText = tip;
                 }
                 if (resort && sjobs != null) sjobs.Resort();
                 jobs.EndUpdate();
@@ -584,6 +636,8 @@ namespace AutoCopy
                 List<ActiveFile> act = rp.ActiveList;
                 runLabel.Text = rname + "：" + rp.Short()
                     + (act.Count > 0 ? "　" + PathUtil.FileName(act[0].Rel) + "（" + Fmt.Size(act[0].Size) + "）" + (act.Count > 1 ? " ほか" + (act.Count - 1) + "件" : "") : "");
+                string full = rname + "：" + rp.Short() + (act.Count > 0 ? "\n" + act[0].Rel + "（" + Fmt.Size(act[0].Size) + "）" + (act.Count > 1 ? " ほか" + (act.Count - 1) + "件" : "") : "");
+                if (bandTip.GetToolTip(runLabel) != full) bandTip.SetToolTip(runLabel, full);
             }
             int tc = AppCore.TotalConflicts(), tp = AppCore.TotalPendingDeletes();
             confirmLabel.Text = tc > 0 ? "　上書き確認待ち " + tc + "件" : "";
@@ -614,20 +668,22 @@ namespace AutoCopy
             bEdit.Enabled = bDup.Enabled = bDel.Enabled = first != null;
             bRunSel.Enabled = bStop.Enabled = sel > 0;
             bPreview.Enabled = AppCore.Settings.Jobs.Count > 0;
-            lTarget.Text = TargetText(sel, fj != null ? fj.Name : null, AppCore.Settings.Jobs.Count);
+            string tt = TargetText(sel, fj != null ? fj.Name : null, AppCore.Settings.Jobs.Count);
+            if (lTarget.Text != tt) { lTarget.Text = tt; targetTip.SetToolTip(lTarget, tt); }
             lTarget.ForeColor = sel == 0 && fj == null ? Ui.Quiet : Ui.Accent;
         }
 
         /// <summary>「操作の対象」の文（テスト用に公開）</summary>
         public static string TargetText(int selected, string firstName, int jobCount)
         {
-            if (jobCount == 0) return "ジョブがありません。「ジョブを追加」で作ってください。";
+            // 意味は前と同じ。「｜」で区切って短く
+            if (jobCount == 0) return "ジョブがありません｜「ジョブを追加」で作ってください";
             if (selected == 0)
                 return firstName != null
-                    ? "操作の対象：「" + firstName + "」（ジョブが1件のため、編集・複製・削除・結果の予測はこのジョブです。「選んだジョブを実行」「中止」は、一覧でクリックして選ぶと押せます）"
-                    : "ジョブを選んでいません（一覧でクリックして選ぶと、編集・実行などが押せます）";
+                    ? "操作の対象：「" + firstName + "」（ジョブが1件のため）｜編集・複製・削除・結果の予測：このジョブ｜選んだジョブを実行・中止：一覧で選ぶと押せます"
+                    : "ジョブを選んでいません｜一覧でクリックして選ぶと、編集・実行などが押せます";
             if (selected == 1) return "操作の対象：「" + firstName + "」";
-            return "操作の対象：選んだ " + selected + "件（実行・中止は " + selected + "件すべて。編集・複製・削除は先頭の「" + firstName + "」）";
+            return selected + "件 選択｜選んだジョブを実行・中止：" + selected + "件｜編集・複製・削除：先頭の「" + firstName + "」";
         }
 
         // ---------- ジョブの追加・編集 ----------

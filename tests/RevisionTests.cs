@@ -55,6 +55,7 @@ namespace AutoCopy.Tests
             Add("T126", "OneDrive：クラウド用の印・「クラウドだけ」の判定・OneDrive のフォルダの判定・空きを待つ・ジャンクションは今まで通り調べない", CloudBasics);
             Add("T127", "OneDrive と同じしくみ（Windows の Cloud Files）の同期フォルダで：中まで調べる・クラウドだけのファイルを読まない（ダウンロードしない）・コピーしたファイルはこのPCに残さない", CloudSyncRoot);
             Add("T128", "画面の表示：並列数の説明が実際の動き（自動＝最大4件）と同じ・上書きの確認で「共有フォルダの方を使う」は同期のものだけ・同期の行は橙・重複の「大きさ」の表示・操作の対象の表示", UiConsistency);
+            Add("T129", "画面の整理：ツールバーはまとまりの区切りで折り返す・枠の幅を揃える・Esc で閉じる・操作の対象の短い表示", UiRefine);
             Add("T112", "終了時の停止待ちは上限まで（止まらない処理があっても終了できる）", StopTimeout);
         }
 
@@ -1185,6 +1186,59 @@ namespace AutoCopy.Tests
             True(one.Contains("「経理」") && one.Contains("選んだジョブを実行"), "1件だけ：編集などはそのジョブ・実行は選んでから: " + one);
             Eq("操作の対象：「経理」", MainForm.TargetText(1, "経理", 3), "1件選んだ");
             True(MainForm.TargetText(2, "経理", 3).Contains("2件") && MainForm.TargetText(2, "経理", 3).Contains("「経理」"), "複数選んだ");
+        }
+
+        private static void UiRefine()
+        {
+            // ツールバー：まとまりの中では折り返さない（「ジョブを追加・編集・複製・削除」は同じまとまり）
+            using (MainForm mf = new MainForm())
+            {
+                System.Windows.Forms.Control add = null;
+                foreach (System.Windows.Forms.Control c in AllControls(mf)) if (c is System.Windows.Forms.Button && c.Text == "ジョブを追加") add = c;
+                True(add != null, "「ジョブを追加」がある");
+                System.Windows.Forms.FlowLayoutPanel g = add.Parent as System.Windows.Forms.FlowLayoutPanel;
+                True(g != null && !g.WrapContents, "まとまりの中では折り返さない");
+                List<string> names = new List<string>();
+                foreach (System.Windows.Forms.Control c in g.Controls) if (c is System.Windows.Forms.Button) names.Add(c.Text);
+                Eq("ジョブを追加,編集,複製,削除", string.Join(",", names.ToArray()), "ジョブの管理のまとまり");
+                System.Windows.Forms.FlowLayoutPanel bar = g.Parent as System.Windows.Forms.FlowLayoutPanel;
+                True(bar != null && bar.WrapContents, "まとまりの区切りで折り返す");
+                int buttons = 0;
+                foreach (System.Windows.Forms.Control c in AllControls(bar)) if (c is System.Windows.Forms.Button) buttons++;
+                Eq(17, buttons, "ボタンの数は前と同じ（省いたもの・増やしたものはない）");
+                Eq(null, Ui.AutoCancel(mf), "メイン画面は Esc で閉じない（閉じるボタンがない）");
+            }
+
+            // 枠の幅を揃える
+            System.Windows.Forms.FlowLayoutPanel body = Ui.Body();
+            body.Size = new System.Drawing.Size(Ui.S(600), Ui.S(400));
+            System.Windows.Forms.GroupBox g1 = Ui.Section("短い", Ui.L("あ"));
+            System.Windows.Forms.GroupBox g2 = Ui.Section("長い", Ui.L(new string('あ', 20)));
+            body.Controls.Add(g1); body.Controls.Add(g2);
+            Ui.EvenSections(body);
+            body.PerformLayout();
+            True(g1.Width == g2.Width && g1.Width > Ui.S(400), "枠の幅が揃う: " + g1.Width + " / " + g2.Width);
+            True(g1.Right <= body.ClientSize.Width, "横にはみ出さない");
+
+            // Esc：「閉じる」「キャンセル」「やめる」に割り当てる（実行・削除などには割り当てない）
+            using (FolderDupForm fd = new FolderDupForm(null))
+            {
+                System.Windows.Forms.Button cb = Ui.AutoCancel(fd);
+                True(cb != null && cb.Text.Contains("閉じる"), "フォルダの重複ファイル探し：Esc = 閉じる");
+                Eq(System.Windows.Forms.DialogResult.None, cb.DialogResult, "押したときの動きは前と同じ");
+            }
+            using (SettingsForm sf = new SettingsForm())
+            {
+                System.Windows.Forms.Button cb = Ui.AutoCancel(sf);
+                True(cb != null && cb.Text.Contains("キャンセル"), "アプリ設定：Esc = キャンセル（保存しない）");
+            }
+            True(Ui.IsCloseText("閉じる（後で決める）") && Ui.IsCloseText("キャンセル") && Ui.IsCloseText("やめる"), "閉じる系の名前");
+            True(!Ui.IsCloseText("削除する") && !Ui.IsCloseText("ミラーにする") && !Ui.IsCloseText("この内容で今すぐ実行") && !Ui.IsCloseText(null), "実行・削除には割り当てない");
+
+            // 操作の対象：意味は同じで「｜」で区切った短い表示
+            string multi = MainForm.TargetText(3, "経理", 5);
+            True(multi.StartsWith("3件 選択｜") && multi.Contains("実行・中止：3件") && multi.Contains("先頭の「経理」"), "複数: " + multi);
+            True(MainForm.TargetText(0, "経理", 1).Length < 90, "1件のときの説明が短い");
         }
 
         private static void MessageFits()

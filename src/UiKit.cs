@@ -129,6 +129,41 @@ namespace AutoCopy
             // 表示した直後に、部品の大きさ（文字の大きさで変わる）に合わせて並びを奥から順に直す
             f.Shown += delegate { Relayout(f); };
             f.BackColor = Color.FromArgb(249, 249, 249);
+            // Esc キーで「閉じる」「キャンセル」「やめる」と同じ動き（実行・削除などのボタンには割り当てない）
+            f.Load += delegate { AutoCancel(f); };
+        }
+
+        /// <summary>
+        /// Esc キーに割り当てるボタン：「閉じる」「キャンセル」「やめる」で始まるボタン（いちばん下の帯にあるものを優先）。
+        /// すでに決めてある画面・該当するボタンがない画面はそのまま。戻り値：割り当てたボタン（なし = null）。
+        /// </summary>
+        public static Button AutoCancel(Form f)
+        {
+            if (f.CancelButton != null) return f.CancelButton as Button;
+            Button found = null;
+            Stack<Control> st = new Stack<Control>();
+            st.Push(f);
+            while (st.Count > 0)
+            {
+                Control c = st.Pop();
+                Button b = c as Button;
+                if (b != null && IsCloseText(b.Text) && (found == null || b.Parent != null && b.Parent.Dock == DockStyle.Bottom)) found = b;
+                foreach (Control k in c.Controls) st.Push(k);
+            }
+            if (found != null)
+            {
+                DialogResult keep = found.DialogResult;
+                f.CancelButton = found;
+                found.DialogResult = keep;   // 押したときの動き（確かめてから閉じる等）は前と同じ：Esc はこのボタンを押したのと同じ
+            }
+            return found;
+        }
+
+        public static bool IsCloseText(string t)
+        {
+            if (string.IsNullOrEmpty(t)) return false;
+            t = t.Trim();
+            return t.StartsWith("閉じる") || t.StartsWith("キャンセル") || t.StartsWith("やめる");
         }
 
         public static void SetupDialog(Form f, string title, int w, int h)
@@ -328,7 +363,31 @@ namespace AutoCopy
             p.Dock = DockStyle.Fill;
             p.Padding = new Padding(12);
             AddScrollSpacer(p);
+            // まとまり（枠）の幅を揃える：中身に合わせた幅のままだと右端がでこぼこで、どの設定がどの枠か追いにくい。
+            // 枠は画面の幅いっぱい（中身がそれより広い枠はそのまま）。
+            bool evening = false;
+            p.Layout += delegate
+            {
+                if (evening) return;
+                evening = true;
+                try { EvenSections(p); }
+                finally { evening = false; }
+            };
             return p;
+        }
+
+        /// <summary>縦の並びの中の枠（GroupBox）を、並びの幅いっぱいに揃える（狭くはしない）</summary>
+        public static void EvenSections(FlowLayoutPanel p)
+        {
+            int w = p.ClientSize.Width - p.Padding.Horizontal;
+            if (w <= S(100)) return;
+            foreach (Control c in p.Controls)
+            {
+                GroupBox g = c as GroupBox;
+                if (g == null || !g.AutoSize) continue;
+                int target = w - g.Margin.Horizontal;
+                if (g.MinimumSize.Width != target) g.MinimumSize = new Size(target, 0);
+            }
         }
 
         public const string ScrollSpacerTag = "scroll-spacer";
