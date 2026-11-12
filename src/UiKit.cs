@@ -528,6 +528,12 @@ namespace AutoCopy
             MessageBox.Show(owner, FitMessage(text, true), "自動コピー", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
 
+        /// <summary>削除など元に戻しにくい操作の確認。初めから「キャンセル」が選ばれている（Enter だけでは実行しない）</summary>
+        public static bool ConfirmDanger(IWin32Window owner, string text)
+        {
+            return MessageBox.Show(owner, FitMessage(text, false), "自動コピー", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.OK;
+        }
+
         public static bool Confirm(IWin32Window owner, string text)
         {
             return MessageBox.Show(owner, FitMessage(text, false), "自動コピー", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning) == DialogResult.OK;
@@ -1394,8 +1400,9 @@ namespace AutoCopy
     {
         public const string Jobs = "c3", Preview = "preview", Main = "c5", Notices = "notices", Conflicts = "c7", Mirror = "c8",
             Sync = "c8s", SyncDelete = "syncdel", DupCheck = "c9", FolderDup = "folderdup", Dedup = "dedup", Log = "c11",
-            Usage = "usage", Settings = "appsettings", Select = "list", Restore = "restore", Exclude = "c4", Setup = "c2", Skip = "skiplist", Trouble = "c12";
-        public static readonly string[] All = { Jobs, Preview, Main, Notices, Conflicts, Mirror, Sync, SyncDelete, DupCheck, FolderDup, Dedup, Log, Usage, Settings, Select, Restore, Exclude, Setup, Skip, Trouble };
+            Usage = "usage", Settings = "appsettings", Select = "list", Restore = "restore", Exclude = "c4", Setup = "c2", Skip = "skiplist", Trouble = "c12",
+            BulkDelete = "bulkdelete";
+        public static readonly string[] All = { Jobs, Preview, Main, Notices, Conflicts, Mirror, Sync, SyncDelete, DupCheck, FolderDup, Dedup, Log, Usage, Settings, Select, Restore, Exclude, Setup, Skip, Trouble, BulkDelete };
         private static readonly HashSet<string> used = new HashSet<string>();
         public static void Used(string anchor) { lock (used) used.Add(anchor ?? ""); }
         public static string[] UsedAnchors() { lock (used) { string[] a = new string[used.Count]; used.CopyTo(a); return a; } }

@@ -428,6 +428,7 @@ namespace AutoCopy
             if (sdel > 0) menu.Items.Add("同期：削除の確認（" + sdel + "件）", null, delegate { ShowSyncDeletes(null); });
             menu.Items.Add("コピー先の整理（重複チェック）の結果", null, delegate { ShowDup(null); });
             menu.Items.Add("フォルダの重複ファイル探し…", null, delegate { ShowFolderDup(null); });
+            menu.Items.Add("ファイルの一括削除…", null, delegate { ShowBulkDelete(null); });
             menu.Items.Add(RestoreMenu());
             menu.Items.Add("ログを見る", null, delegate { ShowLog(); });
             menu.Items.Add("エラー・確認の対応状況", null, delegate { ShowLog(); if (logForm != null && !logForm.IsDisposed) logForm.ShowStatusTab(); });
@@ -532,6 +533,15 @@ namespace AutoCopy
             TrashForm f = new TrashForm(j);
             f.Show();
             Bring(f);
+        }
+
+        private BulkDeleteForm bulkDeleteForm;
+
+        /// <summary>ファイルの一括削除（ジョブとは別。条件で探して、確かめてから削除）</summary>
+        public void ShowBulkDelete(string folder)
+        {
+            if (bulkDeleteForm == null || bulkDeleteForm.IsDisposed) bulkDeleteForm = new BulkDeleteForm(folder);
+            Bring(bulkDeleteForm);
         }
 
         public void ShowFolderDup(string folder)

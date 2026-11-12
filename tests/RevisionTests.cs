@@ -56,6 +56,9 @@ namespace AutoCopy.Tests
             Add("T127", "OneDrive と同じしくみ（Windows の Cloud Files）の同期フォルダで：中まで調べる・クラウドだけのファイルを読まない（ダウンロードしない）・コピーしたファイルはこのPCに残さない", CloudSyncRoot);
             Add("T128", "画面の表示：並列数の説明が実際の動き（自動＝最大4件）と同じ・上書きの確認で「共有フォルダの方を使う」は同期のものだけ・同期の行は橙・重複の「大きさ」の表示・操作の対象の表示", UiConsistency);
             Add("T129", "画面の整理：ツールバーはまとまりの区切りで折り返す・枠の幅を揃える・Esc で閉じる・操作の対象の短い表示", UiRefine);
+            Add("T130", "上書きの確認：件数が多くても画面が開く（3万件）・チェックの変化はまとめて調べる", ConflictManyItems);
+            Add("T131", "上書きの確認：どちらが新しいか・それぞれ新しい方の扱い・新しい方にまとめてチェック", ConflictNewer);
+            Add("T132", "ファイルの一括削除：条件・使えないフォルダ・探しても削除しない・チェックしたものだけごみ箱へ・探した後に変わったものは削除しない", BulkDeleteTool);
             Add("T112", "終了時の停止待ちは上限まで（止まらない処理があっても終了できる）", StopTimeout);
         }
 
@@ -1150,10 +1153,13 @@ namespace AutoCopy.Tests
                     Eq(System.Drawing.SystemColors.WindowText, normRow.ForeColor, "普通のジョブの行は黒");
                     True(!ts.Enabled && cf.TakeSharedReason() != null, "何もチェックしていないときは押せない: " + cf.TakeSharedReason());
                     syncRow.Checked = true;
+                    System.Windows.Forms.Application.DoEvents();   // 押せる・押せないは、まとめて後で調べる
                     True(ts.Enabled && cf.TakeSharedReason() == null, "同期のものだけチェック：押せる");
                     normRow.Checked = true;
+                    System.Windows.Forms.Application.DoEvents();
                     True(!ts.Enabled && cf.TakeSharedReason().Contains("普通のジョブ"), "普通のジョブも混ざる：押せない・理由にジョブ名: " + cf.TakeSharedReason());
                     syncRow.Checked = false;
+                    System.Windows.Forms.Application.DoEvents();
                     True(!ts.Enabled, "普通のジョブだけ：押せない");
                 }
             }
@@ -1239,6 +1245,193 @@ namespace AutoCopy.Tests
             string multi = MainForm.TargetText(3, "経理", 5);
             True(multi.StartsWith("3件 選択｜") && multi.Contains("実行・中止：3件") && multi.Contains("先頭の「経理」"), "複数: " + multi);
             True(MainForm.TargetText(0, "経理", 1).Length < 90, "1件のときの説明が短い");
+        }
+
+        private static System.Windows.Forms.ListView FirstList(System.Windows.Forms.Control root)
+        {
+            foreach (System.Windows.Forms.Control c in AllControls(root)) if (c is System.Windows.Forms.ListView) return (System.Windows.Forms.ListView)c;
+            return null;
+        }
+
+        private static void ConflictManyItems()
+        {
+            Box b = new Box("T130");
+            b.Apply();
+            JobState st = AppCore.GetState(b.Job.Id);
+            const int N = 30000;
+            long now = DateTime.UtcNow.Ticks;
+            lock (st)
+            {
+                for (int i = 0; i < N; i++)
+                {
+                    ConflictItem c = new ConflictItem(); c.Rel = @"フォルダ" + (i % 50) + @"\ファイル" + i + ".xlsx"; c.Reason = "newer";
+                    c.SrcMtime = now - TimeSpan.TicksPerHour * (i % 2 == 0 ? 2 : 0); c.DstMtime = now - TimeSpan.TicksPerHour; c.SrcSize = 100; c.DstSize = 200;
+                    st.Conflicts.Add(c);
+                }
+            }
+            try
+            {
+                System.Diagnostics.Stopwatch sw = System.Diagnostics.Stopwatch.StartNew();
+                using (ConflictForm cf = new ConflictForm())
+                {
+                    System.Windows.Forms.ListView lv = FirstList(cf);
+                    IntPtr h = cf.Handle, hl = lv.Handle;   // 画面を作る（一覧に行を入れる。前はここで1行ごとに全件を読んでいた）
+                    System.Windows.Forms.Application.DoEvents();
+                    long open = sw.ElapsedMilliseconds;
+                    Console.WriteLine("  3万件の上書きの確認を開くまで: " + open + "ms");
+                    Eq(N, lv.Items.Count, "3万件とも出る");
+                    True(open < 30000, "30秒以内に開く: " + open + "ms");
+                    sw.Restart();
+                    int n = cf.CheckNewer(ConflictForm.NewerSource);
+                    System.Windows.Forms.Application.DoEvents();
+                    Eq(N / 2, n, "コピー元が新しい半分にチェック");
+                    Eq(N / 2, lv.CheckedItems.Count, "チェックの数");
+                    True(sw.ElapsedMilliseconds < 30000, "まとめてチェックしても固まらない: " + sw.ElapsedMilliseconds + "ms");
+                    True(cf.Text.Contains(Fmt.Count(N).Replace(",", "")) || cf.Text.Contains(N.ToString()), "題名に件数: " + cf.Text);
+                }
+            }
+            finally { lock (st) st.Conflicts.Clear(); }
+        }
+
+        private static void ConflictNewer()
+        {
+            JobConfig j = new JobConfig(); j.ToleranceSeconds = 2;
+            ConflictItem c = new ConflictItem();
+            long t = new DateTime(2026, 11, 12, 3, 0, 0, DateTimeKind.Utc).Ticks;
+            c.SrcMtime = t + TimeSpan.TicksPerMinute; c.DstMtime = t;
+            Eq(ConflictForm.NewerSource, ConflictForm.WhichNewer(j, c), "コピー元が新しい");
+            Eq(AppCore.ActOverwrite, ConflictForm.NewerAction(j, c), "→ 上書きする");
+            c.SrcMtime = t; c.DstMtime = t + TimeSpan.TicksPerMinute;
+            Eq(ConflictForm.NewerDest, ConflictForm.WhichNewer(j, c), "コピー先が新しい");
+            Eq(AppCore.ActSkipOnce, ConflictForm.NewerAction(j, c), "→ コピー先を残す（今回はスキップ）");
+            j.Sync = true;
+            Eq(AppCore.ActTakeShared, ConflictForm.NewerAction(j, c), "同期で共有フォルダが新しい → 共有フォルダの方を使う");
+            c.SrcMtime = t + TimeSpan.TicksPerMinute; c.DstMtime = t;
+            Eq(AppCore.ActOverwrite, ConflictForm.NewerAction(j, c), "同期でこのPCが新しい → 上書きする（このPCの方を使う）");
+            c.SrcMtime = t + TimeSpan.TicksPerSecond; c.DstMtime = t;
+            Eq(ConflictForm.NewerUnknown, ConflictForm.WhichNewer(j, c), "差が許容範囲（2秒）以内は決めない");
+            Eq(null, ConflictForm.NewerAction(j, c), "→ 何もしない");
+            c.SrcMtime = t; c.DstMtime = t;
+            Eq(null, ConflictForm.NewerAction(j, c), "同じ日時（サイズ違い）は何もしない");
+
+            // 画面：新しい方にまとめてチェック（ほかのチェックは外す）
+            Box b = new Box("T131");
+            b.Apply();
+            JobState st = AppCore.GetState(b.Job.Id);
+            ConflictItem a1 = new ConflictItem(); a1.Rel = "元が新しい.txt"; a1.Reason = "newer"; a1.SrcMtime = t + TimeSpan.TicksPerHour; a1.DstMtime = t;
+            ConflictItem a2 = new ConflictItem(); a2.Rel = "先が新しい.txt"; a2.Reason = "newer"; a2.SrcMtime = t; a2.DstMtime = t + TimeSpan.TicksPerHour;
+            ConflictItem a3 = new ConflictItem(); a3.Rel = "同じ.txt"; a3.Reason = "samedate"; a3.SrcMtime = t; a3.DstMtime = t;
+            lock (st) { st.Conflicts.Add(a1); st.Conflicts.Add(a2); st.Conflicts.Add(a3); }
+            try
+            {
+                using (ConflictForm cf = new ConflictForm())
+                {
+                    System.Windows.Forms.ListView lv = FirstList(cf);
+                    IntPtr h = cf.Handle, hl = lv.Handle;
+                    Eq(1, cf.CheckNewer(ConflictForm.NewerSource), "コピー元が新しいもの");
+                    Eq("元が新しい.txt", lv.CheckedItems[0].Text, "チェックした行");
+                    Eq(1, cf.CheckNewer(ConflictForm.NewerDest), "コピー先が新しいもの");
+                    Eq(1, lv.CheckedItems.Count, "前のチェックは外す");
+                    Eq("先が新しい.txt", lv.CheckedItems[0].Text, "チェックした行（コピー先）");
+                    bool hasButton = false, hasMenu = false;
+                    foreach (System.Windows.Forms.Control x in AllControls(cf))
+                    {
+                        if (x is System.Windows.Forms.Button && x.Text.StartsWith("それぞれ新しい方を使う")) hasButton = true;
+                        if (x is System.Windows.Forms.Button && x.Text.StartsWith("新しい方で選ぶ")) hasMenu = true;
+                    }
+                    True(hasButton && hasMenu, "「新しい方で選ぶ ▾」と「それぞれ新しい方を使う…」がある");
+                }
+            }
+            finally { lock (st) st.Conflicts.Clear(); }
+        }
+
+        private static void BulkDeleteTool()
+        {
+            // 条件
+            Eq(".tmp,.bak,.log", string.Join(",", BulkDeleteCriteria.ParseExtensions(" .tmp, bak　*.LOG ").ToArray()), "拡張子の書き方");
+            Eq("*~*.xlsx|Thumbs.db|新しい フォルダ*", string.Join("|", BulkDeleteCriteria.ParseNames("*~*.xlsx; Thumbs.db\n新しい フォルダ*").ToArray()), "名前の書き方（空白は名前の一部）");
+            BulkDeleteCriteria c = new BulkDeleteCriteria();
+            True(!c.HasCondition, "条件なし");
+            c.Extensions.Add(".tmp");
+            True(c.HasCondition, "条件あり");
+            True(c.Matches(@"a\b.TMP", 10, 0, FileAttributes.Archive), "拡張子（大文字小文字は区別しない）");
+            True(!c.Matches(@"a\b.tmpx", 10, 0, FileAttributes.Archive), "違う拡張子");
+            True(!c.Matches(@"b.tmp", 10, 0, FileAttributes.System), "システムファイルは対象外");
+            True(!c.Matches(@"b.tmp", 10, 0, FileAttributes.Hidden), "隠しファイルは初期値では対象外");
+            c.IncludeHidden = true;
+            True(c.Matches(@"b.tmp", 10, 0, FileAttributes.Hidden), "隠しファイルも対象にする");
+            BulkDeleteCriteria n = new BulkDeleteCriteria(); n.NamePatterns.Add("*~*.xlsx"); n.NamePatterns.Add("Thumbs.db");
+            True(n.Matches(@"x\見積~1.xlsx", 1, 0, 0) && n.Matches("thumbs.db", 1, 0, 0) && !n.Matches("見積.xlsx", 1, 0, 0), "名前（* と ;）");
+            BulkDeleteCriteria s = new BulkDeleteCriteria(); s.MinBytes = 100; s.MaxBytes = 200;
+            True(s.Matches("a", 100, 0, 0) && s.Matches("a", 200, 0, 0) && !s.Matches("a", 99, 0, 0) && !s.Matches("a", 201, 0, 0), "大きさ（以上・以下）");
+            long day = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc).Ticks;
+            BulkDeleteCriteria o = new BulkDeleteCriteria(); o.OlderThanUtc = day;
+            True(o.Matches("a", 1, day - 1, 0) && !o.Matches("a", 1, day, 0), "更新日時がこの日より前");
+
+            // 使えないフォルダ
+            True(BulkDelete.CheckFolder(Path.GetPathRoot(Path.GetTempPath())) != null, "ドライブ全体は使えない");
+            True(BulkDelete.CheckFolder(Environment.GetFolderPath(Environment.SpecialFolder.Windows)) != null, "Windows のフォルダは使えない");
+            True(BulkDelete.CheckFolder(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "Temp")) != null, "Windows の中も使えない");
+            True(BulkDelete.CheckFolder(AppPaths.Local) != null, "このアプリのフォルダは使えない");
+            True(BulkDelete.CheckFolder("") != null && BulkDelete.CheckFolder(@"Q:\ないフォルダ") != null, "空欄・ないフォルダ");
+            True(BulkDelete.CheckFolder(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)) != null, "ユーザーのフォルダ全体は使えない");
+
+            Box b = new Box("T132");
+            string root = Path.Combine(b.Root, "片付け");
+            Eq(null, BulkDelete.CheckFolder(b.Root), "普通のフォルダは使える: " + BulkDelete.CheckFolder(b.Root));
+            Action<string, int> put = delegate(string rel, int size)
+            {
+                string f = Path.Combine(root, rel);
+                Directory.CreateDirectory(Path.GetDirectoryName(f));
+                File.WriteAllBytes(f, new byte[size]);
+                File.SetLastWriteTimeUtc(f, DateTime.UtcNow.AddHours(-1));
+            };
+            put("a.tmp", 10); put(@"sub\b.tmp", 20); put(@"sub\keep.xlsx", 30); put(@"sub\deep\c.TMP", 40); put("d.bak", 50);
+            put(@"_AutoCopy\記録.tmp", 5);   // このアプリの記録は対象外
+            File.SetAttributes(Path.Combine(root, "d.bak"), FileAttributes.Hidden);
+            BulkDeleteCriteria q = new BulkDeleteCriteria(); q.Extensions = BulkDeleteCriteria.ParseExtensions(".tmp .bak");
+            int scanned, failed;
+            List<BulkDeleteItem> found = BulkDelete.Find(root, true, q, CancellationToken.None, out scanned, out failed);
+            Eq("a.tmp,sub\\b.tmp,sub\\deep\\c.TMP", string.Join(",", found.ConvertAll(delegate(BulkDeleteItem x) { return x.Rel; }).ToArray()), "見つかったもの（隠し・_AutoCopy は除く）");
+            True(File.Exists(Path.Combine(root, "a.tmp")), "探しただけでは削除しない");
+            List<BulkDeleteItem> top = BulkDelete.Find(root, false, q, CancellationToken.None, out scanned, out failed);
+            Eq(1, top.Count, "サブフォルダを含めないとき");
+
+            // 削除：チェックしたものだけ、ごみ箱へ。探した後に変わったものは削除しない
+            True(BulkDelete.CanRecycle(root) || root.StartsWith(@"\\"), "このPCのドライブはごみ箱に移せる: " + root);
+            List<BulkDeleteItem> sel = new List<BulkDeleteItem>(found);
+            sel.RemoveAll(delegate(BulkDeleteItem x) { return x.Rel == @"sub\b.tmp"; });   // b.tmp はチェックを外した
+            File.WriteAllBytes(Path.Combine(root, @"sub\deep\c.TMP"), new byte[99]);   // 探した後に変わった
+            BulkDeleteResult r = BulkDelete.Delete(root, sel, BulkDelete.CanRecycle(root), CancellationToken.None, null);
+            Eq(1, r.Deleted, "削除した数: " + string.Join(" / ", r.Errors.ToArray()));
+            Eq(1, r.Changed.Count, "変わったものは削除しない");
+            True(!File.Exists(Path.Combine(root, "a.tmp")), "チェックしたものは削除した");
+            True(File.Exists(Path.Combine(root, @"sub\b.tmp")), "チェックを外したものは残る");
+            True(File.Exists(Path.Combine(root, @"sub\deep\c.TMP")), "探した後に変わったものは残る");
+            True(File.Exists(Path.Combine(root, @"sub\keep.xlsx")) && File.Exists(Path.Combine(root, "d.bak")) && File.Exists(Path.Combine(root, @"_AutoCopy\記録.tmp")), "条件に合わないもの・隠し・記録は残る");
+
+            // 完全に削除（ネットワークなどごみ箱がない場所の扱い）
+            List<BulkDeleteItem> again = BulkDelete.Find(root, true, q, CancellationToken.None, out scanned, out failed);
+            BulkDeleteResult r2 = BulkDelete.Delete(root, again, false, CancellationToken.None, null);
+            Eq(2, r2.Deleted, "完全に削除: " + string.Join(" / ", r2.Errors.ToArray()));
+            True(!File.Exists(Path.Combine(root, @"sub\b.tmp")) && File.Exists(Path.Combine(root, @"sub\keep.xlsx")), "対象だけ削除");
+
+            // 画面：条件を変えたら一覧を消して、もう一度探すまで削除できない
+            using (BulkDeleteForm f = new BulkDeleteForm(root))
+            {
+                IntPtr h = f.Handle;
+                True(f.DeleteReason() != null && !f.DeleteButton.Enabled, "探す前は削除できない");
+                put("e.tmp", 5);
+                f.SetInputs(root, ".tmp", "");
+                f.Fill(root, BulkDelete.Find(root, true, f.Criteria(), CancellationToken.None, out scanned, out failed), scanned);
+                Eq(1, f.List.Items.Count, "探した一覧");
+                True(f.List.Items[0].Checked, "はじめは全部にチェック");
+                True(f.DeleteReason() == null && f.DeleteButton.Enabled, "探した後は削除できる");
+                f.SetInputs(root, ".bak", "");
+                Eq(0, f.List.Items.Count, "条件を変えたら一覧を消す");
+                True(f.DeleteReason() != null && !f.DeleteButton.Enabled, "もう一度探すまで削除できない");
+                True(File.Exists(Path.Combine(root, "e.tmp")), "画面の操作だけでは削除しない");
+            }
         }
 
         private static void MessageFits()

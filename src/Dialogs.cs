@@ -87,13 +87,23 @@ namespace AutoCopy
             lv = Ui.List("ファイル|260", "ジョブ|140", "コピー元|150", "コピー先|200", "状態|120");
             lv.CheckBoxes = true;
             lv.Dock = DockStyle.Fill;
+            Button newerMenu = Ui.B("新しい方で選ぶ ▾", null);
+            newerMenu.Click += delegate
+            {
+                ContextMenuStrip m = new ContextMenuStrip();
+                m.Font = Ui.Base;
+                m.Items.Add("コピー元（このPC）の方が新しいものにチェック", null, delegate { CheckNewer(NewerSource); });
+                m.Items.Add("コピー先（共有フォルダ）の方が新しいものにチェック", null, delegate { CheckNewer(NewerDest); });
+                m.Show(newerMenu, new Point(0, newerMenu.Height));
+            };
             Panel checkBar = Ui.CheckAllBar(lv, "すべてにチェック／すべて外す", null,
-                Ui.B("条件で選ぶ…", delegate { SelectByCondition(); }));
+                Ui.B("条件で選ぶ…", delegate { SelectByCondition(); }), newerMenu);
 
             backup = Ui.C("上書きする前に、コピー先の古いファイルを「_AutoCopy\\退避」に残す", true);
             // 画面の幅が足りないときは折り返す
             // 似た操作を並べ、まとまりの間を空ける：置き換える（橙・確認あり）｜上書きしない｜見る
             FlowLayoutPanel actions = Ui.WrapRow(Ui.L("チェックしたファイルを"),
+                Btn.MakeCaution(Ui.B("それぞれ新しい方を使う…", delegate { ApplyNewer(); })),
                 Btn.MakeCaution(Ui.B("上書きする（このPCの方を使う）", delegate { Apply(AppCore.ActOverwrite); })),
                 takeShared = Btn.MakeCaution(Ui.B("共有フォルダの方を使う（同期のみ）", delegate { Apply(AppCore.ActTakeShared); })),
                 Btn.Gap(),
@@ -110,7 +120,9 @@ namespace AutoCopy
             actions.MaximumSize = new Size(Math.Max(200, ClientSize.Width - 30), 0);
 
             // 「共有フォルダの方を使う」は、チェックしたものがすべて同期のジョブのときだけ押せる（押せない理由はマウスを重ねると出る）
-            lv.ItemChecked += delegate { UpdateTakeShared(); };
+            // チェックが変わるたびに全件を読むと、件数が多いと固まる（行を足すたびにも起きる）。
+            // また一覧を作っている最中に読むと一覧が壊れ、画面が開かないことがある。まとめて1回、作り終えてから調べる
+            lv.ItemChecked += delegate { UpdateTakeSharedLater(); };
             reasons.Set(takeShared, delegate { return TakeSharedReason(); });
             Controls.Add(lv);
             Controls.Add(checkBar);
@@ -130,6 +142,7 @@ namespace AutoCopy
         {
             lv.BeginUpdate();
             lv.Items.Clear();
+            List<ListViewItem> add = new List<ListViewItem>();
             foreach (JobConfig j in AppCore.Settings.Jobs.ToArray())
             {
                 JobState st = AppCore.GetState(j.Id);
@@ -147,9 +160,10 @@ namespace AutoCopy
                     it.ForeColor = j.Sync ? Ui.Warn : SystemColors.WindowText;   // 同期のジョブは橙（どちらの版を使うか選べる）
                     Row r = new Row(); r.Job = j; r.Item = c;
                     it.Tag = r;
-                    lv.Items.Add(it);
+                    add.Add(it);
                 }
             }
+            lv.Items.AddRange(add.ToArray());   // まとめて足す（件数が多くても速い）
             ((AcListView)lv).Resort();
             lv.EndUpdate();
             Text = "上書きの確認（" + lv.Items.Count + "件）";
@@ -172,7 +186,111 @@ namespace AutoCopy
 
         private void UpdateTakeShared()
         {
-            if (takeShared != null) takeShared.Enabled = TakeSharedReason() == null;
+            if (takeShared == null || lv.IsDisposed) return;
+            if (lv.IsHandleCreated && lv.RecreatingHandle) return;
+            takeShared.Enabled = TakeSharedReason() == null;
+        }
+
+        private bool takeSharedPending;
+
+        private void UpdateTakeSharedLater()
+        {
+            if (takeSharedPending) return;
+            if (!IsHandleCreated) return;   // 画面を作る前：Reload の最後と、表示したときに調べる
+            takeSharedPending = true;
+            try { BeginInvoke(new Action(delegate() { takeSharedPending = false; UpdateTakeShared(); })); }
+            catch (Exception) { takeSharedPending = false; }
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            UpdateTakeShared();
+        }
+
+        // ---------- 新しい方 ----------
+
+        public const int NewerSource = 1, NewerDest = 2, NewerUnknown = 0;
+
+        /// <summary>どちらが新しいか（日時の差がジョブの許容範囲以内なら決められない）</summary>
+        public static int WhichNewer(JobConfig job, ConflictItem c)
+        {
+            long tol = TimeSpan.TicksPerSecond * Math.Max(0, job.ToleranceSeconds);
+            if (c.SrcMtime - c.DstMtime > tol) return NewerSource;
+            if (c.DstMtime - c.SrcMtime > tol) return NewerDest;
+            return NewerUnknown;
+        }
+
+        /// <summary>
+        /// 「それぞれ新しい方を使う」の扱い（決められない = null）。
+        /// コピー元が新しい → 上書きする（コピー元を使う）。
+        /// コピー先が新しい → 同期のジョブは「共有フォルダの方を使う」、それ以外は「今回はスキップ」（コピー先をそのまま残す）。
+        /// </summary>
+        public static string NewerAction(JobConfig job, ConflictItem c)
+        {
+            int w = WhichNewer(job, c);
+            if (w == NewerSource) return AppCore.ActOverwrite;
+            if (w == NewerDest) return job.Sync ? AppCore.ActTakeShared : AppCore.ActSkipOnce;
+            return null;
+        }
+
+        /// <summary>新しい方の行にチェックを入れる（ほかの行のチェックは外す）。戻り値：チェックした件数</summary>
+        public int CheckNewer(int side)
+        {
+            int n = 0;
+            lv.BeginUpdate();
+            try
+            {
+                foreach (ListViewItem it in lv.Items)
+                {
+                    Row r = it.Tag as Row;
+                    bool on = r != null && WhichNewer(r.Job, r.Item) == side;
+                    if (it.Checked != on) it.Checked = on;
+                    if (on) n++;
+                }
+            }
+            finally { lv.EndUpdate(); }
+            return n;
+        }
+
+        /// <summary>チェックしたファイルを、それぞれ新しい方に揃える（確認してから）</summary>
+        private void ApplyNewer()
+        {
+            List<Row> rows = new List<Row>();
+            foreach (ListViewItem it in lv.CheckedItems) rows.Add((Row)it.Tag);
+            if (rows.Count == 0) { Ui.Info(this, "ファイルにチェックを入れてください。\n（「新しい方で選ぶ ▾」でまとめてチェックできます）"); return; }
+            int ow = 0, keep = 0, shared = 0, unknown = 0;
+            foreach (Row r in rows)
+            {
+                string a = NewerAction(r.Job, r.Item);
+                if (a == AppCore.ActOverwrite) ow++;
+                else if (a == AppCore.ActTakeShared) shared++;
+                else if (a == AppCore.ActSkipOnce) keep++;
+                else unknown++;
+            }
+            if (ow + keep + shared == 0) { Ui.Info(this, "チェックしたファイルは、どれも更新日時が同じで、どちらが新しいか決められません。\nそれぞれのボタンで選んでください。"); return; }
+            string msg = "チェックした " + rows.Count + "件を、それぞれ新しい方に揃えます。\n\n"
+                + (ow > 0 ? "・コピー元（このPC）の方が新しい " + ow + "件：コピー先を上書きします" + (backup.Checked ? "（古いファイルは「_AutoCopy\\退避」に残します）" : "（「退避に残す」のチェックが外れています）") + "\n" : "")
+                + (shared > 0 ? "・共有フォルダの方が新しい " + shared + "件（同期）：このPCのファイルを共有フォルダの版で置き換えます（このPCの今の版は控えに残ります）\n" : "")
+                + (keep > 0 ? "・コピー先の方が新しい " + keep + "件：コピー先をそのまま残します（今回はスキップ）\n" : "")
+                + (unknown > 0 ? "・更新日時が同じでどちらとも言えない " + unknown + "件：何もしません（確認待ちのまま）\n" : "")
+                + "\nよろしいですか？";
+            if (!Ui.Confirm(this, msg)) return;
+            bool bk = backup.Checked;
+            List<string> errors = Ui.Busy<List<string>>(this, "処理しています…", delegate()
+            {
+                List<string> errs = new List<string>();
+                foreach (Row r in rows)
+                {
+                    string a = NewerAction(r.Job, r.Item);
+                    if (a == null) continue;
+                    string e = AppCore.ResolveConflict(r.Job, r.Item, a, bk);
+                    if (e != null) errs.Add(e);
+                }
+                return errs;
+            });
+            Reload();
+            if (errors.Count > 0) Ui.Error(this, "できなかったものがあります：\n" + string.Join("\n", errors.ToArray()));
         }
 
         private void Apply(string action)

@@ -231,6 +231,8 @@ namespace AutoCopy
             m.Font = Ui.Base;
             m.Items.Add("コピー先の整理（重複チェック）の結果…", null, delegate { TrayApp.Instance.ShowDup(FirstSelected()); });
             m.Items.Add("フォルダの重複ファイル探し（コピーと関係なく）…", null, delegate { TrayApp.Instance.ShowFolderDup(null); });
+            m.Items.Add(new ToolStripSeparator());
+            m.Items.Add("ファイルの一括削除（条件で探して削除・コピーと関係なく）…", null, delegate { TrayApp.Instance.ShowBulkDelete(null); });
             b.Click += delegate { m.Show(b, new Point(0, b.Height)); };
             return b;
         }
