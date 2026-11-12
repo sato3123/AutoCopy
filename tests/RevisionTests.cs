@@ -60,6 +60,7 @@ namespace AutoCopy.Tests
             Add("T131", "上書きの確認：どちらが新しいか・それぞれ新しい方の扱い・新しい方にまとめてチェック", ConflictNewer);
             Add("T132", "ファイルの一括削除：条件・使えないフォルダ・探しても削除しない・チェックしたものだけごみ箱へ・探した後に変わったものは削除しない", BulkDeleteTool);
             Add("T133", "触っていないのに「日付違い・サイズ同じ」にならない：コピー先が日時を残さない・コピー元の日時が少しずれる・記録がない（中身が同じならコピーも確認もしない。中身が違えば今まで通り）", TimeOnlyDifference);
+            Add("T134", "ジョブのグループ：同じグループのジョブは同時に実行しない（待って、終わったら実行）・違うグループ・グループなしは今まで通り", JobGroups);
             Add("T112", "終了時の停止待ちは上限まで（止まらない処理があっても終了できる）", StopTimeout);
         }
 
@@ -1500,6 +1501,63 @@ namespace AutoCopy.Tests
             lock (b.State) cf5 = b.State.Conflicts.Exists(mitsu);
             True(cf5, "コピー先も直されていれば確認");
             Eq("中身C-00000", File.ReadAllText(da), "コピー先の変更は消さない");
+        }
+
+        private static void JobGroups()
+        {
+            JobConfig x = new JobConfig(), y = new JobConfig();
+            True(!AppCore.SameGroup(x, y), "グループなし同士は同じグループではない");
+            x.Group = " 経理 "; y.Group = "経理";
+            True(AppCore.SameGroup(x, y), "前後の空白は区別しない");
+            y.Group = "KEIRI"; x.Group = "keiri";
+            True(AppCore.SameGroup(x, y), "大文字・小文字は区別しない");
+            y.Group = "総務";
+            True(!AppCore.SameGroup(x, y), "違うグループ");
+            x.Group = "   ";
+            Eq(null, x.GroupKey, "空白だけはグループなし");
+
+            // 3つのジョブ（フォルダはすべて別）：A と B は同じグループ、C は別のグループ
+            Box b = new Box("T134");
+            b.Job.Name = "A"; b.Job.Group = "夜間";
+            b.W("a.txt", "a");
+            Func<string, string, JobConfig> mk = delegate(string name, string group)
+            {
+                JobConfig j = b.Job.Clone(); j.Id = Guid.NewGuid().ToString("N"); j.Name = name; j.Group = group;
+                j.Source = Path.Combine(b.Root, name + "-src"); j.Dest = Path.Combine(b.Root, name + "-dst");
+                Directory.CreateDirectory(j.Source); File.WriteAllText(Path.Combine(j.Source, name + ".txt"), name);
+                File.SetLastWriteTimeUtc(Path.Combine(j.Source, name + ".txt"), DateTime.UtcNow.AddMinutes(-5));
+                b.App.Jobs.Add(j);
+                return j;
+            };
+            JobConfig jb = mk("B", "夜間"), jc = mk("C", "昼間");
+            b.Apply();
+            List<string> gn = JobEditForm.GroupNames(null);
+            True(gn.Count == 2 && gn.Contains("昼間") && gn.Contains("夜間"), "使っているグループ名（選べるように・重複なし）: " + string.Join(",", gn.ToArray()));
+            JobRuntime ra = AppCore.GetRuntime(b.Job.Id), rb = AppCore.GetRuntime(jb.Id), rc = AppCore.GetRuntime(jc.Id);
+            lock (ra) ra.Running = true;   // A が実行中
+            try
+            {
+                Eq(b.Job.Name, AppCore.OverlappingRunning(jb) != null ? AppCore.OverlappingRunning(jb).Name : null, "B は A（同じグループ）が終わるのを待つ");
+                Eq(null, AppCore.OverlappingRunning(jc), "C（違うグループ）は待たない");
+                True(AppCore.RunJob(jb.Id, true, false), "手動の実行は受け付ける（待ってから実行）");
+                True(!rb.Running && rb.QueuedManual && rb.WaitingFor == "A", "B は待機中: " + rb.WaitingFor);
+                True(!File.Exists(Path.Combine(jb.Dest, "B.txt")), "A が動いている間は B はコピーしない");
+                True(AppCore.RunJob(jc.Id, true, false), "C は実行する");
+                True(rc.Idle.Wait(30000), "C が終わる");
+                True(File.Exists(Path.Combine(jc.Dest, "C.txt")), "違うグループの C は、A の実行中でもコピーした");
+            }
+            finally { lock (ra) ra.Running = false; }
+            // A が終わったら、待っていた B を実行する（実行の予定の確認で、待っていた手動の実行を始める）
+            AppCore.RunJob(jb.Id, true, false);   // A が終わったので B を実行（予定の確認がすでに始めていれば、それを待つ）
+            True(rb.Idle.Wait(30000), "B が終わる");
+            True(File.Exists(Path.Combine(jb.Dest, "B.txt")), "B をコピーした");
+            True(!rb.QueuedManual && rb.WaitingFor == null, "待機中の印は消える");
+
+            // 保存の互換：前の版の設定（Group がない）はグループなし
+            JobConfig old = Json.Deserialize<JobConfig>("{\"Name\":\"前の版\"}");
+            Eq(null, old.GroupKey, "前の版のジョブはグループなし");
+            JobConfig rt2 = Json.Deserialize<JobConfig>(Json.Serialize(jb));
+            Eq("夜間", rt2.GroupKey, "グループ名を保存・読み込みできる");
         }
 
         private static void MessageFits()

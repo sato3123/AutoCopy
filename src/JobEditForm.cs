@@ -214,6 +214,16 @@ namespace AutoCopy
                 Ui.Row(rInterval, nInterval, cbUnit, Ui.Hint("ごと（1分〜24時間）")),
                 cRunAtStartup, lStartupNote, rStartupOnly, lOnlyNote)));
 
+            // グループ：同じグループのジョブは同時に実行しない（順番に実行）
+            cbGroup = new ComboBox();
+            cbGroup.DropDownStyle = ComboBoxStyle.DropDown;
+            cbGroup.Font = Ui.Base;
+            cbGroup.Width = Ui.S(200);
+            cbGroup.MaxLength = 60;
+            foreach (string g in GroupNames(job.Id)) cbGroup.Items.Add(g);
+            b.Controls.Add(Ui.Row(Ui.L("グループ（任意）", 130), cbGroup,
+                Ui.Hint("同じグループのジョブは同時に実行せず、1つずつ順番に実行します（空欄 = グループなし）")));
+
             cWindow = Ui.C("時間帯を限定する", false);
             tStart = Ui.T("08:00", 60);
             tEnd = Ui.T("20:00", 60);
@@ -257,6 +267,24 @@ namespace AutoCopy
             Adv(b, Ui.Row(Ui.L("転送速度の上限", 130), cBwLimit, nBw, Ui.Hint("KB/秒（1000 KB/秒 ≒ 1 MB/秒）")));
             p.Controls.Add(b);
             return p;
+        }
+
+        private ComboBox cbGroup;
+
+        /// <summary>ほかのジョブで使っているグループ名（選べるように）</summary>
+        public static List<string> GroupNames(string exceptJobId)
+        {
+            List<string> r = new List<string>();
+            foreach (JobConfig o in AppCore.Settings.Jobs.ToArray())
+            {
+                string g = o.GroupKey;
+                if (g == null) continue;
+                bool dup = false;
+                foreach (string x in r) if (string.Equals(x, g, StringComparison.OrdinalIgnoreCase)) dup = true;
+                if (!dup) r.Add(g);
+            }
+            r.Sort(StringComparer.CurrentCulture);
+            return r;
         }
 
         /// <summary>「詳しい設定」のときだけ見せる部品として加える</summary>
@@ -878,6 +906,7 @@ namespace AutoCopy
             cRunAtStartup.Checked = j.RunAtStartup;
             rStartupOnly.Checked = j.StartupOnly;
             rInterval.Checked = !j.StartupOnly;
+            cbGroup.Text = j.GroupKey ?? "";
             rDedupOff.Checked = j.Dedup == DedupMode.Off;
             rDedupAsk.Checked = j.Dedup == DedupMode.Ask;
             rDedupOn.Checked = j.Dedup == DedupMode.Auto;
@@ -980,6 +1009,8 @@ namespace AutoCopy
             j.SyncRemoteCacheMinutes = cSyncCache.Checked ? (int)nSyncCache.Value : 0;
             j.RunAtStartup = cRunAtStartup.Checked;
             j.StartupOnly = rStartupOnly.Checked;
+            string grp = cbGroup.Text.Trim();
+            j.Group = grp.Length == 0 ? null : grp;
             j.Dedup = rDedupOff.Checked ? DedupMode.Off : rDedupOn.Checked ? DedupMode.Auto : DedupMode.Ask;
             j.DedupMinMB = (int)nDedup.Value;
             j.MirrorMaxCount = (int)nMirrorCount.Value;

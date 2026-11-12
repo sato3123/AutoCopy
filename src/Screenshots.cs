@@ -36,6 +36,15 @@ namespace AutoCopy
             Capture("02a_ジョブ設定_新規_かんたん表示", delegate() { AppCore.Settings.ShowAdvancedJobSettings = false; JobConfig n = new JobConfig(); n.Enabled = false; return new JobEditForm(n, true); }, delegate(Form f) { SelectTab(f, 0); });
             Capture("02b_ジョブ設定_新規_除外_かんたん表示", delegate() { AppCore.Settings.ShowAdvancedJobSettings = false; JobConfig n = new JobConfig(); n.Enabled = false; n.Source = j0.Source; return new JobEditForm(n, true); }, delegate(Form f) { SelectTab(f, 1); });
             Capture("46_新しいジョブの保存後の案内", delegate() { return new EnableJobForm(j0); }, null);
+            Capture("47_ファイルの一括削除", delegate()
+            {
+                string src = CopyEngine.ResolvedSource(j0, AppCore.Settings);
+                BulkDeleteForm f = new BulkDeleteForm(src);
+                f.SetInputs(src, ".xlsx .csv", "");
+                int sc, fl;
+                f.Fill(src, BulkDelete.Find(src, true, f.Criteria(), CancellationToken.None, out sc, out fl), sc);   // 探した後の一覧（削除はしない）
+                return f;
+            }, null);
             Capture("03_ジョブ設定_除外ルール", delegate() { return new JobEditForm(j0.Clone(), false); }, delegate(Form f) { SelectTab(f, 1); });
             Capture("04_ジョブ設定_接続と重複チェック", delegate() { return new JobEditForm(j1.Clone(), false); }, delegate(Form f) { SelectTab(f, 2); });
             Capture("05_ミラーの注意", delegate() { return new MirrorWarnForm(j1); }, null);

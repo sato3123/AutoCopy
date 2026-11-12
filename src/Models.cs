@@ -139,6 +139,11 @@ namespace AutoCopy
         [DataMember] public bool RunAtStartup;
         // ログオン時（アプリの起動時）だけ実行する（一定の間隔では実行しない）
         [DataMember] public bool StartupOnly;
+        /// <summary>グループ名（空 = グループなし）。同じグループのジョブは同時に実行しない（順番に実行）</summary>
+        [DataMember] public string Group;
+
+        /// <summary>比べるためのグループ名（前後の空白を除く。空 = null）</summary>
+        public string GroupKey { get { string g = (Group ?? "").Trim(); return g.Length == 0 ? null : g; } }
         // 大きいファイルの重複（コピー元の中で中身が同じ）の扱い：off = 使わない / ask = 見つけたら毎回選ぶ（初期値） / auto = 自動でテキストにする
         [DataMember(Name = "DedupMode")] public string Dedup;
         // v1.7 の「使う・使わない」（使う = 自動でテキスト）。読み込んだら DedupMode に移す

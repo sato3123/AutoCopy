@@ -581,7 +581,7 @@ namespace AutoCopy
                     string interval = j.StartupOnly ? "ログオン時" : j.IntervalMinutes % 60 == 0 ? (j.IntervalMinutes / 60) + "時間" : j.IntervalMinutes + "分";
                     string last = rt.LastRun == DateTime.MinValue ? "—" : (rt.LastRun.Date == DateTime.Today ? rt.LastRun.ToString("HH:mm") : rt.LastRun.ToString("M/d HH:mm"));
                     string paths = CopyEngine.ResolvedSource(j, s) + (j.Sync ? "  ⇄  " : "  →  ") + CopyEngine.ResolvedDest(j, s);
-                    string[] cols = new string[] { j.Name + (j.Scope == JobScope.Dist ? "" : "（このPCだけ）"), j.ModeLabel, paths, interval, last, result, next };
+                    string[] cols = new string[] { j.Name + (j.Scope == JobScope.Dist ? "" : "（このPCだけ）"), j.ModeLabel + (j.GroupKey != null ? "・グループ " + j.GroupKey : ""), paths, interval, last, result, next };
 
                     ListViewItem it;
                     if (!rows.TryGetValue(j.Id, out it))
@@ -604,7 +604,7 @@ namespace AutoCopy
                     it.ForeColor = j.Enabled ? SystemColors.WindowText : Ui.Quiet;
                     if (it.Font != (j.Enabled ? Ui.Bold : Ui.Base)) it.Font = j.Enabled ? Ui.Bold : Ui.Base;   // ジョブ名をいちばんに読めるように（無効は普通の太さ・灰色）
                     // 列が狭くて欠けた文字も、行にマウスを重ねると全部見える
-                    string tip = cols[0] + "（" + cols[1] + "）\n" + (j.Sync ? "同期：" : "コピー元 → コピー先：") + "\n" + paths + "\n結果：" + result + "\n間隔：" + interval + "　前回：" + last + "　次回：" + next;
+                    string tip = cols[0] + "（" + cols[1] + "）\n" + (j.GroupKey != null ? "グループ「" + j.GroupKey + "」：同じグループのジョブとは同時に実行しません\n" : "") + (j.Sync ? "同期：" : "コピー元 → コピー先：") + "\n" + paths + "\n結果：" + result + "\n間隔：" + interval + "　前回：" + last + "　次回：" + next;
                     if (it.ToolTipText != tip) it.ToolTipText = tip;
                 }
                 if (resort && sjobs != null) sjobs.Resort();

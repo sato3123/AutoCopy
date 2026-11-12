@@ -509,6 +509,17 @@ namespace AutoCopy
         /// 同じフォルダ（コピー先どうし・コピー元とコピー先）を使っていて、今動いている別のジョブ。
         /// 同時に動くと同じファイルを書き合ったり、コピー中のファイルを読んだりするため、終わるのを待つ。
         /// </summary>
+        /// <summary>同じグループか（大文字・小文字・全角半角の空白の違いは区別しない）</summary>
+        public static bool SameGroup(JobConfig a, JobConfig b)
+        {
+            string x = a.GroupKey, y = b.GroupKey;
+            return x != null && y != null && string.Equals(x, y, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// このジョブと同時に動かせない、動いている別のジョブ（なし = null）。
+        /// 同じグループのジョブ、または同じフォルダを使うジョブ。待っているジョブは、相手が終わってから実行する。
+        /// </summary>
         public static JobConfig OverlappingRunning(JobConfig job)
         {
             string s = CopyEngine.ResolvedSource(job, Settings), d = CopyEngine.ResolvedDest(job, Settings);
@@ -517,6 +528,7 @@ namespace AutoCopy
                 if (o.Id == job.Id) continue;
                 JobRuntime ort = GetRuntime(o.Id);
                 if (!ort.Running && !ort.DupRunning && !ort.Resolving) continue;
+                if (SameGroup(job, o)) return o;
                 string os = CopyEngine.ResolvedSource(o, Settings), od = CopyEngine.ResolvedDest(o, Settings);
                 if (Overlaps(d, od) || Overlaps(d, os) || Overlaps(s, od)) return o;
             }
@@ -546,7 +558,9 @@ namespace AutoCopy
                 {
                     // 同じフォルダを使う別のジョブが動いている：終わってから実行する（手動の実行は覚えておく）
                     if (rt.WaitingFor != other.Name)
-                        Logger.Info(job.Name, "ジョブ「" + other.Name + "」が同じフォルダを使っているため、終わってから実行します");
+                        Logger.Info(job.Name, SameGroup(job, other)
+                            ? "同じグループ「" + job.GroupKey + "」のジョブ「" + other.Name + "」が実行中のため、終わってから実行します"
+                            : "ジョブ「" + other.Name + "」が同じフォルダを使っているため、終わってから実行します");
                     rt.WaitingFor = other.Name;
                     if (manual) rt.QueuedManual = true;
                     RaiseChanged();
