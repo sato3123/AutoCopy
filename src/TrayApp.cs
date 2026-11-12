@@ -29,7 +29,7 @@ namespace AutoCopy
         private bool blinkOn;
         private Icon normalIcon;
         private AttentionForm attentionForm;
-        private HashSet<string> lastAttention = new HashSet<string>();
+        private Dictionary<string, long> lastAttention = new Dictionary<string, long>();
         private DateTime nextRemind = DateTime.MinValue;
         private volatile bool dirty;
         private DateTime lastIconUpdate = DateTime.MinValue;
@@ -96,10 +96,11 @@ namespace AutoCopy
         private void CheckAttention(List<AppCore.AttentionItem> items)
         {
             AppSettings s = AppCore.Settings;
-            HashSet<string> now = new HashSet<string>();
-            foreach (AppCore.AttentionItem it in items) now.Add(it.Action + "|" + it.JobId + "|" + (it.IsError ? "error" : it.Text));
-            bool hasNew = false;
-            foreach (string k in now) if (!lastAttention.Contains(k)) { hasNew = true; break; }
+            // 重複の削除などを処理している間は、1件ごとに件数が変わるので更新しない（終わったときに1回だけ更新する）
+            if (AppCore.AnyResolving()) return;
+            Dictionary<string, long> now = new Dictionary<string, long>();
+            // 件数が減っただけ（処理が進んだ）では出し直さない。新しい種類か、件数が増えたときだけ前に出す
+            bool hasNew = AppCore.HasNewAttention(lastAttention, items, now);
             lastAttention = now;
 
             if (items.Count == 0)

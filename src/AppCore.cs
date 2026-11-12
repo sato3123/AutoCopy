@@ -806,7 +806,18 @@ namespace AutoCopy
             return null;
         }
 
-        public static void EndResolve(JobConfig job) { lock (sync) { JobRuntime rt; if (runtimes.TryGetValue(job.Id, out rt)) { rt.Resolving = false; if (!rt.Running && !rt.DupRunning) rt.Idle.Set(); } } }
+        public static void EndResolve(JobConfig job)
+        {
+            lock (sync) { JobRuntime rt; if (runtimes.TryGetValue(job.Id, out rt)) { rt.Resolving = false; if (!rt.Running && !rt.DupRunning) rt.Idle.Set(); } }
+            RaiseChanged();   // 処理が終わったので、お知らせ画面を最後の状態に1回だけ更新する
+        }
+
+        /// <summary>重複の削除・上書きの確認などを処理している途中か（その間はお知らせ画面を更新しない）</summary>
+        public static bool AnyResolving()
+        {
+            lock (sync) { foreach (JobRuntime rt in runtimes.Values) if (rt.Resolving) return true; }
+            return false;
+        }
 
         // Reserve the job first, then drain its worker before changing paths/state.
         public static void StopJobAndWait(string id)

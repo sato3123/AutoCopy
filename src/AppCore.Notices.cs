@@ -313,6 +313,42 @@ namespace AutoCopy
             return list;
         }
 
+        /// <summary>お知らせの種類（件数を除いた文）。件数が減っただけでは「新しいお知らせ」としない</summary>
+        public static string AttentionKind(AttentionItem it)
+        {
+            if (it == null) return "";
+            return it.Action + "|" + it.JobId + "|" + (it.IsError ? "error" : System.Text.RegularExpressions.Regex.Replace(it.Text ?? "", "[0-9][0-9,]*", "#"));
+        }
+
+        /// <summary>文の最初の数字（件数）。なければ 0</summary>
+        public static long AttentionCount(AttentionItem it)
+        {
+            if (it == null || it.IsError || it.Text == null) return 0;
+            System.Text.RegularExpressions.Match m = System.Text.RegularExpressions.Regex.Match(it.Text, "[0-9][0-9,]*");
+            long v;
+            return m.Success && long.TryParse(m.Value.Replace(",", ""), out v) ? v : 0;
+        }
+
+        /// <summary>前回から新しく出たお知らせがあるか（種類が増えた、または件数が増えた）。next に今回の状態を入れる</summary>
+        public static bool HasNewAttention(Dictionary<string, long> prev, List<AttentionItem> now, Dictionary<string, long> next)
+        {
+            bool fresh = false;
+            foreach (AttentionItem it in now)
+            {
+                string k = AttentionKind(it);
+                long c = AttentionCount(it);
+                long old;
+                if (next.TryGetValue(k, out old)) c = Math.Max(c, old);
+                next[k] = c;
+            }
+            foreach (KeyValuePair<string, long> kv in next)
+            {
+                long old;
+                if (prev == null || !prev.TryGetValue(kv.Key, out old) || kv.Value > old) { fresh = true; break; }
+            }
+            return fresh;
+        }
+
         private static AttentionItem Item(string text, string action, string jobId, bool err)
         {
             AttentionItem i = new AttentionItem();

@@ -61,6 +61,7 @@ namespace AutoCopy.Tests
             Add("T132", "ファイルの一括削除：条件・使えないフォルダ・探しても削除しない・チェックしたものだけごみ箱へ・探した後に変わったものは削除しない", BulkDeleteTool);
             Add("T133", "触っていないのに「日付違い・サイズ同じ」にならない：コピー先が日時を残さない・コピー元の日時が少しずれる・記録がない（中身が同じならコピーも確認もしない。中身が違えば今まで通り）", TimeOnlyDifference);
             Add("T134", "ジョブのグループ：同じグループのジョブは同時に実行しない（待って、終わったら実行）・違うグループ・グループなしは今まで通り", JobGroups);
+            Add("T135", "お知らせ画面：処理中は更新しない（終わったら1回だけ）・件数が減っただけでは出し直さない・増えたら出す", AttentionOnlyAtEnd);
             Add("T112", "終了時の停止待ちは上限まで（止まらない処理があっても終了できる）", StopTimeout);
         }
 
@@ -1693,6 +1694,54 @@ namespace AutoCopy.Tests
             // 前の版の設定（項目なし）は 0 ＝ すべて
             JobConfig old = Json.Deserialize<JobConfig>("{\"Id\":\"x\",\"Name\":\"前の版\"}");
             Eq(0, old.DupMinSizeKB, "前の版の設定はすべて探す");
+        }
+
+        private static void AttentionOnlyAtEnd()
+        {
+            Func<string, string, string, bool, AppCore.AttentionItem> it = delegate(string text, string action, string job, bool err)
+            {
+                AppCore.AttentionItem a = new AppCore.AttentionItem(); a.Text = text; a.Action = action; a.JobId = job; a.IsError = err; return a;
+            };
+            Func<int, List<AppCore.AttentionItem>> dup = delegate(int n)
+            {
+                return new List<AppCore.AttentionItem> { it("ジョブ2：大きいファイルの重複 " + n.ToString("#,0") + "件（テキストへの置き換え）の扱いを選んでください", "dup", "j2", false) };
+            };
+            Dictionary<string, long> prev = new Dictionary<string, long>(), next = new Dictionary<string, long>();
+            True(AppCore.HasNewAttention(prev, dup(1200), next), "初めて出たものは新しい");
+            Eq(1200L, next[AppCore.AttentionKind(dup(1200)[0])], "件数（桁区切りも読む）");
+            // 1件ずつ処理して件数が減っていく：毎回は出し直さない
+            for (int n = 1199; n >= 1190; n--)
+            {
+                prev = next; next = new Dictionary<string, long>();
+                True(!AppCore.HasNewAttention(prev, dup(n), next), "件数が減っただけでは新しくない: " + n);
+            }
+            prev = next; next = new Dictionary<string, long>();
+            True(!AppCore.HasNewAttention(prev, dup(1190), next), "同じなら新しくない");
+            prev = next; next = new Dictionary<string, long>();
+            True(AppCore.HasNewAttention(prev, dup(1195), next), "件数が増えたら新しい（また見つかった）");
+            prev = next; next = new Dictionary<string, long>();
+            List<AppCore.AttentionItem> two = dup(1195);
+            two.Add(it("上書きの確認が 3件 あります", "conflicts", null, false));
+            True(AppCore.HasNewAttention(prev, two, next), "別の種類が増えたら新しい");
+            prev = next; next = new Dictionary<string, long>();
+            True(!AppCore.HasNewAttention(prev, dup(1195), next), "片方が片付いただけでは新しくない");
+            // エラーは文が変わっても同じ種類
+            Dictionary<string, long> p2 = new Dictionary<string, long>(), n2 = new Dictionary<string, long>();
+            AppCore.HasNewAttention(p2, new List<AppCore.AttentionItem> { it("A：エラー　12件失敗", "error", "a", true) }, n2);
+            True(!AppCore.HasNewAttention(n2, new List<AppCore.AttentionItem> { it("A：エラー　15件失敗", "error", "a", true) }, new Dictionary<string, long>()), "エラーの文の違いでは出し直さない（前と同じ）");
+            // ジョブ名の数字は件数として扱わない（種類も件数もジョブごとに分かれる）
+            Dictionary<string, long> p3 = new Dictionary<string, long>(), n3 = new Dictionary<string, long>();
+            AppCore.HasNewAttention(p3, new List<AppCore.AttentionItem> { it("ジョブ1：同期で削除されたファイル 5件 の扱いを選んでください", "synccand", "j1", false) }, n3);
+            True(AppCore.HasNewAttention(n3, new List<AppCore.AttentionItem> { it("ジョブ1：同期で削除されたファイル 5件 の扱いを選んでください", "synccand", "j1", false),
+                it("ジョブ9：同期で削除されたファイル 1件 の扱いを選んでください", "synccand", "j9", false) }, new Dictionary<string, long>()), "別のジョブは別の種類");
+
+            // 処理中（重複の削除など）の間は AnyResolving が true、終わったら false
+            Box b = new Box("T135");
+            True(!AppCore.AnyResolving(), "ふだんは処理中ではない");
+            Eq(null, AppCore.BeginResolve(b.Job), "処理を始める");
+            try { True(AppCore.AnyResolving(), "処理中（お知らせ画面は更新しない）"); }
+            finally { AppCore.EndResolve(b.Job); }
+            True(!AppCore.AnyResolving(), "終わったら更新する");
         }
 
         private static void StopTimeout()
