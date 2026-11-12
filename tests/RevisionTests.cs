@@ -1483,7 +1483,10 @@ namespace AutoCopy.Tests
             lock (b.State) rec = b.State.Files["見積.xlsx"];
             True(File.GetLastWriteTimeUtc(da).Ticks > File.GetLastWriteTimeUtc(sa).Ticks, "コピー先の日時の方が新しく見える");
             r = b.Run();
-            Eq(0, r.Conflicts, "見かけだけの「コピー先が新しい」で確認にしない");
+            Predicate<ConflictItem> mitsu = delegate(ConflictItem x) { return x.Rel == "見積.xlsx"; };
+            bool cf4;
+            lock (b.State) cf4 = b.State.Conflicts.Exists(mitsu);   // 3) の「表.csv」の確認は残っている
+            True(!cf4, "見かけだけの「コピー先が新しい」で確認にしない");
             Eq(1, r.Overwritten, "コピー元の変更を上書きでコピー");
             Eq("中身B-67890", File.ReadAllText(da), "コピー先が新しい中身になる");
 
@@ -1493,7 +1496,9 @@ namespace AutoCopy.Tests
             File.WriteAllText(sa, "中身D-11111");
             File.SetLastWriteTimeUtc(sa, DateTime.UtcNow.AddMinutes(-2));
             r = b.Run();
-            Eq(1, r.Conflicts, "コピー先も直されていれば確認");
+            bool cf5;
+            lock (b.State) cf5 = b.State.Conflicts.Exists(mitsu);
+            True(cf5, "コピー先も直されていれば確認");
             Eq("中身C-00000", File.ReadAllText(da), "コピー先の変更は消さない");
         }
 
