@@ -360,7 +360,7 @@ namespace AutoCopy
             cMax = Ui.C("", false); nMax = Ui.N(0, 999999, 100, 80); cbMaxU = Ui.Combo(64, Units); cbMaxU.SelectedIndex = 0;
             cOlder = Ui.C("", false); dOlder = Ui.DateBox(DateTime.Today.AddYears(-1));
             cHidden = Ui.C("隠しファイルも対象にする（システムファイルは対象にしません）", false);
-            Button search = Btn.MakePrimary(Ui.B("探す（まだ削除しません）", delegate { Search(); }));
+            Button search = Btn.MakePrimary(Ui.B("探す（まだ削除しない）", delegate { Search(); }));
 
             FlowLayoutPanel top = Ui.Column(
                 Ui.Heading("ファイルの一括削除（条件に合うファイルを探して、確かめてから削除）"),
