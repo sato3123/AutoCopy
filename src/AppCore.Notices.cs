@@ -320,11 +320,11 @@ namespace AutoCopy
             return it.Action + "|" + it.JobId + "|" + (it.IsError ? "error" : System.Text.RegularExpressions.Regex.Replace(it.Text ?? "", "[0-9][0-9,]*", "#"));
         }
 
-        /// <summary>文の最初の数字（件数）。なければ 0</summary>
+        /// <summary>文の「〇件」の数（ジョブ名の数字は数えない）。なければ 0</summary>
         public static long AttentionCount(AttentionItem it)
         {
             if (it == null || it.IsError || it.Text == null) return 0;
-            System.Text.RegularExpressions.Match m = System.Text.RegularExpressions.Regex.Match(it.Text, "[0-9][0-9,]*");
+            System.Text.RegularExpressions.Match m = System.Text.RegularExpressions.Regex.Match(it.Text, "[0-9][0-9,]*(?=\\s*件)");
             long v;
             return m.Success && long.TryParse(m.Value.Replace(",", ""), out v) ? v : 0;
         }
