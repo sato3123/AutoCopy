@@ -22,6 +22,8 @@ namespace AutoCopy
         public int SyncDeleteNew;          // うち今回新しく見つかったもの
 
         public int PlannedCopyCount, Scanned, Copied, Overwritten, Renamed, Conflicts, Deleted, Errors, Locked, Excluded, Deferred, PendingDeletes, SameAdopted;
+        /// <summary>大きさが同じで日時だけ違い、中身が同じだったためコピーしなかった数</summary>
+        public int TimeOnlySame;
         public int Deduped, PlannedDedup;          // 重複のためコピーせず、場所を書いたテキストを置いた件数
         public int DedupAsked;                     // 大きいファイルの重複：扱いを選んでもらうまでコピーしない件数
         public bool DedupNew;                      // 選んでもらう重複が新しく見つかった
@@ -404,6 +406,30 @@ namespace AutoCopy
                 long dm = dfi.LastWriteTimeUtc.Ticks, ds = dfi.Length;
                 CopyTask ow;
                 long diff = dm - it.Mtime;
+                // 大きさが同じで、日時だけが違う：中身が同じなら「変わっていない」（コピーも確認もしない。記録だけ直す）。
+                // コピー先（NAS・USBメモリ・クラウドなど）が日時をそのまま残さない、コピー元の日時の細かい部分が変わる、
+                // 記録がない、などで、触っていないのに「日付違い・サイズ同じ」になるのを防ぐ。
+                if (Math.Abs(diff) > tol && ds == it.Size)
+                {
+                    byte[] sameHash;
+                    string how = SameDespiteTime(rel, it, rec, dpath, dm, ds, out sameHash);
+                    if (how != null)
+                    {
+                        res.SameAdopted++;
+                        res.TimeOnlySame++;
+                        Plan(PlanKind.Same, rel, it, ds, dm, "日時だけ違い、中身は同じ（" + how + "）→ コピーしない");
+                        if (!dryRun) UpdateRecord(rel, it, dm, sameHash, rec == null || rec.CopiedByApp, rec);
+                        continue;
+                    }
+                    // コピー先は前回コピーしたまま（そのときコピー先が日時を残さなかった）で、コピー元がその後に変わった
+                    // → 「コピー先が新しい」は見かけだけ。普通の更新として上書きする（コピー元が前より古い日時に戻ったときは、今まで通り確認）
+                    if (DestIsOurCopyWithoutTime(rec, dm, ds) && it.Mtime > rec.Mtime + tol)
+                    {
+                        ow = new CopyTask(rel, it, true); ow.Note = "コピー元が変わった（コピー先は前回コピーしたまま。日時はコピー先の都合で違うだけ）"; ow.DstSize = ds; ow.DstMtime = dm;
+                        AddTask(tasks, ow);
+                        continue;
+                    }
+                }
                 if (Math.Abs(diff) <= tol)
                 {
                     if (ds == it.Size)
@@ -438,6 +464,8 @@ namespace AutoCopy
                 }
             }
             res.Conflicts = conflicts.Count;
+            if (!dryRun && res.TimeOnlySame > 0)
+                Logger.Info(job.Name, "日時だけ違い、中身が同じファイル " + res.TimeOnlySame + "件は、コピーせずに記録だけ直しました（コピー先が日時をそのまま残さない場合などに起きます）");
             res.PlannedCopyCount = tasks.Count;
             res.PlannedDedup = placeholders.Count;
             foreach (PlaceholderTask p in placeholders) res.DedupBytes += dryRun ? p.Item.Size : 0;
@@ -1194,6 +1222,41 @@ namespace AutoCopy
             if (ex == null) return false;
             int code = System.Runtime.InteropServices.Marshal.GetHRForException(ex) & 0xFFFF;
             return code == 32 || code == 33; // ERROR_SHARING_VIOLATION / ERROR_LOCK_VIOLATION
+        }
+
+        /// <summary>
+        /// 大きさが同じで日時だけが違うとき、中身が同じか確かめる。同じなら確かめ方（文）、違う・確かめられないなら null。
+        /// ・コピー先が前回コピーしたまま（大きさ・日時が記録どおり）で記録に MD5 がある → コピー元だけ読んで記録と比べる（コピー先は読まない）。
+        /// ・それ以外 → コピー元とコピー先を読んで比べる。ただしコピー先が「クラウドだけ」（OneDrive）なら読まない（ダウンロードしない）。
+        /// </summary>
+        private string SameDespiteTime(string rel, ScanItem it, FileRecord rec, string dpath, long dm, long ds, out byte[] hash)
+        {
+            hash = null;
+            string spath = PathUtil.Combine(src, rel);
+            try
+            {
+                if (rec != null && rec.Hash != null && rec.Size == ds && rec.DestMtime > 0 && Math.Abs(dm - rec.DestMtime) <= tol)
+                {
+                    byte[] h = HashFile(spath, ct);
+                    if (h != null && BitConverter.ToString(h) == BitConverter.ToString(rec.Hash)) { hash = h; return "前回コピーした中身と同じ"; }
+                    return null;   // コピー元の中身が変わった
+                }
+                FileAttributes da = File.GetAttributes(PathUtil.Long(dpath));
+                if (CloudFiles.IsCloudOnly(da)) return null;
+                if (!QuickSame(spath, dpath)) return null;
+                byte[] a = HashFile(spath, ct), b = HashFile(dpath, ct);
+                if (a != null && b != null && BitConverter.ToString(a) == BitConverter.ToString(b)) { hash = a; return "コピー元とコピー先を比べて同じ"; }
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { Logger.Error(job.Name, "中身を比べられません（今まで通り日時で判断します）: " + rel + "　" + ex.Message); }
+            return null;
+        }
+
+        /// <summary>コピー先は前回コピーしたまま（大きさ・日時が記録どおり）で、そのときコピー先がコピー元の日時を残さなかったか</summary>
+        private bool DestIsOurCopyWithoutTime(FileRecord rec, long dm, long ds)
+        {
+            return rec != null && rec.CopiedByApp && rec.Size == ds && rec.DestMtime > 0
+                && Math.Abs(dm - rec.DestMtime) <= tol && Math.Abs(rec.DestMtime - rec.Mtime) > tol;
         }
 
         private void UpdateRecord(string rel, ScanItem it, long destMtime, byte[] hash, bool managed, FileRecord old)

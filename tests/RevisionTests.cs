@@ -59,6 +59,7 @@ namespace AutoCopy.Tests
             Add("T130", "上書きの確認：件数が多くても画面が開く（3万件）・チェックの変化はまとめて調べる", ConflictManyItems);
             Add("T131", "上書きの確認：どちらが新しいか・それぞれ新しい方の扱い・新しい方にまとめてチェック", ConflictNewer);
             Add("T132", "ファイルの一括削除：条件・使えないフォルダ・探しても削除しない・チェックしたものだけごみ箱へ・探した後に変わったものは削除しない", BulkDeleteTool);
+            Add("T133", "触っていないのに「日付違い・サイズ同じ」にならない：コピー先が日時を残さない・コピー元の日時が少しずれる・記録がない（中身が同じならコピーも確認もしない。中身が違えば今まで通り）", TimeOnlyDifference);
             Add("T112", "終了時の停止待ちは上限まで（止まらない処理があっても終了できる）", StopTimeout);
         }
 
@@ -1432,6 +1433,68 @@ namespace AutoCopy.Tests
                 True(f.DeleteReason() != null && !f.DeleteButton.Enabled, "もう一度探すまで削除できない");
                 True(File.Exists(Path.Combine(root, "e.tmp")), "画面の操作だけでは削除しない");
             }
+        }
+
+        private static void TimeOnlyDifference()
+        {
+            Box b = new Box("T133");
+            b.W("見積.xlsx", "中身A-12345");
+            b.W(@"sub\表.csv", "1,2,3");
+            RunResult r = b.Run();
+            Eq(2, r.Copied, "はじめのコピー");
+            string sa = Path.Combine(b.Src, "見積.xlsx"), da = Path.Combine(b.Dst, "見積.xlsx");
+            FileRecord rec;
+            lock (b.State) rec = b.State.Files["見積.xlsx"];
+            True(rec.Hash != null, "コピーしたときの MD5 を記録している");
+
+            // 1) コピー先（NAS など）が日時を残さなかった：コピー先の日時がコピーした時刻になっている（記録もその時刻）
+            DateTime late = File.GetLastWriteTimeUtc(da).AddHours(3);
+            File.SetLastWriteTimeUtc(da, late);
+            lock (b.State) b.State.Files["見積.xlsx"].DestMtime = late.Ticks;
+            // コピー元の日時が少しだけずれた（中身は同じ：クラウドの同期・ファイルの仕組みの細かさなど）
+            File.SetLastWriteTimeUtc(sa, File.GetLastWriteTimeUtc(sa).AddSeconds(5));
+            r = b.Run();
+            Eq(0, r.Conflicts, "「コピー先が新しい」の確認にしない");
+            Eq(0, r.Copied + r.Overwritten, "コピーしない");
+            Eq(1, r.TimeOnlySame, "日時だけ違い中身が同じ（記録の MD5 と比べた）");
+            r = b.Run();
+            Eq(0, r.Conflicts + r.Copied + r.Overwritten + r.TimeOnlySame, "次の実行では何もない（記録を直した）");
+
+            // 2) 記録がない（前の版・記録が消えた）：コピー先の日時が違う・大きさは同じ・中身は同じ
+            string sc = Path.Combine(b.Src, @"sub\表.csv"), dc = Path.Combine(b.Dst, @"sub\表.csv");
+            lock (b.State) b.State.Files.Remove(@"sub\表.csv");
+            File.SetLastWriteTimeUtc(dc, File.GetLastWriteTimeUtc(sc).AddHours(9));   // 例：時差の分ずれた
+            r = b.Run();
+            Eq(0, r.Conflicts, "記録がなくても、中身が同じなら確認にしない");
+            Eq(1, r.TimeOnlySame, "コピー元とコピー先を比べて同じ");
+            Eq("1,2,3", File.ReadAllText(dc), "コピー先はそのまま");
+
+            // 3) 中身が違う（同じ大きさ）でコピー先が新しい・記録なし → 今まで通り確認にする（勝手に上書きしない）
+            File.WriteAllText(dc, "9,9,9");
+            File.SetLastWriteTimeUtc(dc, File.GetLastWriteTimeUtc(sc).AddHours(9));
+            lock (b.State) b.State.Files.Remove(@"sub\表.csv");
+            r = b.Run();
+            Eq(1, r.Conflicts, "中身が違えば今まで通り「コピー先が新しい」の確認");
+            Eq("9,9,9", File.ReadAllText(dc), "コピー先は上書きしない");
+
+            // 4) コピー先は前回コピーしたまま（日時を残さなかった）で、コピー元をその後に直した（同じ大きさ） → 普通の更新として上書き
+            File.WriteAllText(sa, "中身B-67890");
+            File.SetLastWriteTimeUtc(sa, DateTime.UtcNow.AddMinutes(-1));
+            lock (b.State) rec = b.State.Files["見積.xlsx"];
+            True(File.GetLastWriteTimeUtc(da).Ticks > File.GetLastWriteTimeUtc(sa).Ticks, "コピー先の日時の方が新しく見える");
+            r = b.Run();
+            Eq(0, r.Conflicts, "見かけだけの「コピー先が新しい」で確認にしない");
+            Eq(1, r.Overwritten, "コピー元の変更を上書きでコピー");
+            Eq("中身B-67890", File.ReadAllText(da), "コピー先が新しい中身になる");
+
+            // 5) コピー先も誰かが直した（日時が記録と違う）・同じ大きさ・中身が違う → 確認にする
+            File.WriteAllText(da, "中身C-00000");
+            File.SetLastWriteTimeUtc(da, DateTime.UtcNow.AddMinutes(5));
+            File.WriteAllText(sa, "中身D-11111");
+            File.SetLastWriteTimeUtc(sa, DateTime.UtcNow.AddMinutes(-2));
+            r = b.Run();
+            Eq(1, r.Conflicts, "コピー先も直されていれば確認");
+            Eq("中身C-00000", File.ReadAllText(da), "コピー先の変更は消さない");
         }
 
         private static void MessageFits()
