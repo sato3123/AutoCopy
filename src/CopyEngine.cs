@@ -24,6 +24,7 @@ namespace AutoCopy
         public int PlannedCopyCount, Scanned, Copied, Overwritten, Renamed, Conflicts, Deleted, Errors, Locked, Excluded, Deferred, PendingDeletes, SameAdopted;
         /// <summary>大きさが同じで日時だけ違い、中身が同じだったためコピーしなかった数</summary>
         public int TimeOnlySame;
+        public int CloudSizeIgnored;       // OneDrive：コピー先の大きさが少しだけ違う（コピー先の方が新しい）ので無視した
         public int Deduped, PlannedDedup;          // 重複のためコピーせず、場所を書いたテキストを置いた件数
         public int DedupAsked;                     // 大きいファイルの重複：扱いを選んでもらうまでコピーしない件数
         public bool DedupNew;                      // 選んでもらう重複が新しく見つかった
@@ -112,6 +113,7 @@ namespace AutoCopy
         private readonly bool forceMirror;
         private string src, dst;
         private long tol;
+        private long cloudSizeTol;   // コピー先が OneDrive：この大きさ（バイト）以内の違いは無視する（0 = 無視しない）
         private readonly string batch = DateTime.Now.ToString("yyyyMMdd-HHmmss");
         private ExcludeMatcher matcher;
         private JobFileScope otherJobFiles;
@@ -247,6 +249,7 @@ namespace AutoCopy
             src = ResolvedSource(job, app);
             dst = ResolvedDest(job, app);
             tol = TimeSpan.FromSeconds(Math.Max(0, job.ToleranceSeconds)).Ticks;
+            cloudSizeTol = CloudSizeTolerance(job, app, dst);
 
             // 実行の直前にも、全ジョブのコピー元・コピー先が重なっていないかを確かめる（設定ファイルを直接直した場合など）
             string v = Validate(job, app, app.Jobs != null ? app.Jobs.ToArray() : new JobConfig[0]);
@@ -406,6 +409,17 @@ namespace AutoCopy
                 long dm = dfi.LastWriteTimeUtc.Ticks, ds = dfi.Length;
                 CopyTask ow;
                 long diff = dm - it.Mtime;
+                // コピー先が OneDrive：コピーした後に OneDrive が情報を書き足して、大きさが少しだけ変わることがある。
+                // コピー先の方が新しい（または同じ日時）で、違いが設定の範囲なら、コピーも確認もしない（コピー先は変えない）。
+                // コピー元の方が新しいとき（本当に直したとき）は、今まで通りコピーする。
+                // 前回コピーした後にコピー元が変わっている（記録と違う）ときは、本当に直したので無視しない。
+                if (SmallCloudSizeDiff(ds, it.Size, diff) && (rec == null || (rec.Size == it.Size && rec.Mtime == it.Mtime)))
+                {
+                    res.CloudSizeIgnored++;
+                    Plan(PlanKind.Same, rel, it, ds, dm, "OneDrive で大きさが少しだけ違う（" + Fmt.Size(Math.Abs(ds - it.Size)) + "）・コピー先の方が新しい → 無視（コピーも確認もしない）");
+                    if (!dryRun) UpdateRecord(rel, it, dm, null, rec == null || rec.CopiedByApp, rec);
+                    continue;
+                }
                 // 大きさが同じで、日時だけが違う：中身が同じなら「変わっていない」（コピーも確認もしない。記録だけ直す）。
                 // コピー先（NAS・USBメモリ・クラウドなど）が日時をそのまま残さない、コピー元の日時の細かい部分が変わる、
                 // 記録がない、などで、触っていないのに「日付違い・サイズ同じ」になるのを防ぐ。
@@ -464,6 +478,8 @@ namespace AutoCopy
                 }
             }
             res.Conflicts = conflicts.Count;
+            if (!dryRun && res.CloudSizeIgnored > 0)
+                Logger.Info(job.Name, "OneDrive で大きさが少しだけ違うファイル " + res.CloudSizeIgnored + "件は、コピー先の方が新しいため無視しました（コピー先はそのまま。設定の「大きさの少しの違い」）");
             if (!dryRun && res.TimeOnlySame > 0)
                 Logger.Info(job.Name, "日時だけ違い、中身が同じファイル " + res.TimeOnlySame + "件は、コピーせずに記録だけ直しました（コピー先が日時をそのまま残さない場合などに起きます）");
             res.PlannedCopyCount = tasks.Count;
@@ -1250,6 +1266,22 @@ namespace AutoCopy
             catch (OperationCanceledException) { throw; }
             catch (Exception ex) { Logger.Error(job.Name, "中身を比べられません（今まで通り日時で判断します）: " + rel + "　" + ex.Message); }
             return null;
+        }
+
+        /// <summary>コピー先が OneDrive などのクラウド同期フォルダなら、無視する大きさの違い（バイト）。同期のジョブ・設定が「無視しない」なら 0</summary>
+        public static long CloudSizeTolerance(JobConfig job, AppSettings app, string dst)
+        {
+            if (job == null || app == null || job.Sync || app.CloudSizeToleranceKB <= 0) return 0;
+            try { return CloudFiles.IsCloudFolder(dst) ? app.CloudSizeToleranceKB * 1024L : 0; }
+            catch (Exception) { return 0; }
+        }
+
+        /// <summary>大きさが少しだけ違い（0 より大きく設定以内）、コピー先の方が新しいか同じ日時（日時の差がコピー元の方が新しいほどではない）</summary>
+        private bool SmallCloudSizeDiff(long ds, long ss, long diff)
+        {
+            if (cloudSizeTol <= 0 || ds == ss) return false;
+            if (diff < -tol) return false;   // コピー元の方が新しい：本当に直した → コピーする
+            return Math.Abs(ds - ss) <= cloudSizeTol;
         }
 
         /// <summary>コピー先は前回コピーしたまま（大きさ・日時が記録どおり）で、そのときコピー先がコピー元の日時を残さなかったか</summary>

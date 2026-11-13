@@ -62,6 +62,8 @@ namespace AutoCopy.Tests
             Add("T133", "触っていないのに「日付違い・サイズ同じ」にならない：コピー先が日時を残さない・コピー元の日時が少しずれる・記録がない（中身が同じならコピーも確認もしない。中身が違えば今まで通り）", TimeOnlyDifference);
             Add("T134", "ジョブのグループ：同じグループのジョブは同時に実行しない（待って、終わったら実行）・違うグループ・グループなしは今まで通り", JobGroups);
             Add("T135", "お知らせ画面：処理中は更新しない（終わったら1回だけ）・件数が減っただけでは出し直さない・増えたら出す", AttentionOnlyAtEnd);
+            Add("T136", "OneDrive：コピー先の大きさが少しだけ違い、コピー先の方が新しいときは無視（コピー元が変わった・新しい・違いが大きい・設定なし・OneDrive でない・同期は今まで通り）", CloudSmallSizeDiff);
+            Add("T137", "OneDrive：空きが少ないときに待つ時間を設定で選べる（待たない・分・時間の表示・前の版の設定は30分）", CloudWaitSetting);
             Add("T112", "終了時の停止待ちは上限まで（止まらない処理があっても終了できる）", StopTimeout);
         }
 
@@ -1742,6 +1744,120 @@ namespace AutoCopy.Tests
             try { True(AppCore.AnyResolving(), "処理中（お知らせ画面は更新しない）"); }
             finally { AppCore.EndResolve(b.Job); }
             True(!AppCore.AnyResolving(), "終わったら更新する");
+        }
+
+        private static void CloudSmallSizeDiff()
+        {
+            Box b = new Box("T136");
+            string[] names = { "a.xlsx", "b.xlsx", "c.xlsx", "d.xlsx", "e.xlsx", "f.xlsx" };
+            foreach (string n in names) b.W(n, new string('x', 20000));
+            Eq(6, b.Run().Copied, "はじめのコピー");
+            string oldEnv = Environment.GetEnvironmentVariable("OneDrive");
+            try
+            {
+                Environment.SetEnvironmentVariable("OneDrive", b.Dst);   // コピー先を OneDrive のフォルダとして扱う
+                CloudFiles.ClearCache();
+                True(CopyEngine.CloudSizeTolerance(b.Job, b.App, b.Dst) == 16 * 1024, "初期値は 16 KB まで無視");
+                // OneDrive がコピー先に情報を書き足した：大きさが少し増え、コピー先の日時が新しくなる
+                Action<string, int> grow = delegate(string n, int add)
+                {
+                    string d = Path.Combine(b.Dst, n);
+                    DateTime t = File.GetLastWriteTimeUtc(d);
+                    File.AppendAllText(d, new string('m', add));
+                    File.SetLastWriteTimeUtc(d, t.AddMinutes(3));
+                };
+                Func<string, bool> conflict = delegate(string n) { bool v; lock (b.State) v = b.State.Conflicts.Exists(delegate(ConflictItem c) { return c.Rel == n; }); return v; };
+
+                // 1) 記録がない（前の版・記録が消えた）
+                grow("a.xlsx", 1500);
+                lock (b.State) b.State.Files.Remove("a.xlsx");
+                RunResult r = b.Run();
+                Eq(1, r.CloudSizeIgnored, "記録がなくても無視");
+                True(!conflict("a.xlsx"), "確認にしない");
+                Eq(21500L, new FileInfo(Path.Combine(b.Dst, "a.xlsx")).Length, "コピー先はそのまま（上書きしない）");
+                r = b.Run();
+                Eq(0, r.CloudSizeIgnored + r.Conflicts + r.Copied + r.Overwritten, "次の実行では何もない（記録を直した）");
+
+                // 2) 記録あり・全部確かめて実行
+                grow("b.xlsx", 3000);
+                r = b.Run(true);
+                True(!conflict("b.xlsx"), "全部確かめても確認にしない");
+                Eq(23000L, new FileInfo(Path.Combine(b.Dst, "b.xlsx")).Length, "コピー先はそのまま");
+
+                // 3) コピー元を直した（記録と違う）のに、コピー先の方が新しい → 今まで通り確認
+                grow("c.xlsx", 1000);
+                b.W("c.xlsx", new string('y', 20100), 3600);
+                b.Run();
+                True(conflict("c.xlsx"), "コピー元が変わったときは無視しない（確認）");
+
+                // 4) コピー元の方が新しい → 今まで通りコピー
+                string dd = Path.Combine(b.Dst, "d.xlsx");
+                File.AppendAllText(dd, "mm");
+                File.SetLastWriteTimeUtc(dd, File.GetLastWriteTimeUtc(Path.Combine(b.Src, "d.xlsx")).AddMinutes(-10));
+                lock (b.State) b.State.Files.Remove("d.xlsx");
+                r = b.Run();
+                Eq(20000L, new FileInfo(dd).Length, "コピー元の方が新しければ上書き");
+
+                // 5) 違いが大きい（20 KB）→ 確認
+                grow("e.xlsx", 20 * 1024);
+                lock (b.State) b.State.Files.Remove("e.xlsx");
+                b.Run();
+                True(conflict("e.xlsx"), "違いが大きいときは確認");
+
+                // 6) 設定「無視しない」→ 確認
+                b.App.CloudSizeToleranceKB = 0;
+                True(CopyEngine.CloudSizeTolerance(b.Job, b.App, b.Dst) == 0, "設定：無視しない");
+                grow("f.xlsx", 100);
+                lock (b.State) b.State.Files.Remove("f.xlsx");
+                b.Run();
+                True(conflict("f.xlsx"), "無視しない設定では確認");
+                b.App.CloudSizeToleranceKB = 16;
+
+                // 7) 同期のジョブには使わない
+                JobConfig sj = new JobConfig(); sj.Sync = true;
+                True(CopyEngine.CloudSizeTolerance(sj, b.App, b.Dst) == 0, "同期のジョブには使わない");
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable("OneDrive", oldEnv);
+                CloudFiles.ClearCache();
+            }
+            // 8) OneDrive でないフォルダには使わない
+            True(CopyEngine.CloudSizeTolerance(b.Job, b.App, b.Dst) == 0, "OneDrive でなければ使わない");
+            AppSettings old = Json.Deserialize<AppSettings>("{\"FormatVersion\":1}");
+            Eq(16, old.CloudSizeToleranceKB, "前の版の設定：16 KB まで無視");
+        }
+
+        private static void CloudWaitSetting()
+        {
+            AppSettings old = Json.Deserialize<AppSettings>("{\"FormatVersion\":1}");
+            Eq(30, old.CloudWaitMinutes, "前の版の設定は30分（今まで通り）");
+            AppSettings z = Json.Deserialize<AppSettings>("{\"FormatVersion\":1,\"CloudWaitMinutes\":0}");
+            Eq(0, z.CloudWaitMinutes, "「待たない」を保存できる");
+            Eq(TimeSpan.FromHours(2), CloudFiles.WaitSpan(120), "2時間");
+            Eq(TimeSpan.Zero, CloudFiles.WaitSpan(-5), "負の値は待たない");
+            Eq("待たない", CloudFiles.WaitText(0), "表示");
+            Eq("10分", CloudFiles.WaitText(10), "表示");
+            Eq("1時間30分", CloudFiles.WaitText(90), "表示");
+            Eq("4時間", CloudFiles.WaitText(240), "表示");
+            Box b = new Box("T137");
+            string od = b.Dst;
+            CloudFiles.FreeBytesForTest = delegate(string f) { return 10; };
+            try
+            {
+                DateTime t0 = DateTime.UtcNow;
+                string msg = null;
+                try { CloudFiles.WaitForLocalSpace(od, 80, 50, CloudFiles.WaitSpan(0), TimeSpan.FromMilliseconds(100), CancellationToken.None); }
+                catch (IOException ex) { msg = ex.Message; }
+                True(msg != null && msg.Contains("待たない"), "待たない設定ではすぐ止める: " + msg);
+                True(DateTime.UtcNow - t0 < TimeSpan.FromSeconds(2), "待たずに止める");
+                msg = null;
+                try { CloudFiles.WaitForLocalSpace(od, 80, 50, TimeSpan.FromSeconds(1), TimeSpan.FromMilliseconds(100), CancellationToken.None); }
+                catch (IOException ex) { msg = ex.Message; }
+                True(msg != null && msg.Contains("待ちましたが"), "時間まで待ってから止める: " + msg);
+            }
+            finally { CloudFiles.FreeBytesForTest = null; }
+            foreach (int m in CloudFiles.WaitChoices) True(m >= 0, "選択肢");
         }
 
         private static void StopTimeout()

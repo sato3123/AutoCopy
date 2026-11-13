@@ -13,7 +13,7 @@ namespace AutoCopy
         private readonly Label lFolder, lDist;
         private readonly TextBox tLogRoot, tUpdate;
         private readonly CheckBox cAuto, cErr, cConf, cDone, cBlink, cPopup, cAutoUpdate, cAutoClose, cCloudFree;
-        private readonly ComboBox cbCloudReserve;
+        private readonly ComboBox cbCloudReserve, cbCloudWait, cbCloudSize;
         private readonly Label lBlocked;
         private readonly Button bRetryUpdate;
         private readonly NumericUpDown nLocal, nNet, nTrash, nRemind, nCloseSec;
@@ -79,9 +79,15 @@ namespace AutoCopy
             if (ri < 0) { cbCloudReserve.Items.Add(Fmt.Size(s.CloudReserveMB * 1024L * 1024)); ri = cbCloudReserve.Items.Count - 1; }
             cbCloudReserve.SelectedIndex = ri;
             cbCloudReserve.Tag = reserveMB;
+            cbCloudWait = ChoiceCombo(CloudFiles.WaitChoices, s.CloudWaitMinutes, delegate(int m) { return m == 0 ? "待たない（すぐ止める）" : "最長 " + CloudFiles.WaitText(m); });
+            cbCloudSize = ChoiceCombo(CloudFiles.SizeToleranceChoices, s.CloudSizeToleranceKB, delegate(int k) { return k == 0 ? "無視しない（今まで通り）" : k + " KB まで無視する"; });
             b.Controls.Add(Ui.Section("OneDrive（コピー先がクラウド同期フォルダのとき）",
                 cCloudFree,
-                Ui.Row(Ui.L("このPCの空きを", 140), cbCloudReserve, Ui.L("より多く残す（少なくなりそうなら、アップロードで空くのを最長30分待つ）")),
+                Ui.Row(Ui.L("このPCの空きを", 140), cbCloudReserve, Ui.L("より多く残す（少なくなりそうなら、アップロードで空くのを待つ）")),
+                Ui.Row(Ui.L("空くのを待つ時間", 140), cbCloudWait, Ui.L("待っても空かなければ、容量不足としてそのジョブを止めます")),
+                Ui.Row(Ui.L("大きさの少しの違い", 140), cbCloudSize),
+                Ui.Hint("OneDrive は、コピーした後に Office のファイルなどへ情報を書き足して、大きさが少しだけ変わることがあります。"
+                    + "コピー先の方が新しく（または同じ日時で）、大きさの違いがこれ以内なら、コピーも確認もしません（コピー先はそのまま）。コピー元の方が新しければ、今まで通りコピーします。同期のジョブには使いません。"),
                 Ui.Hint("コピー先が OneDrive（または同じしくみのクラウド同期フォルダ）のときだけ使います。コピー先の「クラウドだけ」にあるファイルは、確かめるために読む（ダウンロードする）ことをしません。"
                     + "「常にこのデバイスに保持する」にしたフォルダは、その設定のままにします。")));
 
@@ -217,6 +223,24 @@ namespace AutoCopy
             if (TrayApp.Instance != null) TrayApp.Instance.CheckUpdate(true);
         }
 
+        /// <summary>数の選択肢（今の値が選択肢にないときは、その値も加える）</summary>
+        private static ComboBox ChoiceCombo(int[] choices, int current, Func<int, string> text)
+        {
+            List<int> values = new List<int>(choices);
+            if (!values.Contains(current)) values.Add(current);
+            ComboBox c = Ui.Combo(120);
+            foreach (int v in values) c.Items.Add(text(v));
+            c.SelectedIndex = values.IndexOf(current);
+            c.Tag = values;
+            return c;
+        }
+
+        private static int ChoiceValue(ComboBox c, int fallback)
+        {
+            List<int> values = c.Tag as List<int>;
+            return values != null && c.SelectedIndex >= 0 && c.SelectedIndex < values.Count ? values[c.SelectedIndex] : fallback;
+        }
+
         private bool Save()
         {
             AppSettings previous = AppCore.Settings;
@@ -238,6 +262,8 @@ namespace AutoCopy
             s.CloudFreeLocal = cCloudFree.Checked;
             int[] rm = (int[])cbCloudReserve.Tag;
             if (cbCloudReserve.SelectedIndex >= 0 && cbCloudReserve.SelectedIndex < rm.Length) s.CloudReserveMB = rm[cbCloudReserve.SelectedIndex];
+            s.CloudWaitMinutes = ChoiceValue(cbCloudWait, s.CloudWaitMinutes);
+            s.CloudSizeToleranceKB = ChoiceValue(cbCloudSize, s.CloudSizeToleranceKB);
             s.LocalLogDays = (int)nLocal.Value;
             s.NetLogDays = (int)nNet.Value;
             s.TrashDays = (int)nTrash.Value;

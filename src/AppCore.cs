@@ -139,6 +139,7 @@ namespace AutoCopy
             SafeFs.SetSyncRoots(syncs);
             CloudFiles.FreeLocalEnabled = Settings.CloudFreeLocal;
             CloudFiles.ReserveBytes = Math.Max(0, Settings.CloudReserveMB) * 1024L * 1024;
+            CloudFiles.MaxWait = CloudFiles.WaitSpan(Settings.CloudWaitMinutes);
             Logger.Configure(Settings);
             lock (sync)
             {

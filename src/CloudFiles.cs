@@ -198,6 +198,10 @@ namespace AutoCopy
 
         /// <summary>設定：コピー先がクラウド同期フォルダなら、コピーしたファイルをこのPCに残さない</summary>
         public static bool FreeLocalEnabled = true;
+        /// <summary>設定の「待つ時間」の選択肢（分。0 = 待たない）</summary>
+        public static readonly int[] WaitChoices = { 0, 5, 10, 30, 60, 120, 240, 480 };
+        /// <summary>設定の「大きさの違いを無視」の選択肢（KB。0 = 無視しない）</summary>
+        public static readonly int[] SizeToleranceChoices = { 0, 4, 16, 64, 256 };
         /// <summary>設定：このPCに残しておく空き（これを下回りそうならアップロードを待つ）</summary>
         public static long ReserveBytes = DefaultReserveBytes;
         public static TimeSpan MaxWait = TimeSpan.FromMinutes(30), Poll = TimeSpan.FromSeconds(15);
@@ -217,17 +221,29 @@ namespace AutoCopy
                 if (free < 0 || free >= need + reserve) return DateTime.UtcNow - start;   // 分からないときは待たない（コピーで容量不足なら今まで通りエラー）
                 TimeSpan waited = DateTime.UtcNow - start;
                 if (waited >= maxWait)
-                    throw new IOException("OneDrive（クラウド同期フォルダ）のアップロードを " + (int)maxWait.TotalMinutes + "分 待ちましたが、このPCの空き容量が足りません（空き "
+                    throw new IOException((maxWait <= TimeSpan.Zero ? "このPCの空き容量が足りません（設定：OneDrive のアップロードで空くのを待たない）（空き "
+                        : "OneDrive（クラウド同期フォルダ）のアップロードを " + WaitText((int)maxWait.TotalMinutes) + " 待ちましたが、このPCの空き容量が足りません（空き ")
                         + Fmt.Size(free) + "・必要 " + Fmt.Size(need + reserve) + "）。OneDrive がアップロードできているか（サインイン・ネットワーク・一時停止）を確かめてください: " + PathUtil.Plain(folder),
                         unchecked((int)0x80070070) /* ERROR_DISK_FULL：容量不足として止める */);
                 if (!logged)
                 {
                     logged = true;
-                    Logger.Info(null, "OneDrive：このPCの空きが少ないため、アップロードで空くのを待っています（空き " + Fmt.Size(free) + "・必要 " + Fmt.Size(need + reserve) + "）");
+                    Logger.Info(null, "OneDrive：このPCの空きが少ないため、アップロードで空くのを待っています（空き " + Fmt.Size(free) + "・必要 " + Fmt.Size(need + reserve) + "・最長 " + WaitText((int)maxWait.TotalMinutes) + "）");
                 }
                 TimeSpan rest = maxWait - waited;
                 if (ct.WaitHandle.WaitOne(rest < poll ? rest : poll)) ct.ThrowIfCancellationRequested();
             }
+        }
+
+        /// <summary>設定の「待つ時間」（分）→ 待つ時間。0 以下は待たない</summary>
+        public static TimeSpan WaitSpan(int minutes) { return TimeSpan.FromMinutes(Math.Max(0, minutes)); }
+
+        /// <summary>待つ時間の表し方（90 → 「1時間30分」）</summary>
+        public static string WaitText(int minutes)
+        {
+            if (minutes <= 0) return "待たない";
+            if (minutes < 60) return minutes + "分";
+            return (minutes / 60) + "時間" + (minutes % 60 > 0 ? (minutes % 60) + "分" : "");
         }
 
         // ---------------- Windows ----------------

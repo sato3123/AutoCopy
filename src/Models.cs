@@ -33,6 +33,8 @@ namespace AutoCopy
         [DataMember] public string DistCreated;
         [DataMember] public bool CloudFreeLocal;      // コピー先が OneDrive など：コピーしたファイルをこのPCに残さない（アップロード後に空ける）
         [DataMember] public int CloudReserveMB;       // コピー先が OneDrive など：このPCの空きがこれを下回りそうならアップロードを待つ
+        [DataMember] public int CloudWaitMinutes;     // コピー先が OneDrive など：空きが少ないとき、アップロードで空くのを待つ最長の時間（分。0 = 待たない）
+        [DataMember] public int CloudSizeToleranceKB; // コピー先が OneDrive など：コピー先の大きさがこれ以内しか違わず、コピー先の方が新しければ無視する（0 = 無視しない）
         [DataMember] public List<JobConfig> Jobs;
 
         public AppSettings() { SetDefaults(); }
@@ -58,6 +60,8 @@ namespace AutoCopy
             AttentionCloseSeconds = 60;
             CloudFreeLocal = true;
             CloudReserveMB = 2048;
+            CloudWaitMinutes = 30;
+            CloudSizeToleranceKB = 16;
             Jobs = new List<JobConfig>();
         }
 
@@ -67,6 +71,8 @@ namespace AutoCopy
             if (Jobs == null) Jobs = new List<JobConfig>();
             if (AttentionRemindMinutes <= 0) AttentionRemindMinutes = 120;
             if (AttentionCloseSeconds < 5) AttentionCloseSeconds = 60;
+            if (CloudWaitMinutes < 0) CloudWaitMinutes = 30;
+            if (CloudSizeToleranceKB < 0) CloudSizeToleranceKB = 0;
         }
     }
 
