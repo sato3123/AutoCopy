@@ -437,6 +437,14 @@ namespace AutoCopy
 
     public static class Fmt
     {
+        /// <summary>実行の間隔（分）の表し方：1440 → 「1日」、180 → 「3時間」、90 → 「90分」</summary>
+        public static string Interval(int minutes)
+        {
+            if (minutes >= 1440 && minutes % 1440 == 0) return (minutes / 1440) + "日";
+            if (minutes >= 60 && minutes % 60 == 0) return (minutes / 60) + "時間";
+            return minutes + "分";
+        }
+
         public static string Size(long bytes)
         {
             if (bytes < 1024) return bytes + " B";

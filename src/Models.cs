@@ -186,6 +186,30 @@ namespace AutoCopy
         }
 
         /// <summary>方式の表示名</summary>
+        /// <summary>実行の間隔の上限（365日）</summary>
+        public const int MaxIntervalMinutes = 365 * 1440;
+        /// <summary>間隔の単位：0 = 分、1 = 時間、2 = 日</summary>
+        public static readonly int[] IntervalUnitMinutes = { 1, 60, 1440 };
+        /// <summary>単位ごとの入力の上限（分 1440・時間 8760・日 365）</summary>
+        public static readonly int[] IntervalUnitMax = { 1440, 8760, 365 };
+
+        /// <summary>間隔（分）→ 画面の「数」と「単位」（割り切れるいちばん大きい単位）</summary>
+        public static void SplitInterval(int minutes, out int value, out int unit)
+        {
+            minutes = Math.Max(1, minutes);
+            for (unit = 2; unit > 0; unit--)
+                if (minutes >= IntervalUnitMinutes[unit] && minutes % IntervalUnitMinutes[unit] == 0 && minutes / IntervalUnitMinutes[unit] <= IntervalUnitMax[unit]) break;
+            value = minutes / IntervalUnitMinutes[unit];
+        }
+
+        /// <summary>画面の「数」と「単位」→ 間隔（分。1分〜365日）</summary>
+        public static int JoinInterval(int value, int unit)
+        {
+            if (unit < 0 || unit >= IntervalUnitMinutes.Length) unit = 0;
+            long m = (long)Math.Max(1, value) * IntervalUnitMinutes[unit];
+            return (int)Math.Min(MaxIntervalMinutes, m);
+        }
+
         public string ModeLabel { get { return Sync ? "同期（複数PC）" : Mirror ? "ミラー" : "追加・更新"; } }
         /// <summary>大きいファイルの重複を省略するか（同期では使わない：他のPCにテキストが届いてしまうため）</summary>
         public bool DedupOn { get { return Dedup != DedupMode.Off && !Sync; } }

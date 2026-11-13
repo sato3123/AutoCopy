@@ -121,7 +121,7 @@ namespace AutoCopy
             List<string> mirrors = new List<string>();
             foreach (JobConfig j in payload.Jobs)
             {
-                string iv = j.IntervalMinutes % 60 == 0 && j.IntervalMinutes >= 60 ? (j.IntervalMinutes / 60) + "時間" : j.IntervalMinutes + "分";
+                string iv = Fmt.Interval(j.IntervalMinutes);
                 names.Add(j.Name + "（" + iv + (j.Mirror ? "・ミラー" : "") + "）");
                 if (j.Mirror) mirrors.Add(j.Name);
             }

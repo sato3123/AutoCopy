@@ -196,7 +196,12 @@ namespace AutoCopy
 
             // 実行のタイミング：一定の間隔で（＋ログオン時）／ログオン時のみ
             nInterval = Ui.N(1, 1440, 30, 72);
-            cbUnit = Ui.Combo(80, "分", "時間");
+            cbUnit = Ui.Combo(80, "分", "時間", "日");
+            cbUnit.SelectedIndexChanged += delegate
+            {
+                int u = cbUnit.SelectedIndex;
+                if (u >= 0 && u < JobConfig.IntervalUnitMax.Length) nInterval.Maximum = JobConfig.IntervalUnitMax[u];
+            };
             rInterval = Ui.R("一定の間隔で", true);
             rStartupOnly = Ui.R("ログオン時（アプリの起動時）のみ", false);
             // 別々の入れ物に入るため、片方を選んだらもう片方を外す
@@ -204,14 +209,14 @@ namespace AutoCopy
             rStartupOnly.CheckedChanged += delegate { if (rStartupOnly.Checked) rInterval.Checked = false; };
             cRunAtStartup = Ui.C("ログオン時（アプリの起動時）にも実行する", true);
             cRunAtStartup.Margin = new Padding(Ui.S(22), 3, 3, 3);
-            Label lStartupNote = Ui.Wrap("チェックしない場合も、PCが止まっている間に予定の時刻（前回＋実行間隔）が過ぎていれば、起動後に実行します。", 540);
+            Label lStartupNote = Ui.Wrap("チェックすると、間隔に関係なくログオンのたびに実行します（数日ごとにしたいときは外してください）。チェックしない場合も、PCが止まっている間に予定の時刻（前回＋実行間隔）が過ぎていれば、起動後に実行します。", 540);
             lStartupNote.ForeColor = Ui.Quiet;
             lStartupNote.Margin = new Padding(Ui.S(40), 0, 3, 4);
             Label lOnlyNote = Ui.Wrap("Windows にサインインしてアプリが起動したときに1回だけ実行します（下の「起動後の初回」の待ち時間の後）。その後は、次にログオンするまで自動では実行しません（手動の実行・強制データ送信はいつでもできます）。", 540);
             lOnlyNote.ForeColor = Ui.Quiet;
             lOnlyNote.Margin = new Padding(Ui.S(22), 0, 3, 4);
             b.Controls.Add(Ui.Row(Ui.L("④ 実行のタイミング", 130), Ui.Column(
-                Ui.Row(rInterval, nInterval, cbUnit, Ui.Hint("ごと（1分〜24時間）")),
+                Ui.Row(rInterval, nInterval, cbUnit, Ui.Hint("ごと（1分〜365日。例：3日ごと）")),
                 cRunAtStartup, lStartupNote, rStartupOnly, lOnlyNote)));
 
             // グループ：同じグループのジョブは同時に実行しない（順番に実行）
@@ -913,8 +918,10 @@ namespace AutoCopy
             nDedup.Value = Clamp(nDedup, j.DedupMinMB);
             nMirrorCount.Value = Clamp(nMirrorCount, j.MirrorMaxCount);
             nMirrorPct.Value = Clamp(nMirrorPct, j.MirrorMaxPercent);
-            if (j.IntervalMinutes >= 60 && j.IntervalMinutes % 60 == 0) { cbUnit.SelectedIndex = 1; nInterval.Value = Clamp(nInterval, j.IntervalMinutes / 60); }
-            else { cbUnit.SelectedIndex = 0; nInterval.Value = Clamp(nInterval, j.IntervalMinutes); }
+            int ivValue, ivUnit;
+            JobConfig.SplitInterval(j.IntervalMinutes, out ivValue, out ivUnit);
+            cbUnit.SelectedIndex = ivUnit;   // 単位に合わせて入力の上限が変わる
+            nInterval.Value = Clamp(nInterval, ivValue);
             cWindow.Checked = j.UseTimeWindow;
             tStart.Text = j.WindowStart;
             tEnd.Text = j.WindowEnd;
@@ -1015,8 +1022,7 @@ namespace AutoCopy
             j.DedupMinMB = (int)nDedup.Value;
             j.MirrorMaxCount = (int)nMirrorCount.Value;
             j.MirrorMaxPercent = (int)nMirrorPct.Value;
-            int iv = (int)nInterval.Value * (cbUnit.SelectedIndex == 1 ? 60 : 1);
-            j.IntervalMinutes = Math.Max(1, Math.Min(1440, iv));
+            j.IntervalMinutes = JobConfig.JoinInterval((int)nInterval.Value, cbUnit.SelectedIndex);
             j.UseTimeWindow = cWindow.Checked;
             j.WindowStart = tStart.Text.Trim();
             j.WindowEnd = tEnd.Text.Trim();

@@ -578,7 +578,7 @@ namespace AutoCopy
                     else if (j.StartupOnly && rt.StartupRunDone) next = "ログオン時";
                     else next = rt.NextRun.Date == DateTime.Today ? rt.NextRun.ToString("HH:mm") : rt.NextRun.ToString("M/d HH:mm");
 
-                    string interval = j.StartupOnly ? "ログオン時" : j.IntervalMinutes % 60 == 0 ? (j.IntervalMinutes / 60) + "時間" : j.IntervalMinutes + "分";
+                    string interval = j.StartupOnly ? "ログオン時" : Fmt.Interval(j.IntervalMinutes);
                     string last = rt.LastRun == DateTime.MinValue ? "—" : (rt.LastRun.Date == DateTime.Today ? rt.LastRun.ToString("HH:mm") : rt.LastRun.ToString("M/d HH:mm"));
                     string paths = CopyEngine.ResolvedSource(j, s) + (j.Sync ? "  ⇄  " : "  →  ") + CopyEngine.ResolvedDest(j, s);
                     string[] cols = new string[] { j.Name + (j.Scope == JobScope.Dist ? "" : "（このPCだけ）"), j.ModeLabel + (j.GroupKey != null ? "・グループ " + j.GroupKey : ""), paths, interval, last, result, next };

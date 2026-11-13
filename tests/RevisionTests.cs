@@ -64,6 +64,7 @@ namespace AutoCopy.Tests
             Add("T135", "お知らせ画面：処理中は更新しない（終わったら1回だけ）・件数が減っただけでは出し直さない・増えたら出す", AttentionOnlyAtEnd);
             Add("T136", "OneDrive：コピー先の大きさが少しだけ違い、コピー先の方が新しいときは無視（コピー元が変わった・新しい・違いが大きい・設定なし・OneDrive でない・同期は今まで通り）", CloudSmallSizeDiff);
             Add("T137", "OneDrive：空きが少ないときに待つ時間を設定で選べる（待たない・分・時間の表示・前の版の設定は30分）", CloudWaitSetting);
+            Add("T138", "実行の間隔を日で選べる（1分〜365日）：画面の読み書き・表示・保存・前回から数日たったときの次回の予定", IntervalDays);
             Add("T112", "終了時の停止待ちは上限まで（止まらない処理があっても終了できる）", StopTimeout);
         }
 
@@ -1858,6 +1859,65 @@ namespace AutoCopy.Tests
             }
             finally { CloudFiles.FreeBytesForTest = null; }
             foreach (int m in CloudFiles.WaitChoices) True(m >= 0, "選択肢");
+        }
+
+        private static void IntervalDays()
+        {
+            int v, u;
+            JobConfig.SplitInterval(30, out v, out u); Eq(30, v, "30分"); Eq(0, u, "分");
+            JobConfig.SplitInterval(180, out v, out u); Eq(3, v, "3時間"); Eq(1, u, "時間");
+            JobConfig.SplitInterval(1440, out v, out u); Eq(1, v, "1日"); Eq(2, u, "日");
+            JobConfig.SplitInterval(3 * 1440, out v, out u); Eq(3, v, "3日"); Eq(2, u, "日");
+            JobConfig.SplitInterval(1500, out v, out u); Eq(25, v, "25時間"); Eq(1, u, "時間");
+            JobConfig.SplitInterval(1441, out v, out u); Eq(0, u, "割り切れなければ分"); Eq(1441, v, "1441分");
+            Eq(4320, JobConfig.JoinInterval(3, 2), "3日");
+            Eq(120, JobConfig.JoinInterval(2, 1), "2時間");
+            Eq(JobConfig.MaxIntervalMinutes, JobConfig.JoinInterval(9999, 2), "上限は365日");
+            Eq(1, JobConfig.JoinInterval(0, 0), "下限は1分");
+            Eq("3日", Fmt.Interval(4320), "表示"); Eq("25時間", Fmt.Interval(1500), "表示"); Eq("90分", Fmt.Interval(90), "表示"); Eq("1日", Fmt.Interval(1440), "表示");
+
+            // 保存しても変わらない（前の版は 24時間まで）
+            JobConfig j = new JobConfig(); j.IntervalMinutes = 7 * 1440;
+            Eq(7 * 1440, Json.Deserialize<JobConfig>(Json.Serialize(j)).IntervalMinutes, "7日を保存できる");
+
+            // 画面：3日 → 「3」「日」と表示し、そのまま保存する。日の上限は365
+            JobConfig k = new JobConfig(); k.IntervalMinutes = 3 * 1440;
+            using (JobEditForm f = new JobEditForm(k, false))
+            {
+                System.Windows.Forms.ComboBox unit = null; System.Windows.Forms.NumericUpDown num = null;
+                foreach (System.Windows.Forms.Control c in AllControls(f))
+                {
+                    System.Windows.Forms.ComboBox cb = c as System.Windows.Forms.ComboBox;
+                    if (cb != null && cb.Items.Count == 3 && (string)cb.Items[0] == "分" && (string)cb.Items[2] == "日") unit = cb;
+                }
+                True(unit != null, "単位に「日」がある");
+                foreach (System.Windows.Forms.Control c in unit.Parent.Controls)
+                    if (c is System.Windows.Forms.NumericUpDown) num = (System.Windows.Forms.NumericUpDown)c;
+                True(num != null, "間隔の数の欄");
+                Eq(2, unit.SelectedIndex, "単位は日");
+                Eq(3m, num.Value, "3");
+                Func<JobConfig> snap = delegate { return (JobConfig)typeof(JobEditForm).GetMethod("BuildSnapshot", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance).Invoke(f, null); };
+                Eq(3 * 1440, snap().IntervalMinutes, "3日のまま保存");
+                Eq(365m, num.Maximum, "日の上限は365");
+                num.Value = 14;
+                Eq(14 * 1440, snap().IntervalMinutes, "14日");
+                unit.SelectedIndex = 0;
+                Eq(1440m, num.Maximum, "分の上限は1440");
+                Eq(14, snap().IntervalMinutes, "単位を分にすると14分");
+            }
+
+            // 前回から1日：3日ごとなら、次は2日後（起動しても今すぐは実行しない）
+            JobConfig d3 = new JobConfig(); d3.IntervalMinutes = 3 * 1440; d3.RunAtStartup = false; d3.StartupOnly = false;
+            DateTime gate = DateTime.Now.AddSeconds(5);
+            string note;
+            DateTime last = DateTime.Now.AddDays(-1);
+            DateTime next = AppCore.FirstRunAfterStart(d3, last, gate, true, out note);
+            Eq(last.AddDays(3), next, "前回＋3日");
+            True(note == null, "取りこぼしではない");
+            // 前回から4日（PCが止まっていた）：起動後すぐ
+            next = AppCore.FirstRunAfterStart(d3, DateTime.Now.AddDays(-4), gate, true, out note);
+            Eq(gate, next, "予定を過ぎていたら起動後すぐ");
+            True(note != null, "取りこぼしの説明");
         }
 
         private static void StopTimeout()
