@@ -1,0 +1,9 @@
+登録前: UnknownError / O=自動コピー, CN=自動コピー / 拇印 E8F609B1AEE069E00891E639CBB03B3CEECB9AC7
+Signature Index: 0 (Primary Signature) | Hash of file (sha1): 52F55BF9D598137A07D6B83D4FFCBF9C8A224006 | Signing Certificate Chain: | Issued to: | Expires:   Tue Oct 30 11:58:40 2046 | Signature Index: 1 | Hash of file (sha256): 03C1FA5F9ADCAE1D30B0B3C14BAA5EBD19933D19456D2C4A66BD42174EE0DEFA | Signing Certificate Chain: | Issued to: | Expires:   Tue Oct 30 11:58:40 2046 | Number of signatures successfully Verified: 0 | SignTool Error: A certificate chain processed, but terminated in a root | SignTool Error: A certificate chain processed, but terminated in a root
+登録バッチ: Root "Trusted Root Certification Authorities" / CertUtil: -addstore command completed successfully. / TrustedPublisher "Trusted Publishers" / CertUtil: -addstore command completed successfully.
+登録後: Valid / Signature verified.
+File: D:\a\AutoCopy\AutoCopy\release\AutoCopy.exe | Index  Algorithm  Timestamp     | ======================================== | 0      sha1       None          | 1      sha256     None          |  | Successfully verified: D:\a\AutoCopy\AutoCopy\release\AutoCopy.exe
+版: 1.18.1.0 / 製品: 自動コピー / 会社: 自動コピー
+画面の確認のエラー: なし
+表示切れ: 53 0
+結果: OK
